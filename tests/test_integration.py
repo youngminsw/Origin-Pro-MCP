@@ -27,7 +27,7 @@ def test_full_workflow():
     o.Execute('yl.fsize = 12;')
 
     # 4. Export via CopyPage + clipboard (expGraph requires interactive window focus)
-    out = r"C:\Users\swym4\test_integration_fig.png"
+    out = os.path.join(os.path.expanduser("~"), "test_integration_fig.png")
     # CopyPage format=4 gives high-res BMP copy to clipboard
     o.CopyPage("Figure1", 4, 96, 24)
     img = ImageGrab.grabclipboard()

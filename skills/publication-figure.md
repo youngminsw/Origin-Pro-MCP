@@ -24,7 +24,7 @@ Use when the user asks to:
 4. **Target journal** — Nature, Science, ACS, or general?
 5. **Export path** — where to save the PNG?
 
-If the user doesn't specify, default to: Nature-style, line+symbol, export to `C:\Users\swym4\origin-test\`.
+If the user doesn't specify, default to: Nature-style, line+symbol, export to desktop or a user-specified directory.
 
 ---
 
@@ -257,7 +257,7 @@ Choose legend position to avoid overlapping data:
 ### 8. Export
 
 ```
-export_graph(graph_name="Fig1", file_path="C:\\Users\\swym4\\origin-test\\fig1.png")
+export_graph(graph_name="Fig1", file_path="C:\\Users\\yourname\\figures\\fig1.png")
 ```
 
 ### 9. Show Result & Iterate

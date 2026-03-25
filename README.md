@@ -22,7 +22,7 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 ### 2. Install
 
 ```bash
-git clone https://github.com/youngminsw/origin-mcp-server.git
+git clone https://github.com/youngminsw/Origin-Pro-MCP.git
 cd origin-mcp-server
 pip install -r requirements.txt
 ```
@@ -169,6 +169,19 @@ This repo includes a **skill file** (`skills/publication-figure.md`) that teache
    - Follow a pre-export checklist
 
 The skill also documents **Origin 2020 COM quirks** — what works, what doesn't, and tested workarounds. This is invaluable if you need to customize beyond `apply_publication_style`.
+
+### Customizing the Skill for Your Style
+
+The included skill is a starting template. You should **customize it to match your lab's or journal's requirements**:
+
+- **Font**: Change from Arial to your journal's preferred font (e.g., Helvetica, Times New Roman)
+- **Font sizes**: Adjust axis title/tick label/legend sizes to match your journal's figure guidelines
+- **Color palette**: Replace the default colorblind-safe palette with your group's standard colors
+- **Default export path**: Set to your working directory
+- **Figure recipes**: Add templates for your common figure types (XRD patterns, IV curves, etc.)
+- **Journal presets**: Add specific formatting rules for your target journals (Nature, ACS, RSC, etc.)
+
+Copy `skills/publication-figure.md` to your project and edit freely — it's meant to be a starting point, not a rigid template.
 
 ### Key Origin 2020 COM Quirks (documented in skill)
 

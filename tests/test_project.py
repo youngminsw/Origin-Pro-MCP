@@ -9,7 +9,7 @@ def test_save_and_load():
     o = get_origin()
     o.NewProject()
     o.CreatePage(2, "SaveTest", "origin")
-    path = r"C:\Users\swym4\test_project.opju"
+    path = os.path.join(os.path.expanduser("~"), "test_project.opju")
     o.Save(path)
     assert os.path.exists(path)
     # Close the project first so Origin releases the file lock, then delete
