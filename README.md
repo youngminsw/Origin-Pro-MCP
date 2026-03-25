@@ -37,10 +37,10 @@ No manual install needed. Just add to your Claude Code MCP settings:
 
 `uvx` automatically downloads and runs the server in an isolated environment. Nothing else to install.
 
-**Option B: pip install from GitHub**
+**Option B: pip install from PyPI**
 
 ```bash
-pip install git+https://github.com/youngminsw/Origin-Pro-MCP.git
+pip install origin-pro-mcp
 ```
 
 Then configure Claude Code:
