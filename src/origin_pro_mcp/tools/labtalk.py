@@ -1,5 +1,5 @@
-from app import mcp
-from origin_connection import execute_labtalk, get_lt_var, get_lt_str
+from ..app import mcp
+from ..origin_connection import execute_labtalk, get_lt_var, get_lt_str
 
 @mcp.tool()
 def run_labtalk(script: str) -> str:

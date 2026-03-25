@@ -1,11 +1,14 @@
-from app import mcp
+"""Legacy entry point — runs the MCP server directly with `python server.py`.
 
-import tools.labtalk
-import tools.worksheet
-import tools.graph
-import tools.style
-import tools.fitting
-import tools.project
+For uvx/pip install, use `origin-pro-mcp` command instead.
+"""
+import sys
+import os
+
+# Add src/ to path so the package can be imported without installing
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+
+from origin_pro_mcp.app import main
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    main()

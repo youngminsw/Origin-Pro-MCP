@@ -1,6 +1,6 @@
 import json
-from app import mcp
-from origin_connection import get_origin, execute_labtalk
+from ..app import mcp
+from ..origin_connection import get_origin, execute_labtalk
 
 @mcp.tool()
 def create_worksheet(book_name: str, sheet_name: str = "Sheet1") -> str:

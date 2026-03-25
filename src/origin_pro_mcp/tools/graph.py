@@ -1,7 +1,7 @@
 import json
 import win32com.client
-from app import mcp
-from origin_connection import get_origin, execute_labtalk, get_lt_str
+from ..app import mcp
+from ..origin_connection import get_origin, execute_labtalk, get_lt_str
 
 PLOT_TYPES = {
     "scatter": 201,

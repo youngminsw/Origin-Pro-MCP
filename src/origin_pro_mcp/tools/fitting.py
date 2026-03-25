@@ -1,6 +1,6 @@
 import json
-from app import mcp
-from origin_connection import execute_labtalk, get_lt_var
+from ..app import mcp
+from ..origin_connection import execute_labtalk, get_lt_var
 
 @mcp.tool()
 def curve_fit(

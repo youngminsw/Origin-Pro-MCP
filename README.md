@@ -17,33 +17,63 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 
 - **Windows** with **Origin Pro 2020+** installed and running
 - **Python 3.10+** (Windows Python, not WSL)
-- **pip packages**: `pip install -r requirements.txt`
 
-### 2. Install
+### 2. Install & Configure
 
-```bash
-git clone https://github.com/youngminsw/Origin-Pro-MCP.git
-cd origin-mcp-server
-pip install -r requirements.txt
-```
+**Option A: uvx (recommended — zero setup)**
 
-### 3. Configure Claude Code
-
-Add to your Claude Code MCP settings (`~/.claude/settings.json` or project settings):
+No manual install needed. Just add to your Claude Code MCP settings:
 
 ```json
 {
   "mcpServers": {
     "origin-pro": {
-      "command": "python",
-      "args": ["C:\\path\\to\\origin-mcp-server\\server.py"],
-      "cwd": "C:\\path\\to\\origin-mcp-server"
+      "command": "uvx",
+      "args": ["origin-pro-mcp"]
     }
   }
 }
 ```
 
-> **Note**: Use your Windows Python path. If Claude Code runs in WSL, use the full Windows path like `C:\\Users\\yourname\\origin-mcp-server\\server.py`.
+`uvx` automatically downloads and runs the server in an isolated environment. Nothing else to install.
+
+**Option B: pip install from GitHub**
+
+```bash
+pip install git+https://github.com/youngminsw/Origin-Pro-MCP.git
+```
+
+Then configure Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "origin-pro": {
+      "command": "origin-pro-mcp"
+    }
+  }
+}
+```
+
+**Option C: Clone and run directly**
+
+```bash
+git clone https://github.com/youngminsw/Origin-Pro-MCP.git
+cd Origin-Pro-MCP
+pip install -e .
+```
+
+```json
+{
+  "mcpServers": {
+    "origin-pro": {
+      "command": "origin-pro-mcp"
+    }
+  }
+}
+```
+
+> **Note**: If Claude Code runs in WSL, make sure the `uvx` or `python` command points to your **Windows** Python, not WSL Python. Origin COM only works from Windows.
 
 ### 4. Start Origin Pro
 

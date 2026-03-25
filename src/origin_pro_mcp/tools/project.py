@@ -1,5 +1,5 @@
-from app import mcp
-from origin_connection import get_origin, execute_labtalk
+from ..app import mcp
+from ..origin_connection import get_origin, execute_labtalk
 
 @mcp.tool()
 def new_project() -> str:

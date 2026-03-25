@@ -1,5 +1,5 @@
-from app import mcp
-from origin_connection import execute_labtalk, get_origin
+from ..app import mcp
+from ..origin_connection import execute_labtalk, get_origin
 
 # Symbol shapes for different datasets
 SYMBOL_SHAPES = {1: 2, 2: 3, 3: 1, 4: 4, 5: 5, 6: 6}  # circle, triangle-up, square, diamond, triangle-down, hexagon
