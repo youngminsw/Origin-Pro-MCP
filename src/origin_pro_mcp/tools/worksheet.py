@@ -1,6 +1,7 @@
 import json
 from ..app import mcp
 from ..origin_connection import get_origin, execute_labtalk
+from ..labtalk_safe import labtalk_choice, labtalk_name, labtalk_path, labtalk_string
 
 @mcp.tool()
 def create_worksheet(book_name: str, sheet_name: str = "Sheet1") -> str:
@@ -14,10 +15,12 @@ def create_worksheet(book_name: str, sheet_name: str = "Sheet1") -> str:
         Created workbook name
     """
     o = get_origin()
-    name = o.CreatePage(2, book_name, "origin")
-    if sheet_name != "Sheet1":
-        execute_labtalk(f'page.active$ = "Sheet1"; wks.name$ = "{sheet_name}";')
-    return f"Created workbook: [{name}]{sheet_name}"
+    safe_book_name = labtalk_name(book_name, "book_name")
+    safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
+    name = o.CreatePage(2, safe_book_name, "origin")
+    if safe_sheet_name != "Sheet1":
+        execute_labtalk(f'page.active$ = "Sheet1"; wks.name$ = {labtalk_string(safe_sheet_name, "sheet_name")};')
+    return f"Created workbook: [{name}]{safe_sheet_name}"
 
 @mcp.tool()
 def set_worksheet_data(
@@ -39,7 +42,9 @@ def set_worksheet_data(
         Success message
     """
     o = get_origin()
-    target = f"[{book_name}]{sheet_name}"
+    safe_book_name = labtalk_name(book_name, "book_name")
+    safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
+    target = f"[{safe_book_name}]{safe_sheet_name}"
     cols = json.loads(columns)
 
     for i, col_data in enumerate(cols):
@@ -48,9 +53,9 @@ def set_worksheet_data(
 
     if column_names:
         names = [n.strip() for n in column_names.split(",")]
-        execute_labtalk(f'win -a {book_name};')
+        execute_labtalk(f"win -a {safe_book_name};")
         for i, name in enumerate(names):
-            execute_labtalk(f'wks.col{i+1}.lname$ = "{name}";')
+            execute_labtalk(f"wks.col{i+1}.lname$ = {labtalk_string(name, 'column_names')};")
 
     return f"Set {len(cols)} columns x {len(cols[0])} rows in {target}"
 
@@ -66,7 +71,9 @@ def get_worksheet_data(book_name: str, sheet_name: str) -> str:
         JSON object with column data
     """
     o = get_origin()
-    target = f"[{book_name}]{sheet_name}"
+    safe_book_name = labtalk_name(book_name, "book_name")
+    safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
+    target = f"[{safe_book_name}]{safe_sheet_name}"
     data = o.GetWorksheet(target)
     if data is None:
         return json.dumps({"error": f"Worksheet {target} not found"})
@@ -99,17 +106,20 @@ def import_csv_to_worksheet(
     """
     o = get_origin()
     if book_name:
-        o.CreatePage(2, book_name, "origin")
-        execute_labtalk(f'win -a {book_name};')
-
-    escaped_path = file_path.replace("\\", "\\\\")
+        safe_book_name = labtalk_name(book_name, "book_name")
+        o.CreatePage(2, safe_book_name, "origin")
+        execute_labtalk(f"win -a {safe_book_name};")
 
     if delimiter == ",":
-        execute_labtalk(f'impasc fname:="{escaped_path}" options.FileStruct.Delimiter:=1;')
+        execute_labtalk(f"impasc fname:={labtalk_path(file_path, 'file_path')} options.FileStruct.Delimiter:=1;")
     elif delimiter == "\t":
-        execute_labtalk(f'impasc fname:="{escaped_path}" options.FileStruct.Delimiter:=0;')
+        execute_labtalk(f"impasc fname:={labtalk_path(file_path, 'file_path')} options.FileStruct.Delimiter:=0;")
     else:
-        execute_labtalk(f'impasc fname:="{escaped_path}" options.FileStruct.CustomDelimiter:="{delimiter}";')
+        safe_delimiter = labtalk_choice(delimiter, {";", "|", " "}, "delimiter")
+        execute_labtalk(
+            f"impasc fname:={labtalk_path(file_path, 'file_path')} "
+            f"options.FileStruct.CustomDelimiter:={labtalk_string(safe_delimiter, 'delimiter')};"
+        )
 
     active_book = o.LTStr("page.name$")
     return f"Imported to workbook: {active_book}"

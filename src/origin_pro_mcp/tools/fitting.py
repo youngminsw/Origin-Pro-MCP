@@ -1,6 +1,28 @@
 import json
 from ..app import mcp
 from ..origin_connection import execute_labtalk, get_lt_var
+from ..labtalk_safe import labtalk_choice, labtalk_name, positive_column
+
+FITTING_FUNCTIONS = {
+    "line",
+    "poly2",
+    "poly3",
+    "poly4",
+    "poly5",
+    "exp1",
+    "exp2",
+    "expgrow1",
+    "expdecay1",
+    "gauss",
+    "lorentz",
+    "voigt",
+    "power",
+    "lognormal",
+    "logistic",
+    "boltzmann",
+    "hill",
+    "sine",
+}
 
 @mcp.tool()
 def curve_fit(
@@ -27,18 +49,23 @@ def curve_fit(
     Returns:
         JSON with fit parameters and statistics (R², SSR, etc.)
     """
-    sheet_ref = f"[{data_book}]{data_sheet}"
+    safe_book = labtalk_name(data_book, "data_book")
+    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_x_col = positive_column(x_col, "x_col")
+    safe_y_col = positive_column(y_col, "y_col")
+    safe_function = labtalk_choice(function, FITTING_FUNCTIONS, "function")
+    sheet_ref = f"[{safe_book}]{safe_sheet}"
 
     # Set column designations so Origin knows which is X and which is Y
-    execute_labtalk(f"win -a {data_book};")
-    execute_labtalk(f"{sheet_ref}!col({x_col}).type = 4;")  # 4 = X
-    execute_labtalk(f"{sheet_ref}!col({y_col}).type = 1;")  # 1 = Y
+    execute_labtalk(f"win -a {safe_book};")
+    execute_labtalk(f"{sheet_ref}!col({safe_x_col}).type = 4;")  # 4 = X
+    execute_labtalk(f"{sheet_ref}!col({safe_y_col}).type = 1;")  # 1 = Y
 
-    result = {"function": function, "statistics": {}}
+    result = {"function": safe_function, "statistics": {}}
 
-    if function == "line":
+    if safe_function == "line":
         # Use fitlr for linear regression (fast, no GUI)
-        execute_labtalk(f"fitlr {sheet_ref}!col({y_col});")
+        execute_labtalk(f"fitlr {sheet_ref}!col({safe_y_col});")
         r = get_lt_var("fitlr.r")
         result["statistics"]["r_squared"] = r * r
         result["parameters"] = {
@@ -46,11 +73,12 @@ def curve_fit(
             "slope": get_lt_var("fitlr.b"),
         }
     else:
-        data_ref = f"{sheet_ref}!({x_col},{y_col})"
+        data_ref = f"{sheet_ref}!({safe_x_col},{safe_y_col})"
         if y_error_col > 0:
-            data_ref = f"{sheet_ref}!({x_col},{y_col},{y_error_col})"
+            safe_error_col = positive_column(y_error_col, "y_error_col")
+            data_ref = f"{sheet_ref}!({safe_x_col},{safe_y_col},{safe_error_col})"
 
-        execute_labtalk(f"nlbegin iy:={data_ref} func:={function};")
+        execute_labtalk(f"nlbegin iy:={data_ref} func:={safe_function};")
         execute_labtalk("nlfit;")
 
         # Read statistics BEFORE nlend

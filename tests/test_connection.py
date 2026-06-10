@@ -1,4 +1,7 @@
 import subprocess, sys
+import pytest
+
+pytestmark = pytest.mark.requires_origin
 
 def test_origin_connection():
     result = subprocess.run(

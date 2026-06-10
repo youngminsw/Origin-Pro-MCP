@@ -1,5 +1,6 @@
 from ..app import mcp
 from ..origin_connection import execute_labtalk, get_lt_var, get_lt_str
+from ..labtalk_safe import labtalk_variable, safe_labtalk_script
 
 @mcp.tool()
 def run_labtalk(script: str) -> str:
@@ -14,8 +15,9 @@ def run_labtalk(script: str) -> str:
     Returns:
         Success/failure message
     """
-    success = execute_labtalk(script)
-    return f"Executed {'successfully' if success else 'with errors'}: {script}"
+    safe_script = safe_labtalk_script(script)
+    success = execute_labtalk(safe_script)
+    return f"Executed {'successfully' if success else 'with errors'}: {safe_script}"
 
 @mcp.tool()
 def get_labtalk_variable(name: str) -> str:
@@ -27,7 +29,8 @@ def get_labtalk_variable(name: str) -> str:
     Returns:
         Variable value as string
     """
-    if name.endswith("$"):
-        return get_lt_str(name)
+    safe_name = labtalk_variable(name, "name")
+    if safe_name.endswith("$"):
+        return get_lt_str(safe_name)
     else:
-        return str(get_lt_var(name))
+        return str(get_lt_var(safe_name))

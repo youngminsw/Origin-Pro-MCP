@@ -1,7 +1,7 @@
 import json
-import win32com.client
 from ..app import mcp
-from ..origin_connection import get_origin, execute_labtalk, get_lt_str
+from ..origin_connection import get_origin, execute_labtalk
+from ..labtalk_safe import labtalk_choice, labtalk_name, labtalk_string, positive_column
 
 PLOT_TYPES = {
     "scatter": 201,
@@ -47,19 +47,26 @@ def create_graph(
         Created graph name
     """
     o = get_origin()
-    ptype = PLOT_TYPES.get(plot_type, 202)
-    name = o.CreatePage(3, graph_name, "origin")
+    safe_graph_name = labtalk_name(graph_name, "graph_name")
+    safe_book = labtalk_name(data_book, "data_book")
+    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_x_col = positive_column(x_col, "x_col")
+    safe_y_col = positive_column(y_col, "y_col")
+    safe_plot_type = labtalk_choice(plot_type, PLOT_TYPES, "plot_type")
+    ptype = PLOT_TYPES[safe_plot_type]
+    name = o.CreatePage(3, safe_graph_name, "origin")
 
-    data_ref = f"[{data_book}]{data_sheet}!({x_col},{y_col})"
+    data_ref = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col})"
     if y_error_col > 0:
-        data_ref = f"[{data_book}]{data_sheet}!({x_col},{y_col},{y_error_col})"
+        safe_error_col = positive_column(y_error_col, "y_error_col")
+        data_ref = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col},{safe_error_col})"
 
     execute_labtalk(f"plotxy iy:={data_ref} plot:={ptype} ogl:=[{name}]Layer1;")
 
     if title:
-        execute_labtalk(f'label -n title -s "{title}"; title.x = 50; title.y = 95;')
+        execute_labtalk(f"label -n title -s {labtalk_string(title, 'title')}; title.x = 50; title.y = 95;")
 
-    return f"Created graph: {name} ({plot_type})"
+    return f"Created graph: {name} ({safe_plot_type})"
 
 @mcp.tool()
 def add_plot_to_graph(
@@ -85,13 +92,20 @@ def add_plot_to_graph(
     Returns:
         Success message
     """
-    ptype = PLOT_TYPES.get(plot_type, 202)
-    data_ref = f"[{data_book}]{data_sheet}!({x_col},{y_col})"
+    safe_graph_name = labtalk_name(graph_name, "graph_name")
+    safe_book = labtalk_name(data_book, "data_book")
+    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_x_col = positive_column(x_col, "x_col")
+    safe_y_col = positive_column(y_col, "y_col")
+    safe_plot_type = labtalk_choice(plot_type, PLOT_TYPES, "plot_type")
+    ptype = PLOT_TYPES[safe_plot_type]
+    data_ref = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col})"
     if y_error_col > 0:
-        data_ref = f"[{data_book}]{data_sheet}!({x_col},{y_col},{y_error_col})"
+        safe_error_col = positive_column(y_error_col, "y_error_col")
+        data_ref = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col},{safe_error_col})"
 
-    execute_labtalk(f"plotxy iy:={data_ref} plot:={ptype} ogl:=[{graph_name}]Layer1;")
-    return f"Added {plot_type} plot to {graph_name}"
+    execute_labtalk(f"plotxy iy:={data_ref} plot:={ptype} ogl:=[{safe_graph_name}]Layer1;")
+    return f"Added {safe_plot_type} plot to {safe_graph_name}"
 
 @mcp.tool()
 def set_axis_labels(
@@ -111,14 +125,15 @@ def set_axis_labels(
     Returns:
         Success message
     """
-    execute_labtalk(f"win -a {graph_name};")
+    safe_graph_name = labtalk_name(graph_name, "graph_name")
+    execute_labtalk(f"win -a {safe_graph_name};")
     if x_label:
-        execute_labtalk(f'xb.text$ = "{x_label}";')
+        execute_labtalk(f"xb.text$ = {labtalk_string(x_label, 'x_label')};")
     if y_label:
-        execute_labtalk(f'yl.text$ = "{y_label}";')
+        execute_labtalk(f"yl.text$ = {labtalk_string(y_label, 'y_label')};")
     if title:
-        execute_labtalk(f'label -n title -s "{title}"; title.x = 50; title.y = 95;')
-    return f"Updated labels for {graph_name}"
+        execute_labtalk(f"label -n title -s {labtalk_string(title, 'title')}; title.x = 50; title.y = 95;")
+    return f"Updated labels for {safe_graph_name}"
 
 @mcp.tool()
 def set_axis_range(
@@ -140,7 +155,8 @@ def set_axis_range(
     Returns:
         Success message
     """
-    execute_labtalk(f"win -a {graph_name};")
+    safe_graph_name = labtalk_name(graph_name, "graph_name")
+    execute_labtalk(f"win -a {safe_graph_name};")
     if x_min is not None:
         execute_labtalk(f"layer.x.from = {x_min};")
     if x_max is not None:
@@ -149,7 +165,7 @@ def set_axis_range(
         execute_labtalk(f"layer.y.from = {y_min};")
     if y_max is not None:
         execute_labtalk(f"layer.y.to = {y_max};")
-    return f"Set axis range for {graph_name}"
+    return f"Set axis range for {safe_graph_name}"
 
 @mcp.tool()
 def export_graph(
@@ -179,11 +195,12 @@ def export_graph(
         return "Export failed: Pillow (PIL) is required. Install with: pip install Pillow"
 
     o = get_origin()
-    execute_labtalk(f"win -a {graph_name};")
+    safe_graph_name = labtalk_name(graph_name, "graph_name")
+    execute_labtalk(f"win -a {safe_graph_name};")
 
     # CopyPage: format=4 (BMP to clipboard), then save via Pillow
     try:
-        o.CopyPage(graph_name, 4, 96, 24)
+        o.CopyPage(safe_graph_name, 4, 96, 24)
     except Exception as e:
         return f"CopyPage failed: {e}"
 
@@ -192,7 +209,7 @@ def export_graph(
 
     img = ImageGrab.grabclipboard()
     if img is None:
-        return f"Export failed: could not grab clipboard image for {graph_name}"
+        return f"Export failed: could not grab clipboard image for {safe_graph_name}"
 
     img.save(file_path)
     return f"Exported to: {file_path}"

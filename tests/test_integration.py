@@ -1,10 +1,16 @@
 """End-to-end test: create data, plot, style, fit, export."""
-import win32com.client
-from origin_connection import get_origin, execute_labtalk, get_lt_var
-from PIL import ImageGrab
 import os
 
+import pytest
+
+from origin_pro_mcp.origin_connection import get_origin
+
+pytestmark = pytest.mark.requires_origin
+
 def test_full_workflow():
+    import win32com.client
+    from PIL import ImageGrab
+
     o = win32com.client.gencache.EnsureDispatch("Origin.ApplicationSI")
     o.NewProject()
 

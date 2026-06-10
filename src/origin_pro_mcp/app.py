@@ -1,6 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("origin-pro")
+mcp = FastMCP("origin-pro", log_level="ERROR")
 
 
 def main():

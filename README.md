@@ -9,33 +9,65 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 - **Plot Styling** — Colors, symbols, line width, publication-ready formatting in one call
 - **Curve Fitting** — Linear, polynomial, exponential, Gaussian, Lorentz, Voigt, and more
 - **Project Management** — New/save/load projects, export all graphs
-- **LabTalk Scripting** — Direct LabTalk execution for advanced operations
+- **LabTalk Scripting** — Direct LabTalk execution with destructive/file-overwrite commands blocked
+
+This MCP server is intentionally **Windows-runtime-only**. The AI agent or MCP client can run from Windows or WSL, but the MCP server process that talks to Origin must be launched with Windows Python and `pywin32`. WSL/Linux can edit the project and run non-COM unit tests, but cannot directly control Origin COM.
 
 ## Quick Start
 
 ### 1. Prerequisites
 
-- **Windows** with **Origin Pro 2020+** installed and running
+- **Windows** with a licensed Origin/OriginPro installation that exposes the Automation Server
 - **Python 3.10+** (Windows Python, not WSL)
+
+Tested environment: **Origin Pro 2020**. Other Origin/OriginPro versions may work if they expose compatible COM Automation Server and LabTalk behavior, but they are not verified by this project yet.
 
 ### 2. Install & Configure
 
 **Option A: uvx (recommended — zero setup)**
 
-No manual install needed. Just add to your Claude Code MCP settings:
+No manual install needed. The MCP client launches the server for you. Just add this to your Claude Code MCP settings when Claude Code is running on Windows:
 
 ```json
 {
   "mcpServers": {
     "origin-pro": {
       "command": "uvx",
-      "args": ["origin-pro-mcp"]
+      "args": ["--quiet", "origin-pro-mcp"]
     }
   }
 }
 ```
 
-`uvx` automatically downloads and runs the server in an isolated environment. Nothing else to install.
+`uvx` automatically downloads and runs the server in an isolated environment. Nothing else to install. The `--quiet` flag keeps first-run dependency messages out of your MCP client logs.
+
+If Claude Code or another MCP client is running inside WSL, launch the same Windows server by calling Windows `uvx.exe` directly:
+
+```json
+{
+  "mcpServers": {
+    "origin-pro": {
+      "command": "uvx.exe",
+      "args": ["--quiet", "origin-pro-mcp"]
+    }
+  }
+}
+```
+
+For a local checkout before publishing/installing, point Windows `uvx` at the Windows path of the repo:
+
+```json
+{
+  "mcpServers": {
+    "origin-pro": {
+      "command": "uvx.exe",
+      "args": ["--quiet", "--refresh", "--from", "D:\\04.Agent OS\\Origin-Pro-MCP", "origin-pro-mcp"]
+    }
+  }
+}
+```
+
+Keep the command and args as separate JSON array entries. That avoids quoting problems when a Windows path contains spaces. If WSL cannot find `uvx.exe`, set `command` to the full WSL path for the Windows executable, for example `/mnt/c/Users/YOU/.local/bin/uvx.exe`.
 
 **Option B: pip install from PyPI**
 
@@ -75,9 +107,28 @@ pip install -e .
 
 > **Note**: If Claude Code runs in WSL, make sure the `uvx` or `python` command points to your **Windows** Python, not WSL Python. Origin COM only works from Windows.
 
-### 4. Start Origin Pro
+### Agent Location vs Server Runtime
 
-Open Origin Pro before starting the server. The server attaches to the running instance via `Origin.ApplicationSI`.
+The agent does not have to run on Windows. These setups are valid:
+
+- Windows agent -> Windows `origin-pro-mcp` server -> Origin Pro
+- WSL agent -> Windows `origin-pro-mcp` server -> Origin Pro
+
+The unsupported setup is WSL/Linux `origin-pro-mcp` server -> Origin Pro, because COM is a Windows API.
+
+## Version Support
+
+This project is currently verified only with **Origin Pro 2020**. The implementation uses Origin's COM Automation Server and LabTalk, which exist across multiple Origin releases, so other versions may work. Treat them as unverified until someone runs the test suite and a real graph/export smoke test on that version.
+
+### Direct LabTalk Safety
+
+The `run_labtalk` tool is available by default for styling, analysis, graph tweaks, and other advanced Origin operations. It blocks common destructive or file-writing LabTalk commands such as project reset, delete, save/open, file dialogs, external script execution, and graph export. Use the typed tools for saving, loading, importing, and exporting.
+
+This is an accident-prevention guard, not a security sandbox for untrusted code.
+
+### 4. Origin Startup
+
+You do not need to start Python manually. The MCP client starts `origin-pro-mcp`, and the server connects to Origin through `Origin.ApplicationSI`. If Origin is already open, the server uses it; otherwise COM can launch Origin and the server makes it visible.
 
 ### 5. Use It
 
@@ -148,7 +199,7 @@ Origin Pro (GUI visible in real-time)
 ### Advanced
 | Tool | Description |
 |------|-------------|
-| `run_labtalk` | Execute any LabTalk script directly |
+| `run_labtalk` | Execute LabTalk with destructive/file-writing commands blocked |
 | `get_labtalk_variable` | Read a LabTalk variable value |
 
 ## Example: Publication-Quality Figure
@@ -198,11 +249,11 @@ This repo includes a **skill file** (`skills/publication-figure.md`) that teache
    - Apply proper typography (Arial, bold, correct sizes)
    - Follow a pre-export checklist
 
-The skill also documents **Origin 2020 COM quirks** — what works, what doesn't, and tested workarounds. This is invaluable if you need to customize beyond `apply_publication_style`.
+The skill also documents COM quirks observed while testing on **Origin Pro 2020** — what works, what doesn't, and tested workarounds. This is invaluable if you need to customize beyond `apply_publication_style`.
 
 ### Customizing the Skill for Your Style
 
-The included skill is a starting template. You should **customize it to match your lab's or journal's requirements**:
+The included skill is a generic starting template for paper-grade Origin figures. You should **copy and customize it** to match your lab's habits, target journals, and visual taste:
 
 - **Font**: Change from Arial to your journal's preferred font (e.g., Helvetica, Times New Roman)
 - **Font sizes**: Adjust axis title/tick label/legend sizes to match your journal's figure guidelines
@@ -213,7 +264,7 @@ The included skill is a starting template. You should **customize it to match yo
 
 Copy `skills/publication-figure.md` to your project and edit freely — it's meant to be a starting point, not a rigid template.
 
-### Key Origin 2020 COM Quirks (documented in skill)
+### Key Origin Pro 2020 COM Quirks (documented in skill)
 
 | Issue | Workaround |
 |-------|-----------|

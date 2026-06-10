@@ -1,5 +1,8 @@
 from ..app import mcp
 from ..origin_connection import get_origin, execute_labtalk
+from ..labtalk_safe import labtalk_choice, labtalk_path, positive_int
+
+EXPORT_FORMATS = {"png", "jpg", "tif", "bmp", "emf", "eps", "pdf", "svg"}
 
 @mcp.tool()
 def new_project() -> str:
@@ -61,15 +64,20 @@ def export_all_graphs(
     Returns:
         Confirmation message
     """
-    escaped_dir = output_dir.replace("\\", "\\\\")
+    safe_format = labtalk_choice(format, EXPORT_FORMATS, "format")
+    safe_width = positive_int(width, "width")
+    safe_height = positive_int(height, "height")
+    safe_dpi = positive_int(dpi, "dpi")
+    safe_output_dir = labtalk_path(output_dir, "output_dir")
 
     script = (
         'doc -ef G {'
         '  string __gname$ = page.name$;'
         '  win -a %(__gname$);'
-        f'  string __outpath$ = "{escaped_dir}\\\\" + __gname$ + ".{format}";'
-        f'  expGraph type:={format} path:=__outpath$ '
-        f'  tr1.Width.nVal:={width} tr1.Height.nVal:={height} tr1.Resolution.nVal:={dpi};'
+        f"  string __outdir$ = {safe_output_dir};"
+        f'  string __outpath$ = __outdir$ + "\\\\" + __gname$ + ".{safe_format}";'
+        f'  expGraph type:={safe_format} path:=__outpath$ '
+        f'  tr1.Width.nVal:={safe_width} tr1.Height.nVal:={safe_height} tr1.Resolution.nVal:={safe_dpi};'
         '};'
     )
     execute_labtalk(script)

@@ -1,5 +1,10 @@
-from origin_connection import get_origin
 import os
+
+import pytest
+
+from origin_pro_mcp.origin_connection import get_origin
+
+pytestmark = pytest.mark.requires_origin
 
 def test_new_project():
     o = get_origin()
