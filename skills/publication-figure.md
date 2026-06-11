@@ -58,6 +58,48 @@ If unspecified, choose a conservative manuscript default: line+symbol for ordere
   `add_text_annotation`, `add_line`, and `add_arrow`; save reusable
   layouts with `save_graph_template`.
 
+## 3D and Colormap Design Defaults
+
+Same spirit as the 2D defaults (clean, honest, colorblind-safe, units
+everywhere, readable bold labels), adapted to surfaces, contours,
+heatmaps, and 3D scatter.
+
+- **The colormap is the 3D palette — choose it as carefully as 2D colors.**
+  Use a perceptually-uniform, colorblind- and grayscale-safe map. Good
+  built-ins that load by single-word name with `apply_color_map`:
+  `Heatmap4ColorBlind` and `BlueGreenYellow` (sequential magnitude),
+  `RedWhiteBlue` (diverging / signed data centered on zero), `GrayScale`
+  (print-safe). Avoid plain `Rainbow`/`Jet` for quantitative data — they
+  invent false boundaries and fail in grayscale. (Origin's
+  `Rainbow Isolum`/`Rainbow Balanced` are better rainbows but their names
+  contain spaces, so apply them in the GUI for now.)
+- **Sequential vs. diverging:** sequential map for one-directional
+  magnitude (0→max); diverging map with the midpoint at 0 for signed data
+  (deviation, difference, charge).
+- **Always show a labeled color scale with units** — it is the legend of a
+  colormap plot. Never ship a heatmap/contour without it.
+- **Set the Z range honestly** with `set_colormap_levels(z_min, z_max)` to
+  the real data range; don't clip features into saturation just to boost
+  contrast, and state the range.
+- **Label every axis with units**, including Z on 3D plots, in the same
+  bold readable font as the 2D figures (`set_axis_labels`; for 3D the Z
+  title and tick fonts follow the same sizing).
+- **Prefer a 2D contour or heatmap over a 3D surface when exact values
+  matter** — a top-down colormap is easier to read off than a tilted
+  surface. Use the 3D surface for shape/intuition, the contour for
+  quantitative reading; a contour-projected surface gives both.
+- **Keep surfaces uncluttered:** a light mesh or a smooth color-mapped
+  surface reads better than a dense wireframe; pick one clear viewing
+  angle and keep it consistent across a figure set.
+- **3D scatter:** make symbols large enough to read at print size (the
+  same "bigger symbols" lesson as 2D) and rely on Z color/height, not tiny
+  dots, to carry the third dimension.
+- **Match the rest of the figure set:** same fonts, same export pixel size
+  (`export_graph_sized`), same labeling conventions as the 2D panels so a
+  mixed figure looks like one family.
+- Export once, inspect, then adjust colormap, Z range, viewing angle, and
+  label sizes — exactly the 2D "export and inspect" loop.
+
 ## Standard Workflow
 
 ### 1. Prepare Data
