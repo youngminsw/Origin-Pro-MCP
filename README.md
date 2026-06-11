@@ -190,7 +190,7 @@ cd src && /mnt/c/.../python.exe -m origin_pro_mcp.cli list_worksheets
 The CLI reflects over the same tool registry as the MCP server, so it
 always exposes exactly the tools listed below.
 
-## Available Tools (51 total)
+## Available Tools (54 total)
 
 ### Project Management
 | Tool | Description |
@@ -226,7 +226,7 @@ always exposes exactly the tools listed below.
 ### Graphing
 | Tool | Description |
 |------|-------------|
-| `create_graph` | Create graph (scatter, line, line+symbol, column, bar, area, pie, histogram, contour, 3d_scatter) |
+| `create_graph` | Create graph (scatter, line, line+symbol, column, bar, area, pie, histogram, box, contour, 3d_scatter) |
 | `add_plot_to_graph` | Add another dataset to an existing graph |
 | `add_second_y_axis` | Add a right-Y layer and plot on it |
 | `add_layer` | Add a panel/axis layer (right-y, top-x, inset) |
@@ -234,6 +234,9 @@ always exposes exactly the tools listed below.
 | `set_axis_range` | Set axis min/max values |
 | `set_axis_scale` | Linear / log10 / ln / log2 scale |
 | `add_reference_line` | Horizontal/vertical line at a value |
+| `add_line` | Straight line between two data points |
+| `apply_color_map` | Apply a palette (Fire, Rainbow, …) to a colormapped graph |
+| `set_colormap_levels` | Set the Z color-scale range |
 | `add_text_annotation` | Place a text label at data coordinates |
 | `export_graph` | Export via clipboard (page size) |
 | `export_graph_sized` | Export at a chosen pixel width/height |
@@ -365,10 +368,13 @@ Copy `skills/publication-figure.md` to your project and edit freely — it's mea
 | `area` | Area plot | X, Y |
 | `pie` | Pie chart | X, Y |
 | `histogram` | Histogram | single Y column |
+| `box` | Box chart | single Y column |
 | `contour` | Filled contour map | X, Y, Z (pass `z_col`) |
+| `3d_scatter` | 3D scatter (OpenGL) | X, Y, Z (pass `z_col`) |
 
-> Box plots and true 3D plots (3D scatter/surface, which are OpenGL) are
-> not yet supported reliably and are intentionally omitted.
+> Matrix plots (surface, contour, heatmap, image) come from a matrix via
+> `create_matrix_plot`. Arrowheads and graph-template save/apply have no
+> reliable script path on Origin 2020 — add those in the Origin GUI.
 
 ## Supported Fitting Functions
 

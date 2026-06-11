@@ -32,12 +32,13 @@ PLOT_TYPES = {
     "area": 204,
     "pie": 225,
     "histogram": 219,    # Y range
+    "box": 206,          # Y range
     "contour": 243,      # XYZ range
     "3d_scatter": 240,   # XYZ range (OpenGL, owns its graph)
 }
 
 # Take a single Y column instead of an X,Y pair.
-_Y_ONLY_TYPES = {"histogram"}
+_Y_ONLY_TYPES = {"histogram", "box"}
 # Need X, Y, Z columns and are drawn with plotxyz.
 _XYZ_TYPES = {"contour", "3d_scatter"}
 # OpenGL 3D types that must own their graph window — plotting them into a
@@ -198,6 +199,10 @@ def create_graph(
 
     # --- 2D plots (plotxy) ---
     if safe_plot_type in _Y_ONLY_TYPES:
+        # Box/histogram need the source column designated as Y and the
+        # sheet active, or Origin draws an empty layer.
+        activate_window(safe_book, "data_book")
+        execute_labtalk(f'page.active$ = "{safe_sheet}"; wks.col{safe_y_col}.type = 1;')
         data_ref = f"[{safe_book}]{safe_sheet}!col({safe_y_col})"
     else:
         data_ref = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col})"
@@ -585,3 +590,87 @@ def export_graph_sized(
         msg = f"Export failed: {path} was not created."
         raise ValueError(msg)
     return f"Exported {safe_graph} to {path} ({safe_width}px wide, {os.path.getsize(path)} bytes)"
+
+
+@mcp.tool()
+def apply_color_map(graph_name: str, palette: str = "Fire") -> str:
+    """Apply a color palette to a contour/heatmap/surface graph.
+
+    Args:
+        graph_name: Graph name (must hold a colormapped plot)
+        palette: Palette name (a built-in Origin .pal), e.g. Fire,
+            Rainbow, GrayScale, Maple, Thermometer, Temperature
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_palette = labtalk_name(palette, "palette")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    execute_labtalk("layer1;")
+    if not execute_labtalk(f"layer.cmap.load({safe_palette}.pal); layer.cmap.updateScale();"):
+        msg = f"Could not apply palette '{safe_palette}' to {safe_graph}."
+        raise ValueError(msg)
+    return f"Applied '{safe_palette}' palette to {safe_graph}"
+
+
+@mcp.tool()
+def set_colormap_levels(graph_name: str, z_min: float, z_max: float) -> str:
+    """Set the Z range (color scale levels) of a colormapped graph.
+
+    Args:
+        graph_name: Graph name (contour/heatmap/surface)
+        z_min: Minimum Z for the color scale
+        z_max: Maximum Z for the color scale
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    if z_max <= z_min:
+        msg = "z_max must be greater than z_min."
+        raise ValueError(msg)
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    execute_labtalk("layer1;")
+    if not execute_labtalk(
+        f"layer.cmap.zmin = {float(z_min)}; layer.cmap.zmax = {float(z_max)}; "
+        "layer.cmap.SetLevels(); layer.cmap.updateScale();"
+    ):
+        msg = f"Could not set colormap levels on {safe_graph}."
+        raise ValueError(msg)
+    return f"Set colormap Z range to [{z_min}, {z_max}] on {safe_graph}"
+
+
+@mcp.tool()
+def add_line(
+    graph_name: str,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float
+) -> str:
+    """Draw a straight line between two data points on a graph.
+
+    Useful for guides, connectors, and trend indicators. (Arrowheads are
+    not reliably scriptable on Origin 2020 — add them in the GUI's Object
+    Properties > Line/Arrow tab if needed.)
+
+    Args:
+        graph_name: Graph name
+        x1, y1: Start point in data coordinates
+        x2, y2: End point in data coordinates
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    execute_labtalk("layer1;")
+    coords = f"{{{float(x1)},{float(y1)},{float(x2)},{float(y2)}}}"
+    if not execute_labtalk(f"draw -l {coords};"):
+        msg = f"Could not draw a line on {safe_graph}."
+        raise ValueError(msg)
+    return f"Drew line ({x1},{y1})->({x2},{y2}) on {safe_graph}"

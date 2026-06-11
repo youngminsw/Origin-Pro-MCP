@@ -65,3 +65,39 @@ def test_add_text_annotation_runs(fake_origin):
     msg = add_text_annotation("Graph1", "Peak", 3.0, 70.0)
     assert "Peak" in msg
     assert any("label -p 3.0 70.0 -n anno Peak" in s for s in fake_origin.executed)
+
+
+def test_apply_color_map_unknown_graph(fake_origin):
+    from origin_pro_mcp.tools.graph import apply_color_map
+
+    with pytest.raises(ValueError, match="not found"):
+        apply_color_map("Ghost", "Fire")
+
+
+def test_apply_color_map_runs(fake_origin):
+    from origin_pro_mcp.tools.graph import apply_color_map
+
+    apply_color_map("Graph1", "Fire")
+    assert any("layer.cmap.load(Fire.pal)" in s for s in fake_origin.executed)
+
+
+def test_set_colormap_levels_bad_range(fake_origin):
+    from origin_pro_mcp.tools.graph import set_colormap_levels
+
+    with pytest.raises(ValueError, match="z_max must be greater"):
+        set_colormap_levels("Graph1", 5, 5)
+
+
+def test_add_line_runs(fake_origin):
+    from origin_pro_mcp.tools.graph import add_line
+
+    add_line("Graph1", 1, 2, 3, 4)
+    assert any("draw -l {1.0,2.0,3.0,4.0}" in s for s in fake_origin.executed)
+
+
+def test_create_graph_box_designates_y(fake_origin):
+    from origin_pro_mcp.tools.graph import create_graph
+
+    create_graph("G", "Book1", "Sheet1", 1, 2, plot_type="box")
+    assert any("wks.col2.type = 1" in s for s in fake_origin.executed)
+    assert any("plot:=206" in s for s in fake_origin.executed)

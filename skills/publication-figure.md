@@ -50,11 +50,12 @@ If unspecified, choose a conservative manuscript default: line+symbol for ordere
 - Remove grid lines unless the plot type genuinely needs them.
 - Use a closed frame for journal-style single-panel graphs.
 - Export once, inspect the image, then adjust text size, legend placement, and axis range.
-- Supported plot types: scatter, line, line+symbol, column, bar, area,
-  pie, histogram (single Y column), and contour (needs `z_col` — XYZ).
-  Box plots and true 3D (scatter/surface, OpenGL) are not yet reliable
-  through `create_graph`; flag the limitation instead of shipping a
-  broken or empty plot.
+- Supported plot types via `create_graph`: scatter, line, line+symbol,
+  column, bar, area, pie, histogram (single Y), box (single Y),
+  contour and 3d_scatter (need `z_col`). Matrix plots — 3D surface,
+  contour, heatmap, image — use `create_matrix_plot`. Colormapped plots
+  take `apply_color_map`/`set_colormap_levels`. Arrowheads and graph
+  templates have no reliable Origin-2020 script path; do those in the GUI.
 
 ## Standard Workflow
 
