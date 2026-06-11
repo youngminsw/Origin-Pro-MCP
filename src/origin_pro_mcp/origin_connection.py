@@ -64,6 +64,20 @@ def graph_names() -> list:
     pages = get_origin().GraphPages
     return [pages.Item(i).Name for i in range(pages.Count)]
 
+def matrix_names() -> list:
+    """Names of all open matrix books."""
+    pages = get_origin().MatrixPages
+    return [pages.Item(i).Name for i in range(pages.Count)]
+
+def require_matrix(book: str, sheet: str = "MSheet1") -> str:
+    """Return the [book]sheet matrix reference, or raise with open matrices."""
+    target = f"[{book}]{sheet}"
+    if get_origin().FindMatrixSheet(target) is None:
+        mats = ", ".join(matrix_names()) or "(none)"
+        msg = f"Matrix {target} not found. Open matrices: {mats}."
+        raise ValueError(msg)
+    return target
+
 def require_worksheet(book: str, sheet: str) -> str:
     """Return the [book]sheet reference, or raise with the open workbooks."""
     target = f"[{book}]{sheet}"

@@ -92,6 +92,11 @@ class FakeGraph:
         self.plot_names = list(plot_names)
 
 
+class FakeMatrix:
+    def __init__(self, name):
+        self.Name = name
+
+
 class FakeOrigin:
     """Mimics the Origin COM surface the tools rely on."""
 
@@ -104,6 +109,8 @@ class FakeOrigin:
         self.load_result = True
         self.put_result = True
         self.worksheet_data = ((1.0, 4.0), (2.0, 5.0))
+        self.matrices = []
+        self.matrix_data = {}
         self.lt_vars = {}
 
     @property
@@ -113,6 +120,10 @@ class FakeOrigin:
     @property
     def GraphPages(self):
         return FakePages(self.graphs)
+
+    @property
+    def MatrixPages(self):
+        return FakePages(self.matrices)
 
     def Execute(self, script):
         self.executed.append(script)
@@ -134,6 +145,22 @@ class FakeOrigin:
             if target == f"[{graph.Name}]Layer1":
                 return FakeLayer(graph.plot_names)
         return None
+
+    def FindMatrixSheet(self, target):
+        for m in self.matrices:
+            if target in (m.Name, f"[{m.Name}]MSheet1"):
+                return m
+        return None
+
+    def PutMatrix(self, target, data):
+        self.matrix_data[target] = [list(r) for r in data]
+        return self.put_result
+
+    def GetMatrix(self, target):
+        if self.FindMatrixSheet(target) is None:
+            return -2147352568
+        grid = self.matrix_data.get(target, ((1.0, 2.0), (3.0, 4.0)))
+        return tuple(tuple(r) for r in grid)
 
     def GetWorksheet(self, target):
         if self.FindWorksheet(target) is None:

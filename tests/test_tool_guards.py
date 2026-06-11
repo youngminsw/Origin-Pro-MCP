@@ -92,6 +92,7 @@ def test_list_worksheets_returns_books_sheets_graphs(fake_origin):
     result = json.loads(list_worksheets())
     assert result["workbooks"] == [{"name": "Book1", "sheets": ["Sheet1"]}]
     assert result["graphs"] == ["Graph1"]
+    assert result["matrices"] == []
 
 
 def test_create_graph_unknown_worksheet(fake_origin):

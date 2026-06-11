@@ -1,0 +1,173 @@
+import json
+
+from ..app import mcp
+from ..origin_connection import (
+    execute_labtalk,
+    get_lt_str,
+    get_origin,
+    matrix_names,
+    require_matrix,
+    require_worksheet,
+)
+from ..labtalk_safe import labtalk_name, positive_column, positive_int
+
+# Origin stores empty matrix cells as a large sentinel (~ -1.23e308 /
+# 1.23e-300); treat anything this large in magnitude as "missing".
+_MISSING_MAGNITUDE = 1e100
+
+
+def _create_matrix_book(name: str) -> str:
+    """Create a matrix book and return its actual (uniquified) name."""
+    # newbook auto-uniquifies the name on collision; read it back.
+    execute_labtalk(f'newbook mat:=1 name:="{name}" option:=1;')
+    return get_lt_str("page.name$")
+
+
+@mcp.tool()
+def create_matrix(book_name: str, rows: int = 10, cols: int = 10) -> str:
+    """Create a new matrix book in Origin.
+
+    Matrices back 3D surface, contour, heatmap, and image plots.
+
+    Args:
+        book_name: Name for the new matrix book
+        rows: Initial number of rows (default 10)
+        cols: Initial number of columns (default 10)
+
+    Returns:
+        Created matrix name (may differ from book_name if it was taken)
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    safe_rows = positive_int(rows, "rows")
+    safe_cols = positive_int(cols, "cols")
+    name = _create_matrix_book(safe_book)
+    execute_labtalk(f"win -a {name}; mdim cols:={safe_cols} rows:={safe_rows};")
+    return f"Created matrix: [{name}]MSheet1 ({safe_rows}x{safe_cols})"
+
+
+@mcp.tool()
+def set_matrix_data(book_name: str, data: str) -> str:
+    """Write a 2D numeric grid into a matrix.
+
+    Args:
+        book_name: Matrix book name
+        data: JSON array of equal-length rows, e.g. [[1,2,3],[4,5,6]]
+
+    Returns:
+        Success message
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    target = require_matrix(safe_book)
+    try:
+        grid = json.loads(data)
+    except json.JSONDecodeError as exc:
+        msg = (
+            "data must be a JSON array of arrays, e.g. [[1,2,3],[4,5,6]]. "
+            f"Parse error: {exc}"
+        )
+        raise ValueError(msg) from exc
+    if (
+        not isinstance(grid, list)
+        or not grid
+        or not all(isinstance(r, list) and r for r in grid)
+    ):
+        msg = "data must be a non-empty JSON array of non-empty rows."
+        raise ValueError(msg)
+    width = len(grid[0])
+    if any(len(r) != width for r in grid):
+        msg = "all rows must have the same length (a rectangular grid)."
+        raise ValueError(msg)
+    float_grid = []
+    for i, row in enumerate(grid):
+        try:
+            float_grid.append([float(v) for v in row])
+        except (TypeError, ValueError) as exc:
+            msg = f"Row {i + 1} contains non-numeric values; only numbers are supported."
+            raise ValueError(msg) from exc
+    if not get_origin().PutMatrix(target, float_grid):
+        msg = f"Origin rejected the matrix data for {target}."
+        raise ValueError(msg)
+    return f"Set {len(float_grid)}x{width} matrix in {target}"
+
+
+@mcp.tool()
+def get_matrix_data(book_name: str) -> str:
+    """Read a matrix back as JSON.
+
+    Args:
+        book_name: Matrix book name
+
+    Returns:
+        JSON object {"rows": [[...], ...]}; empty cells are null
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    target = require_matrix(safe_book)
+    data = get_origin().GetMatrix(target)
+    if not isinstance(data, (list, tuple)):
+        mats = ", ".join(matrix_names()) or "(none)"
+        return json.dumps(
+            {"error": f"Matrix {target} not found. Open matrices: {mats}."}
+        )
+    rows = [
+        [None if abs(v) >= _MISSING_MAGNITUDE else v for v in row]
+        for row in data
+    ]
+    return json.dumps({"rows": rows})
+
+
+@mcp.tool()
+def worksheet_to_matrix(
+    data_book: str,
+    data_sheet: str,
+    x_col: int,
+    y_col: int,
+    z_col: int,
+    rows: int = 20,
+    cols: int = 20,
+    matrix_book: str = ""
+) -> str:
+    """Convert XYZ worksheet columns into a matrix by gridding (xyz2mat).
+
+    Enables 3D surface / contour / heatmap from scattered XYZ data.
+
+    Args:
+        data_book: Source workbook name
+        data_sheet: Source sheet name
+        x_col: X column (1-based)
+        y_col: Y column (1-based)
+        z_col: Z column (1-based)
+        rows: Output matrix rows (default 20)
+        cols: Output matrix columns (default 20)
+        matrix_book: Optional name for the output matrix book
+
+    Returns:
+        Name of the created matrix
+    """
+    safe_book = labtalk_name(data_book, "data_book")
+    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_x = positive_column(x_col, "x_col")
+    safe_y = positive_column(y_col, "y_col")
+    safe_z = positive_column(z_col, "z_col")
+    safe_rows = positive_int(rows, "rows")
+    safe_cols = positive_int(cols, "cols")
+    require_worksheet(safe_book, safe_sheet)
+
+    # xyz2mat needs the Z column designated as Z (type 6) on the active sheet.
+    execute_labtalk(f'win -a {safe_book}; page.active$ = "{safe_sheet}"; wks.col{safe_z}.type = 6;')
+
+    base = labtalk_name(matrix_book, "matrix_book") if matrix_book else "Matrix"
+    name = _create_matrix_book(base)
+    cmd = (
+        f"xyz2mat iz:=[{safe_book}]{safe_sheet}!({safe_x},{safe_y},{safe_z}) "
+        f"settings.ConvertToMatrix.columns:={safe_cols} "
+        f"settings.ConvertToMatrix.rows:={safe_rows} "
+        f"om:=[{name}]MSheet1!;"
+    )
+    if not execute_labtalk(cmd):
+        execute_labtalk(f"win -cd {name};")
+        msg = (
+            f"XYZ gridding failed for [{safe_book}]{safe_sheet}!"
+            f"({safe_x},{safe_y},{safe_z}). Check that the columns contain data."
+        )
+        raise ValueError(msg)
+    return f"Gridded [{safe_book}]{safe_sheet} into matrix [{name}]MSheet1 ({safe_rows}x{safe_cols})"

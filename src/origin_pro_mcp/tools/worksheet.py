@@ -7,6 +7,7 @@ from ..origin_connection import (
     execute_labtalk,
     get_origin,
     graph_names,
+    matrix_names,
     require_worksheet,
     workbook_names,
 )
@@ -183,10 +184,11 @@ def import_csv_to_worksheet(
 
 @mcp.tool()
 def list_worksheets() -> str:
-    """List all open workbooks (with their sheets) and graph windows.
+    """List all open workbooks (with their sheets), graphs, and matrices.
 
     Returns:
-        JSON object: {"workbooks": [{"name", "sheets"}], "graphs": [names]}
+        JSON object: {"workbooks": [{"name", "sheets"}], "graphs": [names],
+        "matrices": [names]}
     """
     o = get_origin()
     workbooks = []
@@ -197,4 +199,6 @@ def list_worksheets() -> str:
         sheets = [layers.Item(j).Name for j in range(layers.Count)]
         workbooks.append({"name": page.Name, "sheets": sheets})
 
-    return json.dumps({"workbooks": workbooks, "graphs": graph_names()})
+    return json.dumps(
+        {"workbooks": workbooks, "graphs": graph_names(), "matrices": matrix_names()}
+    )
