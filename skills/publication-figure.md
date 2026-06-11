@@ -81,9 +81,10 @@ heatmaps, and 3D scatter.
 - **Set the Z range honestly** with `set_colormap_levels(z_min, z_max)` to
   the real data range; don't clip features into saturation just to boost
   contrast, and state the range.
-- **Label every axis with units**, including Z on 3D plots, in the same
-  bold readable font as the 2D figures (`set_axis_labels`; for 3D the Z
-  title and tick fonts follow the same sizing).
+- **Label every axis with units, including Z.** On a colormap surface the
+  Z-axis title and the color-scale title both come from the matrix long
+  name — set it with `create_matrix_plot(..., z_label="Intensity (a.u.)")`.
+  X/Y titles use `set_axis_labels(x_label=, y_label=)`.
 - **Prefer a 2D contour or heatmap over a 3D surface when exact values
   matter** — a top-down colormap is easier to read off than a tilted
   surface. Use the 3D surface for shape/intuition, the contour for
@@ -93,12 +94,28 @@ heatmaps, and 3D scatter.
   angle and keep it consistent across a figure set.
 - **3D scatter:** make symbols large enough to read at print size (the
   same "bigger symbols" lesson as 2D) and rely on Z color/height, not tiny
-  dots, to carry the third dimension.
+  dots, to carry the third dimension. Its X/Y/Z axis titles come from the
+  source column long names, so name the columns with units up front
+  (e.g. `column_names="X (mm),Y (mm),Signal (a.u.)"`).
 - **Match the rest of the figure set:** same fonts, same export pixel size
   (`export_graph_sized`), same labeling conventions as the 2D panels so a
   mixed figure looks like one family.
 - Export once, inspect, then adjust colormap, Z range, viewing angle, and
   label sizes — exactly the 2D "export and inspect" loop.
+
+Verified colormap-surface recipe (Origin 2020):
+
+```text
+worksheet_to_matrix(data_book="D", data_sheet="Sheet1", x_col=1, y_col=2, z_col=3)
+create_matrix_plot(matrix_book="Matrix", plot_type="surface", z_label="Intensity (a.u.)")
+apply_color_map(graph_name="Graph1", palette="Heatmap4ColorBlind")
+set_colormap_levels(graph_name="Graph1", z_min=0, z_max=1)
+set_axis_labels(graph_name="Graph1", x_label="X (mm)", y_label="Y (mm)")
+export_graph_sized(graph_name="Graph1", file_path="C:\\fig\\surface.png", width=1600)
+```
+
+This yields a Z-colored surface with bold X/Y/Z titles, a labeled color
+scale, and a clean Z range — the 3D counterpart of `apply_publication_style`.
 
 ## Standard Workflow
 

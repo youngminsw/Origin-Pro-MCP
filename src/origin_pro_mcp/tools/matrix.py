@@ -10,7 +10,13 @@ from ..origin_connection import (
     require_matrix,
     require_worksheet,
 )
-from ..labtalk_safe import labtalk_choice, labtalk_name, positive_column, positive_int
+from ..labtalk_safe import (
+    labtalk_choice,
+    labtalk_name,
+    labtalk_string,
+    positive_column,
+    positive_int,
+)
 
 # matrix plot type -> Origin plot ID (verified live on Origin 2020)
 _MATRIX_PLOT_TYPES = {
@@ -188,7 +194,8 @@ def worksheet_to_matrix(
 def create_matrix_plot(
     matrix_book: str,
     plot_type: str = "heatmap",
-    graph_name: str = ""
+    graph_name: str = "",
+    z_label: str = ""
 ) -> str:
     """Plot a matrix as a surface, contour, heatmap, or image.
 
@@ -196,6 +203,9 @@ def create_matrix_plot(
         matrix_book: Matrix book name (see create_matrix / worksheet_to_matrix)
         plot_type: surface (3D), contour, heatmap, or image
         graph_name: Optional name for the new graph
+        z_label: Optional Z label with units (e.g. "Intensity (a.u.)"); sets
+                 the matrix long name, which drives both the Z-axis title
+                 (3D) and the color-scale title.
 
     Returns:
         Created graph name
@@ -206,13 +216,20 @@ def create_matrix_plot(
     target = require_matrix(safe_book)
     o = get_origin()
     requested = labtalk_name(graph_name, "graph_name") if graph_name else None
+    # The matrix long name flows into %(?Z) → Z-axis title + color scale.
+    if z_label:
+        execute_labtalk(
+            f'win -a {safe_book}; wks.col1.lname$ = {labtalk_string(z_label, "z_label")};'
+        )
 
     if safe_type in _MATRIX_OWN_GRAPH:
-        # OpenGL surface must own its graph; activate the matrix (a
-        # non-graph window) so plotm creates a fresh 3D window.
+        # OpenGL color-map surface must own its graph; activate the matrix
+        # (a non-graph window) so plotm creates a fresh 3D window. The
+        # `glcmap` template makes the surface colored by Z (a plain plot:=103
+        # renders a single-color mesh).
         execute_labtalk(f"win -a {safe_book};")
         before = set(graph_names())
-        if not execute_labtalk(f"plotm im:={target}! plot:={pid};"):
+        if not execute_labtalk(f"plotm im:={target}! ogl:=<new template:=glcmap>;"):
             msg = f"Could not plot matrix {target} as {safe_type}."
             raise ValueError(msg)
         new = set(graph_names()) - before

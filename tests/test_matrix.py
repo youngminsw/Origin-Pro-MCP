@@ -77,3 +77,13 @@ def test_create_matrix_plot_rejects_bad_type(fake_origin):
     fake_origin.matrices = [FakeMatrix("Mtx")]
     with pytest.raises(ValueError, match="plot_type must be one of"):
         create_matrix_plot("Mtx", plot_type="wireframe")
+
+
+def test_create_matrix_plot_z_label_sets_matrix_longname(fake_origin):
+    from origin_pro_mcp.tools.matrix import create_matrix_plot
+
+    fake_origin.matrices = [FakeMatrix("Mtx")]
+    create_matrix_plot("Mtx", plot_type="heatmap", z_label="Intensity (a.u.)")
+    assert any(
+        'wks.col1.lname$ = "Intensity (a.u.)"' in s for s in fake_origin.executed
+    )
