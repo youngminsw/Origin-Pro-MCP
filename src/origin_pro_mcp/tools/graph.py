@@ -499,3 +499,37 @@ def add_reference_line(
         msg = f"Could not draw a {safe_orientation} reference line on {safe_graph}."
         raise ValueError(msg)
     return f"Drew {safe_orientation} reference line at {value} on {safe_graph}"
+
+
+@mcp.tool()
+def add_text_annotation(
+    graph_name: str,
+    text: str,
+    x: float,
+    y: float,
+    name: str = "anno"
+) -> str:
+    """Add a text label to a graph at data coordinates.
+
+    Args:
+        graph_name: Graph name
+        text: Annotation text (no quotes, line breaks, or ';')
+        x: X position in data coordinates
+        y: Y position in data coordinates
+        name: Internal object name (letters/numbers/underscore)
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_name = labtalk_name(name, "name")
+    if any(ch in text for ch in ('"', "\r", "\n", ";")) or not text.strip():
+        msg = "text cannot be empty or contain quotes, line breaks, or ';'."
+        raise ValueError(msg)
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    execute_labtalk("layer1;")
+    if not execute_labtalk(f"label -p {float(x)} {float(y)} -n {safe_name} {text};"):
+        msg = f"Could not add the annotation to {safe_graph}."
+        raise ValueError(msg)
+    return f"Added annotation '{text}' at ({x}, {y}) on {safe_graph}"

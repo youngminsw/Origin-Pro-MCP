@@ -50,3 +50,18 @@ def test_add_reference_line_runs(fake_origin):
 
     add_reference_line("Graph1", "horizontal", 5)
     assert any("draw -l -h 5.0" in s for s in fake_origin.executed)
+
+
+def test_add_text_annotation_blocks_injection(fake_origin):
+    from origin_pro_mcp.tools.graph import add_text_annotation
+
+    with pytest.raises(ValueError, match="cannot be empty or contain"):
+        add_text_annotation("Graph1", "hi; doc -s", 1, 2)
+
+
+def test_add_text_annotation_runs(fake_origin):
+    from origin_pro_mcp.tools.graph import add_text_annotation
+
+    msg = add_text_annotation("Graph1", "Peak", 3.0, 70.0)
+    assert "Peak" in msg
+    assert any("label -p 3.0 70.0 -n anno Peak" in s for s in fake_origin.executed)
