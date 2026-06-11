@@ -370,3 +370,132 @@ def export_graph(
     out = export_graph_to_file(graph_name, path)
     size = os.path.getsize(out)
     return f"Exported to: {out} ({size} bytes)"
+
+
+# Origin axis scale type codes (layer.x/y.type).
+_AXIS_SCALES = {"linear": 1, "log10": 2, "ln": 8, "log2": 9}
+
+
+@mcp.tool()
+def set_axis_scale(graph_name: str, axis: str = "y", scale: str = "log10") -> str:
+    """Set an axis to linear or a logarithmic scale.
+
+    Args:
+        graph_name: Graph name
+        axis: "x" or "y"
+        scale: linear, log10, ln, or log2
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_axis = labtalk_choice(axis.lower(), {"x", "y"}, "axis")
+    safe_scale = labtalk_choice(scale.lower(), _AXIS_SCALES, "scale")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    if not execute_labtalk(f"layer.{safe_axis}.type = {_AXIS_SCALES[safe_scale]};"):
+        msg = f"Could not set {safe_axis} axis of {safe_graph} to {safe_scale}."
+        raise ValueError(msg)
+    return f"Set {safe_axis} axis of {safe_graph} to {safe_scale} scale"
+
+
+@mcp.tool()
+def add_second_y_axis(
+    graph_name: str,
+    data_book: str,
+    data_sheet: str,
+    x_col: int,
+    y_col: int,
+    plot_type: str = "line+symbol"
+) -> str:
+    """Add a right-side Y axis layer and plot a second dataset on it.
+
+    Args:
+        graph_name: Existing graph
+        data_book, data_sheet: Source data
+        x_col, y_col: Columns for the right-axis series (1-based)
+        plot_type: scatter, line, line+symbol, column, bar, area
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_book = labtalk_name(data_book, "data_book")
+    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    sx = positive_column(x_col, "x_col")
+    sy = positive_column(y_col, "y_col")
+    safe_type = labtalk_choice(plot_type, PLOT_TYPES, "plot_type")
+    if safe_type in _Y_ONLY_TYPES or safe_type in _XYZ_TYPES:
+        msg = f"add_second_y_axis supports only X,Y plot types, not '{safe_type}'."
+        raise ValueError(msg)
+    ptype = PLOT_TYPES[safe_type]
+    require_graph(safe_graph)
+    require_worksheet(safe_book, safe_sheet)
+    activate_window(safe_graph, "graph_name")
+    if not execute_labtalk("layadd type:=righty;"):
+        msg = f"Could not add a right-Y layer to {safe_graph}."
+        raise ValueError(msg)
+    layer = int(get_origin().LTVar("page.nlayers"))
+    data_ref = f"[{safe_book}]{safe_sheet}!({sx},{sy})"
+    if not execute_labtalk(f"plotxy iy:={data_ref} plot:={ptype} ogl:=[{safe_graph}]{layer}!;"):
+        msg = f"Added the right-Y layer but could not plot {data_ref} on it."
+        raise ValueError(msg)
+    return f"Added right-Y axis (layer {layer}) to {safe_graph} with {safe_type} plot"
+
+
+@mcp.tool()
+def add_layer(graph_name: str, layer_type: str = "right-y") -> str:
+    """Add a new layer (panel/axis) to a graph.
+
+    Args:
+        graph_name: Graph name
+        layer_type: right-y, top-x, inset, or independent
+
+    Returns:
+        Success message naming the new layer index
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    type_map = {
+        "right-y": "righty",
+        "top-x": "topx",
+        "inset": "inset",
+        "independent": "independent",
+    }
+    safe_layer_type = labtalk_choice(layer_type.lower(), type_map, "layer_type")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    if not execute_labtalk(f"layadd type:={type_map[safe_layer_type]};"):
+        msg = f"Could not add a {safe_layer_type} layer to {safe_graph}."
+        raise ValueError(msg)
+    layer = int(get_origin().LTVar("page.nlayers"))
+    return f"Added {safe_layer_type} layer (layer {layer}) to {safe_graph}"
+
+
+@mcp.tool()
+def add_reference_line(
+    graph_name: str,
+    orientation: str,
+    value: float
+) -> str:
+    """Draw a horizontal or vertical reference line at a data value.
+
+    Args:
+        graph_name: Graph name
+        orientation: "horizontal" (constant Y) or "vertical" (constant X)
+        value: Axis value where the line is drawn
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_orientation = labtalk_choice(
+        orientation.lower(), {"horizontal", "vertical"}, "orientation"
+    )
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    execute_labtalk("layer1;")
+    flag = "-h" if safe_orientation == "horizontal" else "-v"
+    if not execute_labtalk(f"draw -l {flag} {float(value)};"):
+        msg = f"Could not draw a {safe_orientation} reference line on {safe_graph}."
+        raise ValueError(msg)
+    return f"Drew {safe_orientation} reference line at {value} on {safe_graph}"
