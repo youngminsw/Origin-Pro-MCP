@@ -5,7 +5,7 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 ## What Can It Do?
 
 - **Worksheet Management** — Create workbooks, read/write data, import CSV files
-- **Graph Creation** — Scatter, line, line+symbol, bar, histogram, box, contour, pie, bubble plots
+- **Graph Creation** — Scatter, line, line+symbol, column, bar, area, pie, histogram, contour plots
 - **Plot Styling** — Colors, symbols, line width, publication-ready formatting in one call
 - **Curve Fitting** — Linear, polynomial, exponential, Gaussian, Lorentz, Voigt, and more
 - **Project Management** — New/save/load projects, export all graphs
@@ -155,6 +155,38 @@ MCP Server (Windows Python + win32com)
 Origin Pro (GUI visible in real-time)
 ```
 
+## Direct CLI (no MCP client)
+
+Every MCP tool is also a plain command, so the repo alone can drive
+Origin — no MCP client, no per-task scripts. Same Windows-runtime rule
+applies (Windows Python + pywin32 + Origin).
+
+```bash
+# List all tools with their arguments
+python -m origin_pro_mcp.cli list
+
+# Call any tool: simple flags...
+python -m origin_pro_mcp.cli list_worksheets
+python -m origin_pro_mcp.cli apply_publication_style --graph_name Fig1
+
+# ...or --json for values with spaces/paths (recommended for scripting)
+python -m origin_pro_mcp.cli apply_publication_style --json '{"graph_name": "Fig1", "x_label": "Temperature (K)"}'
+python -m origin_pro_mcp.cli export_graph --json '{"graph_name": "Fig1", "file_path": "/mnt/c/Users/me/fig1.png"}'
+```
+
+After `pip install` (or via `uvx`) the same is available as the
+`origin-pro-cli` command, e.g. `origin-pro-cli list_worksheets`.
+
+Running a WSL agent? Invoke Windows Python with the package on the path,
+for example from the repo's `src/` directory:
+
+```bash
+cd src && /mnt/c/.../python.exe -m origin_pro_mcp.cli list_worksheets
+```
+
+The CLI reflects over the same tool registry as the MCP server, so it
+always exposes exactly the tools listed below.
+
 ## Available Tools (23 total)
 
 ### Project Management
@@ -287,19 +319,20 @@ Copy `skills/publication-figure.md` to your project and edit freely — it's mea
 
 ## Supported Plot Types
 
-| Type | Description |
-|------|-------------|
-| `scatter` | Scatter plot (symbols only) |
-| `line` | Line plot (no symbols) |
-| `line+symbol` | Line with symbols (recommended for publications) |
-| `column` | Vertical bar chart |
-| `bar` | Horizontal bar chart |
-| `area` | Area plot |
-| `histogram` | Histogram |
-| `box` | Box plot |
-| `contour` | Contour plot |
-| `pie` | Pie chart |
-| `bubble` | Bubble chart |
+| Type | Description | Data |
+|------|-------------|------|
+| `scatter` | Scatter plot (symbols only) | X, Y |
+| `line` | Line plot (no symbols) | X, Y |
+| `line+symbol` | Line with symbols (recommended for publications) | X, Y |
+| `column` | Vertical bar chart | X, Y |
+| `bar` | Horizontal bar chart | X, Y |
+| `area` | Area plot | X, Y |
+| `pie` | Pie chart | X, Y |
+| `histogram` | Histogram | single Y column |
+| `contour` | Filled contour map | X, Y, Z (pass `z_col`) |
+
+> Box plots and true 3D plots (3D scatter/surface, which are OpenGL) are
+> not yet supported reliably and are intentionally omitted.
 
 ## Supported Fitting Functions
 

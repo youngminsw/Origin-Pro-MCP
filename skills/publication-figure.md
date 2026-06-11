@@ -34,8 +34,15 @@ If unspecified, choose a conservative manuscript default: line+symbol for ordere
   steel blue, muted rose, muted teal, soft amber, soft purple, gray cyan.
   Avoid pure primary colors — they tire the eyes and dominate the figure.
 - Avoid red and green as the only two series colors.
-- Keep lines at 2.5 pt and tick labels uncrowded (~5 major intervals);
-  the one-call style tool handles both.
+- `apply_publication_style` defaults are tuned for print: 3.0 pt data
+  lines, size-14 symbols, and 2.5 pt error-bar lines with whisker caps
+  matched to the symbol size. Keep tick labels
+  uncrowded (~5 major intervals); the one-call tool handles spacing.
+- **The legend must never overlap the data.** `apply_publication_style`,
+  `set_legend`, and the fit-curve path auto-place the legend in the
+  emptiest corner (the requested `legend_position` is only a preference,
+  overridden when data sits there). If every corner is crowded, widen the
+  axis range to open a gap rather than letting the legend cover points.
 - Legends: borderless with bold entries (the style tools do this).
 - Use distinct symbols when colors alone may not survive grayscale printing.
 - Keep axis ranges tight but honest; do not crop important outliers.
@@ -43,10 +50,24 @@ If unspecified, choose a conservative manuscript default: line+symbol for ordere
 - Remove grid lines unless the plot type genuinely needs them.
 - Use a closed frame for journal-style single-panel graphs.
 - Export once, inspect the image, then adjust text size, legend placement, and axis range.
+- Supported plot types: scatter, line, line+symbol, column, bar, area,
+  pie, histogram (single Y column), and contour (needs `z_col` — XYZ).
+  Box plots and true 3D (scatter/surface, OpenGL) are not yet reliable
+  through `create_graph`; flag the limitation instead of shipping a
+  broken or empty plot.
 
 ## Standard Workflow
 
 ### 1. Prepare Data
+
+Inspect what is already open before creating anything — this avoids
+duplicate workbooks and tells you the exact `data_book`/`data_sheet`
+names plotting tools expect:
+
+```text
+list_worksheets()                         # open workbooks, sheets, graphs
+get_worksheet_data(book_name="Data", sheet_name="Sheet1")
+```
 
 Use existing worksheets when available. For direct arrays:
 
@@ -123,6 +144,17 @@ set_axis_range(graph_name="Fig1", x_min=280, x_max=620, y_min=0, y_max=2.2)
 set_legend(graph_name="Fig1", visible=True, position="top-right", entries="Pristine,Annealed")
 ```
 
+`set_plot_style` reference (these are the only accepted values):
+
+- `plot_index` is 1-based in the order series were added; error-bar plots
+  are not counted.
+- `color`: black, red, green, blue, cyan, magenta, yellow, orange,
+  purple, gray.
+- `symbol_shape`: 0=auto, 1=square, 2=circle, 3=triangle-up, 4=diamond,
+  5=triangle-down, 6=hexagon.
+- `legend_position` (here and in `apply_publication_style`/`set_legend`):
+  top-left, top-right, bottom-left, bottom-right — nothing else is valid.
+
 ### 4. Fit When Needed
 
 Use fitting only when it answers the scientific question:
@@ -167,6 +199,7 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | `expGraph` may not write files reliably | Use `export_graph`, which copies the rendered page and saves via Pillow |
 | Fit statistics can reset after `nlend` | Read statistics before ending the nonlinear fit session |
 | Error-bar plots appear as separate entries in `DataPlots` | MCP styling tools detect them via the column's Y-Error designation and only color-match them — symbol/line commands would redraw error bars as connected lines |
+| Error-bar `set -erw`/`-erwc` use POINTS, unlike the data line's `-w` (~200 units/pt) | Set `-erw` (error-bar line width) and `-erwc` (cap/whisker width) in points. Passing a `-w`-scale value (e.g. 550) into `-erw` makes bars explode — that was a units mistake, not an Origin bug. MCP tools set `-erw` in points and scale `-erwc` to the symbol size |
 | `set <plot>` silently fails when the graph window is not active | Run `win -a <graph>` first |
 | `[Book]Sheet!col(n).type = ...` is silently ignored | Activate the sheet and use `wks.col(n).type` instead |
 

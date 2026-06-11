@@ -10,139 +10,7 @@ import pytest
 
 from origin_pro_mcp import origin_connection
 
-
-class FakePages:
-    def __init__(self, pages):
-        self._pages = pages
-
-    @property
-    def Count(self):
-        return len(self._pages)
-
-    def Item(self, i):
-        return self._pages[i]
-
-
-class FakeColumn:
-    def __init__(self, name, col_type=0, long_name=""):
-        self.Name = name
-        self.Type = col_type  # COM designation: 0=Y, 2=Y Error, 3=X
-        self.LongName = long_name
-
-
-class FakeSheet:
-    def __init__(self, name, columns=()):
-        self.Name = name
-        self.columns = list(columns)
-
-    @property
-    def Columns(self):
-        return FakePages(self.columns)
-
-
-class FakeBook:
-    def __init__(self, name, sheets=("Sheet1",)):
-        self.Name = name
-        self.sheets = [
-            s if isinstance(s, FakeSheet) else FakeSheet(s) for s in sheets
-        ]
-
-    @property
-    def Layers(self):
-        return FakePages(self.sheets)
-
-
-class FakePlot:
-    def __init__(self, name):
-        self.Name = name
-
-
-class FakeLayer:
-    def __init__(self, plot_names):
-        self.DataPlots = FakePages([FakePlot(n) for n in plot_names])
-
-    def Execute(self, script):
-        return True
-
-
-class FakeGraph:
-    def __init__(self, name, plot_names=()):
-        self.Name = name
-        self.plot_names = list(plot_names)
-
-
-class FakeOrigin:
-    """Mimics the Origin COM surface the tools rely on."""
-
-    def __init__(self):
-        self.books = [FakeBook("Book1")]
-        self.graphs = [FakeGraph("Graph1")]
-        self.execute_results = {}
-        self.executed = []
-        self.save_result = True
-        self.load_result = True
-        self.put_result = True
-        self.worksheet_data = ((1.0, 4.0), (2.0, 5.0))
-        self.lt_vars = {}
-
-    @property
-    def WorksheetPages(self):
-        return FakePages(self.books)
-
-    @property
-    def GraphPages(self):
-        return FakePages(self.graphs)
-
-    def Execute(self, script):
-        self.executed.append(script)
-        for prefix, result in self.execute_results.items():
-            if script.startswith(prefix):
-                return result
-        return True
-
-    def FindWorksheet(self, target):
-        for book in self.books:
-            for j in range(book.Layers.Count):
-                sheet = book.Layers.Item(j)
-                if target == f"[{book.Name}]{sheet.Name}":
-                    return sheet
-        return None
-
-    def FindGraphLayer(self, target):
-        for graph in self.graphs:
-            if target == f"[{graph.Name}]Layer1":
-                return FakeLayer(graph.plot_names)
-        return None
-
-    def GetWorksheet(self, target):
-        if self.FindWorksheet(target) is None:
-            return -2147352568  # HRESULT int, as observed on Origin 2020
-        return self.worksheet_data
-
-    def PutWorksheet(self, target, data, row, col):
-        return self.put_result
-
-    def Save(self, path):
-        return self.save_result
-
-    def Load(self, path):
-        return self.load_result
-
-    def CreatePage(self, kind, name, template):
-        return name
-
-    def LTVar(self, name):
-        return self.lt_vars.get(name, 0.0)
-
-    def LTStr(self, name):
-        return ""
-
-
-@pytest.fixture
-def fake_origin(monkeypatch):
-    fake = FakeOrigin()
-    monkeypatch.setattr(origin_connection, "_origin", fake)
-    return fake
+from conftest import FakeColumn, FakeSheet, FakeBook, FakeGraph
 
 
 def test_activate_window_raises_with_open_windows(fake_origin):
@@ -346,3 +214,43 @@ def test_position_legend_keeps_box_inside_frame(fake_origin):
     # center = from + 3% padding + half the box size, so the box edge
     # never covers the axis or tick labels
     assert "legend.x = 2.3; legend.y = 1.69;" in fake_origin.executed
+
+
+def test_apply_publication_style_rejects_bad_legend_position(fake_origin):
+    from origin_pro_mcp.tools.style import apply_publication_style
+
+    # Invalid legend_position must fail fast, before any styling commands
+    # mutate the graph.
+    with pytest.raises(ValueError, match="legend_position"):
+        apply_publication_style("Graph1", legend_position="center")
+    assert not any(s.startswith("xb.text$") for s in fake_origin.executed)
+
+
+def test_create_graph_contour_requires_z_col(fake_origin):
+    from origin_pro_mcp.tools.graph import create_graph
+
+    with pytest.raises(ValueError, match="requires z_col"):
+        create_graph("G", "Book1", "Sheet1", 1, 2, plot_type="contour")
+
+
+def test_create_graph_histogram_plots_single_column(fake_origin):
+    from origin_pro_mcp.tools.graph import create_graph
+
+    msg = create_graph("G", "Book1", "Sheet1", 1, 2, plot_type="histogram")
+    assert "histogram" in msg
+    # Y-range plot: a single column, with the corrected histogram ID 219
+    assert any("col(2)" in s and "plot:=219" in s for s in fake_origin.executed)
+
+
+def test_create_graph_uses_corrected_area_id(fake_origin):
+    from origin_pro_mcp.tools.graph import create_graph
+
+    create_graph("G", "Book1", "Sheet1", 1, 2, plot_type="area")
+    assert any("plot:=204" in s for s in fake_origin.executed)  # 204 = Area
+
+
+def test_add_plot_rejects_non_xy_type(fake_origin):
+    from origin_pro_mcp.tools.graph import add_plot_to_graph
+
+    with pytest.raises(ValueError, match="only X,Y"):
+        add_plot_to_graph("Graph1", "Book1", "Sheet1", 1, 2, plot_type="histogram")

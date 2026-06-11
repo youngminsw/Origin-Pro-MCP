@@ -205,7 +205,7 @@ def curve_fit(
             )
             if plotted:
                 import time
-                from .style_helpers import get_plot_names, reposition_legend_nearest_corner
+                from .style_helpers import get_plot_names, place_legend_avoiding_data
 
                 # `set` resolves plot names against the ACTIVE window —
                 # plotxy with ogl:= does not activate the graph itself
@@ -222,7 +222,7 @@ def curve_fit(
                 # can push the box outside the frame — re-anchor it
                 execute_labtalk(f"win -a {safe_target_graph}; legend -r;")
                 time.sleep(0.3)
-                reposition_legend_nearest_corner(safe_target_graph)
+                place_legend_avoiding_data(safe_target_graph)
                 result["fit_curve"] = {
                     "sheet": f"[{safe_book}]{curve_sheet}",
                     "plotted_on": safe_target_graph,

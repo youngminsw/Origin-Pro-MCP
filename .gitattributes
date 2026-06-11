@@ -1,0 +1,24 @@
+# Normalize all text files to LF in the repository.
+# Google Drive / Windows editors keep rewriting these files as CRLF,
+# which otherwise shows every file as fully modified. eol=lf makes git
+# store and check out LF regardless of the local core.autocrlf setting.
+* text=auto eol=lf
+
+# Explicit text types (defensive — covers files git might misdetect)
+*.py    text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.txt   text eol=lf
+*.cfg   text eol=lf
+*.json  text eol=lf
+*.gitattributes text eol=lf
+*.gitignore     text eol=lf
+LICENSE text eol=lf
+
+# Binary assets — never normalize
+*.png   binary
+*.jpg   binary
+*.tif   binary
+*.bmp   binary
+*.opj   binary
+*.opju  binary

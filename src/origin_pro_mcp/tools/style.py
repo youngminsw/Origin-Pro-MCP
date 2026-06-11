@@ -5,7 +5,7 @@ from .style_helpers import (
     find_plot_column,
     get_plot_info,
     graph_layer_execute,
-    position_legend,
+    place_legend_avoiding_data,
     set_legend_entries,
 )
 
@@ -33,6 +33,19 @@ COLOR_MAP = {
 # LabTalk `set -w` line-width units are tiny (~200 units per point,
 # calibrated visually on Origin 2020) — NOT points*10.
 _WIDTH_UNITS_PER_POINT = 200
+
+# Publication-style line/symbol defaults for apply_publication_style,
+# tuned visually on Origin 2020 for journal figures. Edit these to match
+# your lab's taste — bigger symbols and heavier error bars read better in
+# print than Origin's thin defaults.
+_PUB_LINE_WIDTH_PT = 3.0        # data series line width (points)
+_PUB_SYMBOL_SIZE = 14           # data symbol size
+# Error-bar geometry. `set -erw` is in POINTS (unlike the data line's
+# `-w`, which is ~200 units/pt), and `-erwc` is the cap (whisker) width.
+# Both verified on Origin 2020 — earlier "blow-ups" were a units mistake
+# (passing -w-scale values into -erw), not an Origin limitation.
+_PUB_ERROR_BAR_WIDTH_PT = 2.5            # error-bar line width (points, via -erw)
+_PUB_ERROR_CAP_WIDTH = _PUB_SYMBOL_SIZE - 2   # cap width, matched to symbol size
 
 
 def _rgb(color: tuple) -> str:
@@ -162,6 +175,11 @@ def apply_publication_style(
         Summary of applied styling
     """
     safe_graph_name = labtalk_name(graph_name, "graph_name")
+    safe_legend_position = labtalk_choice(
+        legend_position,
+        {"top-left", "top-right", "bottom-left", "bottom-right"},
+        "legend_position",
+    )
     require_graph(safe_graph_name)
     activate_window(safe_graph_name, "graph_name")
     plot_infos = get_plot_info(safe_graph_name)
@@ -175,8 +193,8 @@ def apply_publication_style(
         execute_labtalk(f'yl.text$ = {y_title}; yl.fsize = 28; yl.font$ = "Arial";')
 
     # 2. Tick labels — bold, Arial 22pt
-    graph_layer_execute(graph_name, 'layer.x.label.pt = 22; layer.y.label.pt = 22;')
-    graph_layer_execute(graph_name, 'layer.x.label.bold = 1; layer.y.label.bold = 1;')
+    graph_layer_execute(safe_graph_name, 'layer.x.label.pt = 22; layer.y.label.pt = 22;')
+    graph_layer_execute(safe_graph_name, 'layer.x.label.bold = 1; layer.y.label.bold = 1;')
 
     # 3. Axis range + readable tick spacing (~5 major intervals)
     range_cmds = []
@@ -230,7 +248,9 @@ def apply_publication_style(
         if info["is_error"]:
             execute_labtalk(f"set {pname} -c {current_color};")
             time.sleep(0.2)
-            execute_labtalk(f"set {pname} -w 300;")  # 1.5 pt error bars
+            execute_labtalk(f"set {pname} -erw {_PUB_ERROR_BAR_WIDTH_PT};")  # error-bar line width (pt)
+            time.sleep(0.2)
+            execute_labtalk(f"set {pname} -erwc {_PUB_ERROR_CAP_WIDTH};")  # cap width ~ symbol
             time.sleep(0.2)
             continue
         current_color = _rgb(PASTEL_RGB[data_index % len(PASTEL_RGB)])
@@ -239,12 +259,12 @@ def apply_publication_style(
 
         execute_labtalk(f"set {pname} -c {current_color};")
         time.sleep(0.2)
-        execute_labtalk(f"set {pname} -w 500;")  # 2.5 pt lines
+        execute_labtalk(f"set {pname} -w {int(_PUB_LINE_WIDTH_PT * _WIDTH_UNITS_PER_POINT)};")  # data lines
         time.sleep(0.2)
         if _plot_has_symbols(pname):
             execute_labtalk(f"set {pname} -k {shape};")
             time.sleep(0.2)
-            execute_labtalk(f"set {pname} -z 10;")
+            execute_labtalk(f"set {pname} -z {_PUB_SYMBOL_SIZE};")
             time.sleep(0.2)
         else:
             # bar/column/area-type plots: color the fill instead
@@ -274,11 +294,11 @@ def apply_publication_style(
             time.sleep(0.3)
 
     execute_labtalk('legend.fsize = 20; legend.font$ = "Arial"; legend.background = 0;')
-    position_legend(safe_graph_name, legend_position)
+    place_legend_avoiding_data(safe_graph_name, safe_legend_position)
 
     return (
         f"Publication style applied to {safe_graph_name}: "
-        f"{data_index} data plots styled (pastel palette, 2.5 pt lines), "
+        f"{data_index} data plots styled (pastel palette, {_PUB_LINE_WIDTH_PT} pt lines), "
         f"Arial bold labels, inward ticks, closed frame, no grid, "
         f"borderless bold legend"
     )
@@ -363,7 +383,7 @@ def set_legend(
         set_legend_entries(safe_graph_name, entry_list)
 
     execute_labtalk("legend.background = 0;")
-    position_legend(safe_graph_name, safe_position)
+    place_legend_avoiding_data(safe_graph_name, safe_position)
 
     return f"Updated legend for {safe_graph_name}"
 

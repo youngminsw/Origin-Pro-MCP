@@ -3,6 +3,7 @@ from ..origin_connection import execute_labtalk, get_lt_var, get_origin
 
 # COM Column.Type designation codes (Origin 2020 type library)
 _COM_COLTYPE_Y_ERROR = 2
+_COM_COLTYPE_X = 3
 
 
 def get_plot_names(graph_name: str) -> list:
@@ -137,18 +138,112 @@ def position_legend(graph_name: str, position: str) -> None:
     _place_legend(safe_graph_name, safe_position)
 
 
-def reposition_legend_nearest_corner(graph_name: str) -> None:
-    """Re-anchor the legend at whichever corner it currently sits in.
 
-    Used after the legend is rebuilt (its box size changes), so a box
-    that grew past the frame is pulled back inside.
+def _collect_xy(graph_name: str):
+    """(x, y) points of every non-error data plot, for legend placement.
+
+    Returns two parallel lists. Points whose X is unknown are dropped.
+    Best-effort: silently skips plots whose source columns can't be read.
+    """
+    o = get_origin()
+    xs, ys = [], []
+    for info in get_plot_info(graph_name):
+        if info["is_error"]:
+            continue
+        parts = info["name"].rsplit("_", 1)
+        if len(parts) != 2:
+            continue
+        book, short = parts
+        pages = o.WorksheetPages
+        for i in range(pages.Count):
+            page = pages.Item(i)
+            if page.Name != book:
+                continue
+            for j in range(page.Layers.Count):
+                sheet = o.FindWorksheet(f"[{book}]{page.Layers.Item(j).Name}")
+                if sheet is None:
+                    continue
+                cols = sheet.Columns
+                y_idx = x_idx = None
+                for k in range(cols.Count):
+                    col = cols.Item(k)
+                    if col.Name == short:
+                        y_idx = k
+                    if col.Type == _COM_COLTYPE_X:
+                        x_idx = k
+                if y_idx is None:
+                    continue
+                data = o.GetWorksheet(f"[{book}]{sheet.Name}")
+                if not isinstance(data, (list, tuple)):
+                    continue
+                for row in data:
+                    try:
+                        y = float(row[y_idx])
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    try:
+                        x = float(row[x_idx]) if x_idx is not None else None
+                    except (TypeError, ValueError, IndexError):
+                        x = None
+                    xs.append(x)
+                    ys.append(y)
+    return xs, ys
+
+
+def _corner_rect(values: dict, corner: str, pad: float = 0.03):
+    """Data-coordinate rectangle the legend box occupies at a corner."""
+    x_range = values["x_to"] - values["x_from"]
+    y_range = values["y_to"] - values["y_from"]
+    box_w = pad * x_range + values["dx"]
+    box_h = pad * y_range + values["dy"]
+    if "left" in corner:
+        rx0, rx1 = values["x_from"], values["x_from"] + box_w
+    else:
+        rx0, rx1 = values["x_to"] - box_w, values["x_to"]
+    if "top" in corner:
+        ry0, ry1 = values["y_to"] - box_h, values["y_to"]
+    else:
+        ry0, ry1 = values["y_from"], values["y_from"] + box_h
+    return rx0, rx1, ry0, ry1
+
+
+def choose_legend_corner(graph_name: str, preferred: str | None = None) -> str:
+    """Pick the corner whose legend box overlaps the fewest data points.
+
+    Guarantees the legend never sits on the data when any corner is
+    clear. Ties prefer `preferred`, then top-right, top-left, bottom-right,
+    bottom-left. Falls back to `preferred` (or top-right) if geometry or
+    data can't be read.
+    """
+    fallback = preferred or "top-right"
+    values = _read_legend_geometry(graph_name)
+    if values is None:
+        return fallback
+    xs, ys = _collect_xy(graph_name)
+    points = [(x, y) for x, y in zip(xs, ys) if x is not None]
+    if not points:
+        return fallback
+    corners = ["top-right", "top-left", "bottom-right", "bottom-left"]
+    counts = {}
+    for corner in corners:
+        rx0, rx1, ry0, ry1 = _corner_rect(values, corner)
+        counts[corner] = sum(
+            1 for x, y in points if rx0 <= x <= rx1 and ry0 <= y <= ry1
+        )
+    fewest = min(counts.values())
+    order = ([preferred] if preferred else []) + corners
+    for corner in order:
+        if counts.get(corner) == fewest:
+            return corner
+    return fallback
+
+
+def place_legend_avoiding_data(graph_name: str, preferred: str | None = None) -> str:
+    """Place the legend at the emptiest corner so it never covers data.
+
+    Returns the corner used.
     """
     safe_graph_name = labtalk_name(graph_name, "graph_name")
-    values = _read_legend_geometry(safe_graph_name)
-    if values is None:
-        return
-    x_mid = (values["x_from"] + values["x_to"]) / 2
-    y_mid = (values["y_from"] + values["y_to"]) / 2
-    horizontal = "left" if values["cx"] <= x_mid else "right"
-    vertical = "top" if values["cy"] >= y_mid else "bottom"
-    _place_legend(safe_graph_name, f"{vertical}-{horizontal}")
+    corner = choose_legend_corner(safe_graph_name, preferred)
+    _place_legend(safe_graph_name, corner)
+    return corner

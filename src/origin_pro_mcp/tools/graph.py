@@ -17,21 +17,26 @@ from ..labtalk_safe import (
     windows_path,
 )
 
+# Plot type IDs verified against OriginLab's "Plot Type IDs" reference and
+# tested live on Origin Pro 2020. The earlier values for area/bar/box/
+# histogram/pie/contour/3d were wrong (off-by-template), producing empty
+# or mis-typed graphs.
 PLOT_TYPES = {
     "scatter": 201,
     "line": 200,
     "line+symbol": 202,
     "column": 203,
-    "bar": 204,
-    "area": 205,
-    "histogram": 206,
-    "box": 207,
-    "contour": 208,
-    "3d_scatter": 209,
-    "3d_surface": 210,
-    "pie": 212,
-    "bubble": 228,
+    "bar": 215,          # horizontal bar (204 is Area)
+    "area": 204,
+    "pie": 225,
+    "histogram": 219,    # Y range
+    "contour": 243,      # XYZ range
 }
+
+# Take a single Y column instead of an X,Y pair.
+_Y_ONLY_TYPES = {"histogram"}
+# Need X, Y, Z columns and are drawn with plotxyz.
+_XYZ_TYPES = {"contour"}
 
 # Clipboard-based export (CopyPage) only produces raster images
 EXPORT_IMAGE_FORMATS = {"png", "jpg", "tif", "bmp"}
@@ -109,6 +114,7 @@ def create_graph(
     y_col: int,
     plot_type: str = "scatter",
     y_error_col: int = 0,
+    z_col: int = 0,
     title: str = ""
 ) -> str:
     """Create a graph from worksheet data.
@@ -117,11 +123,12 @@ def create_graph(
         graph_name: Name for the graph window
         data_book: Source workbook name
         data_sheet: Source sheet name
-        x_col: X column number (1-based)
+        x_col: X column number (1-based). Ignored for box/histogram.
         y_col: Y column number (1-based)
-        plot_type: scatter, line, line+symbol, column, bar, area, histogram,
-                   box, contour, pie, bubble
-        y_error_col: Optional Y error column number (1-based, 0=none)
+        plot_type: scatter, line, line+symbol, column, bar, area, pie,
+                   box, histogram, contour, 3d_scatter
+        y_error_col: Optional Y error column (1-based, 0=none). XY plots only.
+        z_col: Z column (1-based). REQUIRED for contour and 3d_scatter.
         title: Optional graph title
 
     Returns:
@@ -137,27 +144,54 @@ def create_graph(
     ptype = PLOT_TYPES[safe_plot_type]
     require_worksheet(safe_book, safe_sheet)
 
-    data_ref = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col})"
-    if y_error_col > 0:
-        safe_error_col = positive_column(y_error_col, "y_error_col")
-        _designate_error_column(safe_book, safe_sheet, safe_error_col)
-        data_ref = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col},{safe_error_col})"
+    def _set_title():
+        if title:
+            execute_labtalk(
+                f"label -n title -s {labtalk_string(title, 'title')}; "
+                "title.x = 50; title.y = 95;"
+            )
+
+    # --- XYZ plots: contour (drawn with plotxyz) ---
+    if safe_plot_type in _XYZ_TYPES:
+        if z_col < 1:
+            msg = f"plot_type '{safe_plot_type}' requires z_col (1-based Z column)."
+            raise ValueError(msg)
+        safe_z_col = positive_column(z_col, "z_col")
+        xyz = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col},{safe_z_col})"
+        name = o.CreatePage(3, safe_graph_name, "origin")
+        if not execute_labtalk(f"plotxyz iz:={xyz} plot:={ptype} ogl:=[{name}]Layer1;"):
+            execute_labtalk(f"win -cd {name};")
+            msg = (
+                f"Could not plot {xyz}. Check that columns "
+                f"{safe_x_col}, {safe_y_col}, {safe_z_col} contain data."
+            )
+            raise ValueError(msg)
+        _set_title()
+        return f"Created graph: {name} ({safe_plot_type})"
+
+    # --- 2D plots (plotxy) ---
+    if safe_plot_type in _Y_ONLY_TYPES:
+        data_ref = f"[{safe_book}]{safe_sheet}!col({safe_y_col})"
+    else:
+        data_ref = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col})"
+        if y_error_col > 0:
+            safe_error_col = positive_column(y_error_col, "y_error_col")
+            _designate_error_column(safe_book, safe_sheet, safe_error_col)
+            data_ref = (
+                f"[{safe_book}]{safe_sheet}!"
+                f"({safe_x_col},{safe_y_col},{safe_error_col})"
+            )
 
     name = o.CreatePage(3, safe_graph_name, "origin")
-
     if not execute_labtalk(f"plotxy iy:={data_ref} plot:={ptype} ogl:=[{name}]Layer1;"):
-        # Remove the empty graph page we just created
         execute_labtalk(f"win -cd {name};")
         msg = (
-            f"Could not plot {data_ref}. Check that columns "
-            f"{safe_x_col} and {safe_y_col} exist and contain data, and that "
-            f"plot_type '{safe_plot_type}' suits this data."
+            f"Could not plot {data_ref}. Check that columns exist and contain "
+            f"data, and that plot_type '{safe_plot_type}' suits this data."
         )
         raise ValueError(msg)
 
-    if title:
-        execute_labtalk(f"label -n title -s {labtalk_string(title, 'title')}; title.x = 50; title.y = 95;")
-
+    _set_title()
     return f"Created graph: {name} ({safe_plot_type})"
 
 @mcp.tool()
@@ -190,6 +224,12 @@ def add_plot_to_graph(
     safe_x_col = positive_column(x_col, "x_col")
     safe_y_col = positive_column(y_col, "y_col")
     safe_plot_type = labtalk_choice(plot_type, PLOT_TYPES, "plot_type")
+    if safe_plot_type in _Y_ONLY_TYPES or safe_plot_type in _XYZ_TYPES:
+        msg = (
+            f"add_plot_to_graph supports only X,Y plot types; "
+            f"'{safe_plot_type}' must be created with create_graph."
+        )
+        raise ValueError(msg)
     ptype = PLOT_TYPES[safe_plot_type]
     require_graph(safe_graph_name)
     require_worksheet(safe_book, safe_sheet)

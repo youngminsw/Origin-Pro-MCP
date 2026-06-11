@@ -27,6 +27,7 @@ dependencies = [
 
 [project.scripts]
 origin-pro-mcp = "origin_pro_mcp.app:main"
+origin-pro-cli = "origin_pro_mcp.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/youngminsw/Origin-Pro-MCP"
