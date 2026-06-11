@@ -101,3 +101,26 @@ def test_create_graph_box_designates_y(fake_origin):
     create_graph("G", "Book1", "Sheet1", 1, 2, plot_type="box")
     assert any("wks.col2.type = 1" in s for s in fake_origin.executed)
     assert any("plot:=206" in s for s in fake_origin.executed)
+
+
+def test_add_arrow_sets_arrowhead(fake_origin):
+    from origin_pro_mcp.tools.graph import add_arrow
+
+    msg = add_arrow("Graph1", 1, 2, 3, 4)
+    assert "single-headed" in msg
+    assert any(".arrowEndShape = 1" in s for s in fake_origin.executed)
+    assert not any("arrowBeginShape" in s for s in fake_origin.executed)
+
+
+def test_add_arrow_double_headed(fake_origin):
+    from origin_pro_mcp.tools.graph import add_arrow
+
+    add_arrow("Graph1", 1, 2, 3, 4, double_headed=True)
+    assert any("arrowBeginShape = 1" in s for s in fake_origin.executed)
+
+
+def test_add_arrow_unknown_graph(fake_origin):
+    from origin_pro_mcp.tools.graph import add_arrow
+
+    with pytest.raises(ValueError, match="not found"):
+        add_arrow("Ghost", 1, 2, 3, 4)

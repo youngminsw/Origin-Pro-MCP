@@ -54,8 +54,9 @@ If unspecified, choose a conservative manuscript default: line+symbol for ordere
   column, bar, area, pie, histogram (single Y), box (single Y),
   contour and 3d_scatter (need `z_col`). Matrix plots — 3D surface,
   contour, heatmap, image — use `create_matrix_plot`. Colormapped plots
-  take `apply_color_map`/`set_colormap_levels`. Arrowheads and graph
-  templates have no reliable Origin-2020 script path; do those in the GUI.
+  take `apply_color_map`/`set_colormap_levels`. Annotate with
+  `add_text_annotation`, `add_line`, and `add_arrow`; save reusable
+  layouts with `save_graph_template`.
 
 ## Standard Workflow
 

@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 
 from ..app import mcp
 from ..origin_connection import (
@@ -653,9 +654,8 @@ def add_line(
 ) -> str:
     """Draw a straight line between two data points on a graph.
 
-    Useful for guides, connectors, and trend indicators. (Arrowheads are
-    not reliably scriptable on Origin 2020 — add them in the GUI's Object
-    Properties > Line/Arrow tab if needed.)
+    Useful for guides, connectors, and trend indicators. For a line with
+    an arrowhead, use add_arrow instead.
 
     Args:
         graph_name: Graph name
@@ -674,3 +674,53 @@ def add_line(
         msg = f"Could not draw a line on {safe_graph}."
         raise ValueError(msg)
     return f"Drew line ({x1},{y1})->({x2},{y2}) on {safe_graph}"
+
+
+@mcp.tool()
+def add_arrow(
+    graph_name: str,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    double_headed: bool = False,
+    head_size: int = 10
+) -> str:
+    """Draw an arrow from (x1,y1) to (x2,y2) at data coordinates.
+
+    The arrowhead sits at the (x2,y2) end (and at the start too when
+    double_headed). Set double_headed=False for a single-ended arrow.
+
+    Args:
+        graph_name: Graph name
+        x1, y1: Tail (start) point in data coordinates
+        x2, y2: Head (end) point in data coordinates
+        double_headed: Put an arrowhead on both ends
+        head_size: Arrowhead size in points (default 10)
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_size = positive_int(head_size, "head_size")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    execute_labtalk("layer1;")
+    name = "arr" + uuid.uuid4().hex[:8]
+    coords = f"{{{float(x1)},{float(y1)},{float(x2)},{float(y2)}}}"
+    if not execute_labtalk(f"draw -n {name} -l {coords};"):
+        msg = f"Could not draw an arrow on {safe_graph}."
+        raise ValueError(msg)
+    width = max(safe_size * 2 // 3, 3)
+    script = (
+        f"{name}.arrowEndShape = 1; "
+        f"{name}.arrowEndLength = {safe_size}; {name}.arrowEndWidth = {width};"
+    )
+    if double_headed:
+        script += (
+            f" {name}.arrowBeginShape = 1; "
+            f"{name}.arrowBeginLength = {safe_size}; {name}.arrowBeginWidth = {width};"
+        )
+    execute_labtalk(script)
+    ends = "double-headed" if double_headed else "single-headed"
+    return f"Drew {ends} arrow ({x1},{y1})->({x2},{y2}) on {safe_graph}"

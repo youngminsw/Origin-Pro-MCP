@@ -1,8 +1,14 @@
 import os
 
 from ..app import mcp
-from ..origin_connection import get_origin, graph_names
-from ..labtalk_safe import labtalk_choice, windows_path
+from ..origin_connection import (
+    activate_window,
+    execute_labtalk,
+    get_origin,
+    graph_names,
+    require_graph,
+)
+from ..labtalk_safe import labtalk_choice, labtalk_name, windows_path
 from .graph import EXPORT_IMAGE_FORMATS, export_graph_to_file
 
 PROJECT_EXTENSIONS = {".opj", ".opju"}
@@ -118,3 +124,41 @@ def export_all_graphs(
         lines.append("Failed:")
         lines.extend(f"  {f}" for f in failed)
     return "\n".join(lines)
+
+
+@mcp.tool()
+def save_graph_template(
+    graph_name: str,
+    file_path: str,
+    old_format: bool = False
+) -> str:
+    """Save a graph as a reusable Origin template (.otpu/.otp).
+
+    Args:
+        graph_name: Graph to save as a template
+        file_path: Output path (Windows or WSL style). The extension is
+                   forced to .otpu (or .otp when old_format=True).
+        old_format: Save the legacy .otp format (loadable in Origin 2017
+                    and earlier) instead of the modern .otpu
+
+    Returns:
+        Path to the saved template
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    path = windows_path(file_path, "file_path")
+    ext = ".otp" if old_format else ".otpu"
+    root = os.path.splitext(path)[0]
+    path = root + ext
+    out_dir = os.path.dirname(path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    flag = "-tj" if old_format else "-t"
+    if not execute_labtalk(f'save {flag} {safe_graph} "{path}";'):
+        msg = f"Origin could not save the template for {safe_graph}."
+        raise ValueError(msg)
+    if not os.path.exists(path):
+        msg = f"Template save reported success but {path} was not created."
+        raise ValueError(msg)
+    return f"Saved template: {path} ({os.path.getsize(path)} bytes)"

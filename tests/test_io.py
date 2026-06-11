@@ -40,3 +40,23 @@ def test_export_graph_sized_unknown_graph(fake_origin, tmp_path):
 
     with pytest.raises(ValueError, match="not found"):
         export_graph_sized("Ghost", str(tmp_path / "g.png"))
+
+
+def test_save_graph_template_unknown_graph(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.project import save_graph_template
+
+    with pytest.raises(ValueError, match="not found"):
+        save_graph_template("Ghost", str(tmp_path / "t.otpu"))
+
+
+def test_save_graph_template_forces_extension(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.project import save_graph_template
+
+    # FakeOrigin doesn't write the file, so it raises after the save attempt;
+    # assert the executed command used the .otpu extension and save -t.
+    with pytest.raises(ValueError, match="was not created"):
+        save_graph_template("Graph1", str(tmp_path / "mytmpl.png"))
+    assert any(
+        s.startswith("save -t Graph1") and "mytmpl.otpu" in s
+        for s in fake_origin.executed
+    )

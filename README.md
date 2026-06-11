@@ -190,12 +190,13 @@ cd src && /mnt/c/.../python.exe -m origin_pro_mcp.cli list_worksheets
 The CLI reflects over the same tool registry as the MCP server, so it
 always exposes exactly the tools listed below.
 
-## Available Tools (54 total)
+## Available Tools (56 total)
 
 ### Project Management
 | Tool | Description |
 |------|-------------|
 | `new_project` | Create new empty Origin project |
+| `save_graph_template` | Save a graph as a reusable .otpu/.otp template |
 | `save_project` | Save project to .opju file |
 | `load_project` | Open existing .opj/.opju file |
 
@@ -235,6 +236,7 @@ always exposes exactly the tools listed below.
 | `set_axis_scale` | Linear / log10 / ln / log2 scale |
 | `add_reference_line` | Horizontal/vertical line at a value |
 | `add_line` | Straight line between two data points |
+| `add_arrow` | Single/double-headed arrow between two points |
 | `apply_color_map` | Apply a palette (Fire, Rainbow, …) to a colormapped graph |
 | `set_colormap_levels` | Set the Z color-scale range |
 | `add_text_annotation` | Place a text label at data coordinates |
@@ -373,8 +375,7 @@ Copy `skills/publication-figure.md` to your project and edit freely — it's mea
 | `3d_scatter` | 3D scatter (OpenGL) | X, Y, Z (pass `z_col`) |
 
 > Matrix plots (surface, contour, heatmap, image) come from a matrix via
-> `create_matrix_plot`. Arrowheads and graph-template save/apply have no
-> reliable script path on Origin 2020 — add those in the Origin GUI.
+> `create_matrix_plot`.
 
 ## Supported Fitting Functions
 
