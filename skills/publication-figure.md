@@ -188,6 +188,58 @@ export_graph(graph_name="Fig1", file_path="C:\\Users\\name\\figures\\fig1.png")
 
 After export, inspect whether labels are readable, legends avoid data, axis ranges are appropriate, and error bars are visible.
 
+## Extended Toolkit (beyond 2D line plots)
+
+The server exposes 56 tools. Reach for these when a figure needs more
+than a styled XY plot.
+
+### Surfaces, contours, heatmaps
+
+3D / colormapped figures are built from a **matrix**. Grid scattered XYZ
+first, then plot:
+
+```text
+worksheet_to_matrix(data_book="D", data_sheet="Sheet1", x_col=1, y_col=2, z_col=3)
+create_matrix_plot(matrix_book="Matrix", plot_type="surface")   # or contour, heatmap, image
+apply_color_map(graph_name="Graph1", palette="Fire")            # Fire, Rainbow, GrayScale, Maple, ...
+set_colormap_levels(graph_name="Graph1", z_min=0, z_max=1)
+```
+
+For a quick 2D contour or a 3D scatter straight from XYZ columns, use
+`create_graph(..., plot_type="contour", z_col=N)` or `plot_type="3d_scatter"`.
+
+### Statistical / distribution figures
+
+- `create_graph(..., plot_type="box")` and `plot_type="histogram"` (single Y column).
+- `column_statistics`, `compare_means` (two-sample t-test), `frequency_count`
+  return JSON — put the numbers in the caption, don't just draw bars.
+
+### Signal / spectra workflows
+
+`smooth`, `differentiate`, `integrate`, `interpolate`, `fft`, `find_peaks`
+write result columns or return JSON. Typical Raman/XRD flow: smooth →
+find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
+
+### Multi-panel and axis control
+
+- `set_axis_scale(graph, axis, "log10")` for decades-spanning data.
+- `add_second_y_axis` / `add_layer` for dual-axis or stacked panels.
+- `add_reference_line` (threshold/baseline), `add_line`, `add_arrow` (callouts),
+  `add_text_annotation` (labels at data coordinates).
+
+### Worksheet prep and IO
+
+`set_column_formula`, `sort_worksheet`, `set_column_properties` (units/long
+name), `add_columns`/`delete_columns`, `transpose_worksheet`, `import_excel`,
+`export_worksheet`.
+
+### Reuse and sized export
+
+- `save_graph_template(graph, path)` captures a finished layout as `.otpu`
+  to reuse across figures.
+- `export_graph_sized(graph, path, width=1600)` exports at an exact pixel
+  width (vs. `export_graph`, which follows the Origin page size).
+
 ## Origin COM Notes
 
 These COM behaviors were observed while testing on Origin Pro 2020. Other Origin versions may behave differently until verified:
@@ -198,7 +250,10 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | `%C` plot shortcuts can fail through COM | Use plot names from `FindGraphLayer().DataPlots`; MCP style tools do this |
 | Legend text is awkward through COM | Set worksheet Long Names, rebuild with `legend -r`, then position |
 | Legend coordinates use data units | Set axis range before final legend placement; MCP tools keep the legend box inside the frame automatically |
-| `expGraph` may not write files reliably | Use `export_graph`, which copies the rendered page and saves via Pillow |
+| `expGraph` needs a directory `path:=` + `filename:=` and `overwrite:=replace` (a full file path or missing args opens a dialog) | `export_graph` (clipboard, page size) and `export_graph_sized` (expGraph, `tr1.unit:=2 tr1.width:=` pixels) both handle this correctly |
+| Graphic-object arrowheads use `arrowEndShape`/`arrowBeginShape` (1=filled, 2=chevron), not `arrowEnd`/`arrowEndType` | `add_arrow` draws the line and sets `arrowEndShape`; the begin/end length/width are `arrowEndLength`/`arrowEndWidth` |
+| Save a graph template with `save -t <window> <fullpath.otpu>` (or `-tj` for `.otp`) — both window and full path+extension are required or a dialog opens | `save_graph_template` supplies both, so it never opens a dialog |
+| Colormap palettes load via `layer.cmap.load(<name>.pal); layer.cmap.updateScale()` (the `()` matters) | `apply_color_map` / `set_colormap_levels` wrap this |
 | Fit statistics can reset after `nlend` | Read statistics before ending the nonlinear fit session |
 | Error-bar plots appear as separate entries in `DataPlots` | MCP styling tools detect them via the column's Y-Error designation and only color-match them — symbol/line commands would redraw error bars as connected lines |
 | Error-bar `set -erw`/`-erwc` use POINTS, unlike the data line's `-w` (~200 units/pt) | Set `-erw` (error-bar line width) and `-erwc` (cap/whisker width) in points. Passing a `-w`-scale value (e.g. 550) into `-erw` makes bars explode — that was a units mistake, not an Origin bug. MCP tools set `-erw` in points and scale `-erwc` to the symbol size |
