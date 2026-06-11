@@ -14,6 +14,9 @@ from ..origin_connection import (
 from ..labtalk_safe import (
     labtalk_choice,
     labtalk_name,
+    labtalk_formula,
+    positive_column,
+    positive_int,
     labtalk_path,
     labtalk_string,
     windows_path,
@@ -202,3 +205,196 @@ def list_worksheets() -> str:
     return json.dumps(
         {"workbooks": workbooks, "graphs": graph_names(), "matrices": matrix_names()}
     )
+
+
+# LabTalk column designation codes for set_column_properties.
+_DESIGNATIONS = {"none": 0, "x": 4, "y": 1, "z": 6, "yerr": 3, "xerr": 5, "label": 5}
+
+
+@mcp.tool()
+def set_column_formula(book_name: str, sheet_name: str, col: int, formula: str) -> str:
+    """Fill a worksheet column from a formula of other columns.
+
+    Args:
+        book_name: Workbook name
+        sheet_name: Sheet name
+        col: Target column (1-based); created if it does not exist
+        formula: LabTalk expression, e.g. "col(1)^2", "col(2)*100/col(3)"
+
+    Returns:
+        Success message
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_col = positive_column(col, "col")
+    safe_formula = labtalk_formula(formula, "formula")
+    require_worksheet(safe_book, safe_sheet)
+    activate_window(safe_book, "book_name")
+    execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
+    # Grow the sheet if the target column does not exist yet.
+    while get_origin().LTVar("wks.ncols") < safe_col:
+        execute_labtalk("wks.addCol();")
+    if not execute_labtalk(f"col({safe_col}) = {safe_formula};"):
+        msg = f"Origin could not evaluate formula '{safe_formula}' into column {safe_col}."
+        raise ValueError(msg)
+    return f"Set column {safe_col} of [{safe_book}]{safe_sheet} = {safe_formula}"
+
+
+@mcp.tool()
+def sort_worksheet(book_name: str, sheet_name: str, col: int, descending: bool = False) -> str:
+    """Sort all rows of a worksheet by one column.
+
+    Args:
+        book_name: Workbook name
+        sheet_name: Sheet name
+        col: Column to sort by (1-based)
+        descending: Sort high-to-low when True
+
+    Returns:
+        Success message
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_col = positive_column(col, "col")
+    require_worksheet(safe_book, safe_sheet)
+    activate_window(safe_book, "book_name")
+    execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
+    order = 1 if descending else 0
+    if not execute_labtalk(f"wsort bycol:={safe_col} descending:={order};"):
+        msg = f"Origin could not sort [{safe_book}]{safe_sheet} by column {safe_col}."
+        raise ValueError(msg)
+    direction = "descending" if descending else "ascending"
+    return f"Sorted [{safe_book}]{safe_sheet} by column {safe_col} ({direction})"
+
+
+@mcp.tool()
+def add_columns(book_name: str, sheet_name: str, count: int = 1) -> str:
+    """Append empty columns to a worksheet.
+
+    Args:
+        book_name: Workbook name
+        sheet_name: Sheet name
+        count: Number of columns to add (default 1)
+
+    Returns:
+        Success message
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_count = positive_int(count, "count")
+    require_worksheet(safe_book, safe_sheet)
+    activate_window(safe_book, "book_name")
+    execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
+    for _ in range(safe_count):
+        execute_labtalk("wks.addCol();")
+    return f"Added {safe_count} column(s) to [{safe_book}]{safe_sheet}"
+
+
+@mcp.tool()
+def delete_columns(book_name: str, sheet_name: str, col: int, count: int = 1) -> str:
+    """Delete one or more columns starting at a position.
+
+    Args:
+        book_name: Workbook name
+        sheet_name: Sheet name
+        col: First column to delete (1-based)
+        count: How many consecutive columns to delete (default 1)
+
+    Returns:
+        Success message
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_col = positive_column(col, "col")
+    safe_count = positive_int(count, "count")
+    require_worksheet(safe_book, safe_sheet)
+    activate_window(safe_book, "book_name")
+    execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
+    o = get_origin()
+    deleted = 0
+    for _ in range(safe_count):
+        if o.LTVar("wks.ncols") < safe_col:
+            break
+        # After deleting col(N), the next column shifts down into slot N.
+        execute_labtalk(f"delete col({safe_col});")
+        deleted += 1
+    return f"Deleted {deleted} column(s) from [{safe_book}]{safe_sheet}"
+
+
+@mcp.tool()
+def set_column_properties(
+    book_name: str,
+    sheet_name: str,
+    col: int,
+    long_name: str = "",
+    units: str = "",
+    comment: str = "",
+    designation: str = ""
+) -> str:
+    """Set a column's long name, units, comment, and/or designation.
+
+    Args:
+        book_name: Workbook name
+        sheet_name: Sheet name
+        col: Column (1-based)
+        long_name: Long name (label row)
+        units: Units (label row)
+        comment: Comment (label row)
+        designation: One of none, x, y, z, yerr, xerr, label (blank = leave)
+
+    Returns:
+        Success message
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_col = positive_column(col, "col")
+    require_worksheet(safe_book, safe_sheet)
+    activate_window(safe_book, "book_name")
+    execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
+    changed = []
+    if long_name:
+        execute_labtalk(f'wks.col{safe_col}.lname$ = {labtalk_string(long_name, "long_name")};')
+        changed.append("long_name")
+    if units:
+        execute_labtalk(f'wks.col{safe_col}.unit$ = {labtalk_string(units, "units")};')
+        changed.append("units")
+    if comment:
+        execute_labtalk(f'wks.col{safe_col}.comment$ = {labtalk_string(comment, "comment")};')
+        changed.append("comment")
+    if designation:
+        safe_des = labtalk_choice(designation.lower(), _DESIGNATIONS, "designation")
+        execute_labtalk(f"wks.col{safe_col}.type = {_DESIGNATIONS[safe_des]};")
+        changed.append("designation")
+    if not changed:
+        msg = "Provide at least one of long_name, units, comment, or designation."
+        raise ValueError(msg)
+    return f"Updated column {safe_col} of [{safe_book}]{safe_sheet}: {', '.join(changed)}"
+
+
+@mcp.tool()
+def transpose_worksheet(book_name: str, sheet_name: str, output_book: str = "") -> str:
+    """Transpose a worksheet (rows become columns).
+
+    Args:
+        book_name: Source workbook name
+        sheet_name: Source sheet name
+        output_book: Optional new workbook name for the result; if empty,
+                     the source sheet is transposed in place
+
+    Returns:
+        Success message
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    src = require_worksheet(safe_book, safe_sheet)
+    if output_book:
+        safe_out = labtalk_name(output_book, "output_book")
+        name = get_origin().CreatePage(2, safe_out, "origin")
+        dest = f"[{name}]Sheet1"
+    else:
+        dest = src
+        name = safe_book
+    if not execute_labtalk(f"wtranspose iw:={src}! ow:={dest}!;"):
+        msg = f"Origin could not transpose {src}."
+        raise ValueError(msg)
+    return f"Transposed {src} into [{name}]{'Sheet1' if output_book else safe_sheet}"

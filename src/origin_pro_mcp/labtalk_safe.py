@@ -35,6 +35,21 @@ def labtalk_string(value: str, field: str) -> str:
     return f'"{value}"'
 
 
+def labtalk_formula(value: str, field: str) -> str:
+    """Validate a column-formula expression (e.g. 'col(1)^2 + col(2)').
+
+    Blocks statement separators and quotes so the expression cannot break
+    out of `col(N) = <expr>;`.
+    """
+    if any(char in value for char in _STRING_BLOCKLIST) or ";" in value:
+        msg = f"{field} cannot contain quotes, line breaks, or ';'."
+        raise ValueError(msg)
+    if not value.strip():
+        msg = f"{field} cannot be empty."
+        raise ValueError(msg)
+    return value
+
+
 def labtalk_variable(value: str, field: str) -> str:
     if not _VARIABLE_RE.fullmatch(value):
         msg = f"{field} must be a LabTalk variable name."
