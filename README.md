@@ -4,11 +4,14 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 
 ## What Can It Do?
 
-- **Worksheet Management** — Create workbooks, read/write data, import CSV files
+- **Worksheet Management** — Create workbooks, read/write data, import CSV/Excel, export CSV, column formulas, sort, transpose
+- **Matrices & 3D** — Matrix books, XYZ gridding, 3D surface/scatter, contour, heatmap, image plots
 - **Graph Creation** — Scatter, line, line+symbol, column, bar, area, pie, histogram, contour plots
+- **Graph Layers & Axes** — Log scales, dual Y axis, panels, reference lines, text annotations
 - **Plot Styling** — Colors, symbols, line width, publication-ready formatting in one call
-- **Curve Fitting** — Linear, polynomial, exponential, Gaussian, Lorentz, Voigt, and more
-- **Project Management** — New/save/load projects, export all graphs
+- **Analysis** — Curve fitting, FFT, smoothing, integration, differentiation, interpolation, peak finding
+- **Statistics** — Descriptive stats, two-sample t-test, frequency counts
+- **Project Management** — New/save/load projects, export all graphs (with pixel-size control)
 - **LabTalk Scripting** — Direct LabTalk execution with destructive/file-overwrite commands blocked
 
 This MCP server is intentionally **Windows-runtime-only**. The AI agent or MCP client can run from Windows or WSL, but the MCP server process that talks to Origin must be launched with Windows Python and `pywin32`. WSL/Linux can edit the project and run non-COM unit tests, but cannot directly control Origin COM.
@@ -187,7 +190,7 @@ cd src && /mnt/c/.../python.exe -m origin_pro_mcp.cli list_worksheets
 The CLI reflects over the same tool registry as the MCP server, so it
 always exposes exactly the tools listed below.
 
-## Available Tools (23 total)
+## Available Tools (51 total)
 
 ### Project Management
 | Tool | Description |
@@ -196,28 +199,48 @@ always exposes exactly the tools listed below.
 | `save_project` | Save project to .opju file |
 | `load_project` | Open existing .opj/.opju file |
 
-### Data
+### Worksheet Data
 | Tool | Description |
 |------|-------------|
 | `create_worksheet` | Create new workbook |
 | `set_worksheet_data` | Write column data (JSON arrays) |
 | `get_worksheet_data` | Read worksheet data as JSON |
 | `import_csv_to_worksheet` | Import CSV/text file |
-| `list_worksheets` | List open workbooks (with sheets) and graphs |
+| `import_excel` | Import an .xls/.xlsx file |
+| `export_worksheet` | Export a worksheet to CSV/text |
+| `list_worksheets` | List open workbooks, graphs, and matrices |
+| `set_column_formula` | Fill a column from a formula of other columns |
+| `set_column_properties` | Set long name, units, comment, designation |
+| `sort_worksheet` | Sort rows by a column (asc/desc) |
+| `add_columns` / `delete_columns` | Add or remove columns |
+| `transpose_worksheet` | Transpose rows and columns |
+
+### Matrix
+| Tool | Description |
+|------|-------------|
+| `create_matrix` | Create a matrix book |
+| `set_matrix_data` / `get_matrix_data` | Write / read a 2D grid |
+| `worksheet_to_matrix` | Grid scattered XYZ into a matrix (xyz2mat) |
+| `create_matrix_plot` | Surface (3D), contour, heatmap, or image from a matrix |
 
 ### Graphing
 | Tool | Description |
 |------|-------------|
-| `create_graph` | Create graph (scatter, line, line+symbol, bar, etc.) |
-| `add_plot_to_graph` | Add another dataset to existing graph |
+| `create_graph` | Create graph (scatter, line, line+symbol, column, bar, area, pie, histogram, contour, 3d_scatter) |
+| `add_plot_to_graph` | Add another dataset to an existing graph |
+| `add_second_y_axis` | Add a right-Y layer and plot on it |
+| `add_layer` | Add a panel/axis layer (right-y, top-x, inset) |
 | `set_axis_labels` | Set X/Y axis labels and title |
 | `set_axis_range` | Set axis min/max values |
-| `export_graph` | Export graph to PNG/JPG/TIF/BMP image |
+| `set_axis_scale` | Linear / log10 / ln / log2 scale |
+| `add_reference_line` | Horizontal/vertical line at a value |
+| `add_text_annotation` | Place a text label at data coordinates |
+| `export_graph` | Export via clipboard (page size) |
+| `export_graph_sized` | Export at a chosen pixel width/height |
 | `export_all_graphs` | Export every graph in the project |
 
-> Export uses Origin's clipboard copy (the only export route that works
-> over COM), so the Windows clipboard contents are replaced during export
-> and the image size follows the Origin page setup.
+> `export_graph` uses Origin's clipboard copy (size follows the page
+> setup). `export_graph_sized` uses `expGraph` for direct pixel control.
 
 ### Styling
 | Tool | Description |
@@ -231,8 +254,21 @@ always exposes exactly the tools listed below.
 ### Analysis
 | Tool | Description |
 |------|-------------|
-| `curve_fit` | Curve fitting: parameters ± std errors, R², SSR, reduced χ²; optional `plot_on_graph` draws the fit curve on a graph |
+| `curve_fit` | Curve fitting: parameters ± std errors, R², SSR, reduced χ²; optional `plot_on_graph` |
 | `list_fitting_functions` | Show available fit functions |
+| `integrate` | Area under the curve |
+| `differentiate` | Derivative dY/dX into a new column |
+| `smooth` | Savitzky-Golay / adjacent / binomial smoothing |
+| `interpolate` | Resample onto evenly spaced X (linear/spline/bspline/akima) |
+| `fft` | Forward FFT + dominant frequency |
+| `find_peaks` | Peak positions and heights |
+
+### Statistics
+| Tool | Description |
+|------|-------------|
+| `column_statistics` | mean, sd, se, variance, median, min, max, sum, n |
+| `compare_means` | Two-sample t-test (t, df, p, means) |
+| `frequency_count` | Binned histogram counts |
 
 ### Advanced
 | Tool | Description |

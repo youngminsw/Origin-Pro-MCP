@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 
@@ -6,6 +7,7 @@ from ..origin_connection import (
     activate_window,
     execute_labtalk,
     get_origin,
+    get_lt_str,
     graph_names,
     matrix_names,
     require_worksheet,
@@ -398,3 +400,95 @@ def transpose_worksheet(book_name: str, sheet_name: str, output_book: str = "") 
         msg = f"Origin could not transpose {src}."
         raise ValueError(msg)
     return f"Transposed {src} into [{name}]{'Sheet1' if output_book else safe_sheet}"
+
+
+_EXPORT_DELIMITERS = {",": ",", "tab": "\t", "\t": "\t", ";": ";", "|": "|", " ": " "}
+
+
+@mcp.tool()
+def export_worksheet(
+    book_name: str,
+    sheet_name: str,
+    file_path: str,
+    delimiter: str = ","
+) -> str:
+    """Export a worksheet to a CSV/text file (with column headers).
+
+    Args:
+        book_name: Workbook name
+        sheet_name: Sheet name
+        file_path: Output path (Windows or WSL style)
+        delimiter: ",", "tab", ";", "|", or " "
+
+    Returns:
+        Path and row/column counts written
+    """
+    safe_book = labtalk_name(book_name, "book_name")
+    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    target = require_worksheet(safe_book, safe_sheet)
+    sep = _EXPORT_DELIMITERS.get(delimiter)
+    if sep is None:
+        msg = "delimiter must be one of: ',', 'tab', ';', '|', ' '."
+        raise ValueError(msg)
+    path = windows_path(file_path, "file_path")
+    o = get_origin()
+    data = o.GetWorksheet(target)
+    if not isinstance(data, (list, tuple)):
+        msg = f"Could not read {target}."
+        raise ValueError(msg)
+    # Header from column long names (fall back to col index).
+    activate_window(safe_book, "book_name")
+    execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
+    ncols = int(o.LTVar("wks.ncols"))
+    header = []
+    for i in range(1, ncols + 1):
+        lname = get_lt_str(f"wks.col{i}.lname$")
+        header.append(lname or f"Col{i}")
+    out_dir = os.path.dirname(path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    def _cell(v):
+        if isinstance(v, (int, float)) and abs(v) >= 1e100:
+            return ""  # Origin missing-value sentinel
+        return v
+
+    rows_written = 0
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh, delimiter=sep)
+        if header:
+            writer.writerow(header)
+        for row in data:
+            writer.writerow([_cell(v) for v in row])
+            rows_written += 1
+    if not os.path.exists(path):
+        msg = f"Export failed: {path} was not created."
+        raise ValueError(msg)
+    return f"Exported {target} ({rows_written} rows x {ncols} cols) to {path}"
+
+
+@mcp.tool()
+def import_excel(file_path: str, book_name: str = "") -> str:
+    """Import an Excel (.xls/.xlsx) file into a new workbook.
+
+    Args:
+        file_path: Path to the Excel file (Windows or WSL style)
+        book_name: Optional name for the resulting workbook
+
+    Returns:
+        Name of the workbook the data was imported into
+    """
+    o = get_origin()
+    path = windows_path(file_path, "file_path")
+    if not os.path.isfile(path):
+        msg = f"File not found: {path}"
+        raise ValueError(msg)
+    if not execute_labtalk(f"impExcel fname:={labtalk_path(path, 'file_path')};"):
+        msg = f"Origin could not import the Excel file: {path}"
+        raise ValueError(msg)
+    active = o.LTStr("page.name$")
+    if book_name:
+        safe_book = labtalk_name(book_name, "book_name")
+        if active != safe_book and execute_labtalk(f"win -r {active} {safe_book};"):
+            active = safe_book
+    return f"Imported {os.path.basename(path)} into workbook: {active}"

@@ -15,6 +15,7 @@ from ..labtalk_safe import (
     labtalk_name,
     labtalk_string,
     positive_column,
+    positive_int,
     windows_path,
 )
 
@@ -533,3 +534,54 @@ def add_text_annotation(
         msg = f"Could not add the annotation to {safe_graph}."
         raise ValueError(msg)
     return f"Added annotation '{text}' at ({x}, {y}) on {safe_graph}"
+
+
+@mcp.tool()
+def export_graph_sized(
+    graph_name: str,
+    file_path: str,
+    width: int = 1200,
+    height: int = 0,
+    format: str = "png"
+) -> str:
+    """Export a graph to an image at a chosen pixel size (expGraph).
+
+    Unlike export_graph (clipboard, page-size only), this controls the
+    output pixel width/height directly.
+
+    Args:
+        graph_name: Graph to export
+        file_path: Output path (Windows or WSL style)
+        width: Image width in pixels (default 1200)
+        height: Image height in pixels (0 = keep aspect ratio)
+        format: png, jpg, tif, or bmp
+
+    Returns:
+        Path and pixel/byte size of the exported file
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_format = labtalk_choice(format.lower(), EXPORT_IMAGE_FORMATS, "format")
+    safe_width = positive_int(width, "width")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    path = windows_path(file_path, "file_path")
+    if not os.path.splitext(path)[1]:
+        path = f"{path}.{safe_format}"
+    out_dir = os.path.dirname(path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    fname = os.path.splitext(os.path.basename(path))[0]
+    size_opts = f"tr1.unit:=2 tr1.width:={safe_width}"
+    if height > 0:
+        size_opts += f" tr1.height:={positive_int(height, 'height')}"
+    cmd = (
+        f'expGraph type:={safe_format} path:="{out_dir}" filename:="{fname}" '
+        f"overwrite:=replace {size_opts};"
+    )
+    if not execute_labtalk(cmd):
+        msg = f"Origin could not export {safe_graph} to {path}."
+        raise ValueError(msg)
+    if not os.path.exists(path):
+        msg = f"Export failed: {path} was not created."
+        raise ValueError(msg)
+    return f"Exported {safe_graph} to {path} ({safe_width}px wide, {os.path.getsize(path)} bytes)"
