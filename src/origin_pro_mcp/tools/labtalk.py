@@ -23,6 +23,11 @@ def run_labtalk(script: str) -> str:
 def get_labtalk_variable(name: str) -> str:
     """Get the value of a LabTalk variable.
 
+    Gotchas: numeric variables that don't exist read as 0, and variables
+    declared with a type (e.g. `int x = 5`) are script-local — they vanish
+    when the script ends. Use untyped assignment (`x = 5`) in run_labtalk
+    if you want to read the value back later.
+
     Args:
         name: Variable name. Use $ suffix for strings (e.g., 'str$')
 

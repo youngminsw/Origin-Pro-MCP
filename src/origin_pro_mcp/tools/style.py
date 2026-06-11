@@ -1,8 +1,9 @@
 from ..app import mcp
-from ..origin_connection import execute_labtalk
+from ..origin_connection import activate_window, execute_labtalk, get_lt_var, require_graph
 from ..labtalk_safe import labtalk_choice, labtalk_name, labtalk_string, positive_int
 from .style_helpers import (
-    get_plot_names,
+    find_plot_column,
+    get_plot_info,
     graph_layer_execute,
     position_legend,
     set_legend_entries,
@@ -11,8 +12,17 @@ from .style_helpers import (
 # Symbol shapes for different datasets
 SYMBOL_SHAPES = {1: 2, 2: 3, 3: 1, 4: 4, 5: 5, 6: 6}  # circle, triangle-up, square, diamond, triangle-down, hexagon
 
-# Default color order (colorblind-safe)
-DEFAULT_COLORS = ["blue", "red", "green", "orange", "purple", "cyan"]
+# Default palette: muted/pastel RGB tones (no pure primaries — easier on
+# the eyes, survives grayscale, colorblind-distinguishable). Applied via
+# LabTalk color(r,g,b), verified working on Origin Pro 2020.
+PASTEL_RGB = [
+    (93, 143, 179),   # soft steel blue
+    (204, 102, 119),  # muted rose
+    (68, 170, 153),   # muted teal
+    (221, 170, 102),  # soft amber
+    (153, 136, 187),  # soft purple
+    (119, 170, 187),  # gray cyan
+]
 
 COLOR_MAP = {
     "black": 1, "red": 2, "green": 3, "blue": 4,
@@ -20,12 +30,50 @@ COLOR_MAP = {
     "purple": 13, "gray": 8, "grey": 8,
 }
 
+# LabTalk `set -w` line-width units are tiny (~200 units per point,
+# calibrated visually on Origin 2020) — NOT points*10.
+_WIDTH_UNITS_PER_POINT = 200
+
+
+def _rgb(color: tuple) -> str:
+    return f"color({color[0]},{color[1]},{color[2]})"
+
+
+def _plot_has_symbols(plot_name: str) -> bool:
+    """True when a plot renders symbols (scatter, line+symbol, area).
+
+    Read via `get -k`: symbol plots report >= 1, column/bar/line report 0.
+    Symbol commands (-k/-z) must never reach bar-type plots — they
+    corrupt the bars' pattern (observed on Origin 2020).
+    """
+    if not execute_labtalk(f"__mcpk = 0; get {plot_name} -k __mcpk;"):
+        return False
+    return get_lt_var("__mcpk") >= 1
+
+
+def _nice_increment(low: float, high: float):
+    """A round tick increment giving roughly 5 major intervals, or None."""
+    import math
+    span = abs(high - low)
+    if span <= 0:
+        return None
+    exponent = math.floor(math.log10(span / 5))
+    best = None
+    for mantissa in (1, 2, 2.5, 5, 10):
+        inc = mantissa * 10 ** exponent
+        intervals = span / inc
+        if 3 <= intervals <= 8:
+            score = abs(intervals - 5)
+            if best is None or score < best[0]:
+                best = (score, inc)
+    return best[1] if best else None
+
 
 @mcp.tool()
 def set_plot_style(
     graph_name: str,
     plot_index: int = 1,
-    line_width: float = 1.5,
+    line_width: float = 2.5,
     symbol_size: int = 8,
     symbol_shape: int = 0,
     color: str = ""
@@ -34,8 +82,9 @@ def set_plot_style(
 
     Args:
         graph_name: Graph name
-        plot_index: Plot index (1-based, order of data added)
-        line_width: Line width in points (default 1.5)
+        plot_index: Data series index (1-based, order the datasets were
+                    added; error-bar plots are not counted)
+        line_width: Line width in points (default 2.5)
         symbol_size: Symbol size (3-20, default 8)
         symbol_shape: 0=auto, 1=square, 2=circle, 3=triangle-up,
                       4=diamond, 5=triangle-down, 6=hexagon
@@ -46,14 +95,15 @@ def set_plot_style(
     """
     import time
     safe_graph_name = labtalk_name(graph_name, "graph_name")
-    execute_labtalk(f"win -a {safe_graph_name};")
-    plot_names = get_plot_names(safe_graph_name)
+    require_graph(safe_graph_name)
+    activate_window(safe_graph_name, "graph_name")
+    data_plots = [p["name"] for p in get_plot_info(safe_graph_name) if not p["is_error"]]
 
     idx = plot_index - 1
-    if idx >= len(plot_names):
-        return f"Plot index {plot_index} not found. Available: {plot_names}"
+    if idx >= len(data_plots):
+        return f"Plot index {plot_index} not found. Available data plots: {data_plots}"
 
-    pname = plot_names[idx]
+    pname = data_plots[idx]
     shape = symbol_shape if symbol_shape > 0 else SYMBOL_SHAPES.get(plot_index, 2)
 
     # Each set command needs a small delay to avoid Origin COM rendering races
@@ -63,18 +113,17 @@ def set_plot_style(
         execute_labtalk(f"set {pname} -c {c};")
         time.sleep(0.2)
 
-    lw = int(line_width * 10)
+    lw = int(line_width * _WIDTH_UNITS_PER_POINT)
     execute_labtalk(f"set {pname} -w {lw};")
     time.sleep(0.2)
 
-    execute_labtalk(f"set {pname} -k {shape};")
-    time.sleep(0.2)
-
-    execute_labtalk(f"set {pname} -z {symbol_size};")
-    time.sleep(0.2)
-
-    # Ensure line style is solid (don't use -kf 1 which makes hollow)
-    execute_labtalk(f"set {pname} -l 1;")
+    if _plot_has_symbols(pname):
+        execute_labtalk(f"set {pname} -k {shape};")
+        time.sleep(0.2)
+        execute_labtalk(f"set {pname} -z {symbol_size};")
+    elif color:
+        # bar/column-type plots: color the fill too
+        execute_labtalk(f"set {pname} -cf {c};")
 
     return f"Updated style for plot {plot_index} ({pname}) in {safe_graph_name}"
 
@@ -84,17 +133,19 @@ def apply_publication_style(
     graph_name: str,
     x_label: str = "",
     y_label: str = "",
-    x_min: float = None,
-    x_max: float = None,
-    y_min: float = None,
-    y_max: float = None,
+    x_min: float | None = None,
+    x_max: float | None = None,
+    y_min: float | None = None,
+    y_max: float | None = None,
     legend_entries: str = "",
     legend_position: str = "top-right"
 ) -> str:
     """Apply complete publication styling to a graph in ONE call.
 
-    Sets font (bold), colors, ticks, frame, and legend all at once.
-    Designed to minimize token usage — call this once instead of many separate tools.
+    Sets bold Arial labels, a muted pastel color palette, 2.5 pt lines,
+    readable tick spacing, inward ticks, closed frame, and a borderless
+    bold legend all at once. Designed to minimize token usage — call this
+    once instead of many separate tools.
 
     Args:
         graph_name: Graph name
@@ -111,8 +162,9 @@ def apply_publication_style(
         Summary of applied styling
     """
     safe_graph_name = labtalk_name(graph_name, "graph_name")
-    execute_labtalk(f"win -a {safe_graph_name};")
-    plot_names = get_plot_names(safe_graph_name)
+    require_graph(safe_graph_name)
+    activate_window(safe_graph_name, "graph_name")
+    plot_infos = get_plot_info(safe_graph_name)
 
     # 1. Axis titles — bold, Arial 28pt
     if x_label:
@@ -126,7 +178,7 @@ def apply_publication_style(
     graph_layer_execute(graph_name, 'layer.x.label.pt = 22; layer.y.label.pt = 22;')
     graph_layer_execute(graph_name, 'layer.x.label.bold = 1; layer.y.label.bold = 1;')
 
-    # 3. Axis range
+    # 3. Axis range + readable tick spacing (~5 major intervals)
     range_cmds = []
     if x_min is not None:
         range_cmds.append(f"layer.x.from = {x_min};")
@@ -136,6 +188,14 @@ def apply_publication_style(
         range_cmds.append(f"layer.y.from = {y_min};")
     if y_max is not None:
         range_cmds.append(f"layer.y.to = {y_max};")
+    if x_min is not None and x_max is not None:
+        inc = _nice_increment(x_min, x_max)
+        if inc is not None:
+            range_cmds.append(f"layer.x.inc = {inc};")
+    if y_min is not None and y_max is not None:
+        inc = _nice_increment(y_min, y_max)
+        if inc is not None:
+            range_cmds.append(f"layer.y.inc = {inc};")
     if range_cmds:
         graph_layer_execute(safe_graph_name, " ".join(range_cmds))
 
@@ -158,42 +218,69 @@ def apply_publication_style(
         "layer.x.minorGrid = 0; layer.y.minorGrid = 0;"
     )
 
-    # 7. Auto-style each plot with colorblind-safe colors + distinct symbols
-    # Each command needs delay to avoid Origin COM rendering races
+    # 7. Auto-style each data plot with a muted pastel palette + distinct
+    # symbols. Error-bar plots only get the color of their data plot —
+    # symbol/line commands would redraw them as connected lines.
+    # Each command needs delay to avoid Origin COM rendering races.
     import time
-    for i, pname in enumerate(plot_names):
-        color_name = DEFAULT_COLORS[i % len(DEFAULT_COLORS)]
-        c = COLOR_MAP[color_name]
-        shape = SYMBOL_SHAPES.get(i + 1, 2)
+    data_index = 0
+    current_color = _rgb(PASTEL_RGB[0])
+    for info in plot_infos:
+        pname = info["name"]
+        if info["is_error"]:
+            execute_labtalk(f"set {pname} -c {current_color};")
+            time.sleep(0.2)
+            execute_labtalk(f"set {pname} -w 300;")  # 1.5 pt error bars
+            time.sleep(0.2)
+            continue
+        current_color = _rgb(PASTEL_RGB[data_index % len(PASTEL_RGB)])
+        shape = SYMBOL_SHAPES.get(data_index + 1, 2)
+        data_index += 1
 
-        execute_labtalk(f"set {pname} -c {c};")
+        execute_labtalk(f"set {pname} -c {current_color};")
         time.sleep(0.2)
-        execute_labtalk(f"set {pname} -w 20;")
+        execute_labtalk(f"set {pname} -w 500;")  # 2.5 pt lines
         time.sleep(0.2)
-        execute_labtalk(f"set {pname} -k {shape};")
-        time.sleep(0.2)
-        execute_labtalk(f"set {pname} -z 10;")
-        time.sleep(0.2)
-        execute_labtalk(f"set {pname} -l 1;")  # solid line style
-        time.sleep(0.2)
+        if _plot_has_symbols(pname):
+            execute_labtalk(f"set {pname} -k {shape};")
+            time.sleep(0.2)
+            execute_labtalk(f"set {pname} -z 10;")
+            time.sleep(0.2)
+        else:
+            # bar/column/area-type plots: color the fill instead
+            execute_labtalk(f"set {pname} -cf {current_color};")
+            time.sleep(0.2)
 
-    # 8. Legend — reconstruct, then customize
+    # 8. Legend — reconstruct, then customize: bold entries, no border
     execute_labtalk(f"win -a {safe_graph_name}; legend -r;")
     time.sleep(0.3)
 
     if legend_entries:
-        entry_list = [e.strip() for e in legend_entries.split(",")]
+        entry_list = [f"\\b({e.strip()})" for e in legend_entries.split(",")]
         set_legend_entries(safe_graph_name, entry_list)
         time.sleep(0.3)
+    else:
+        # Bold the auto legend (from column long names) for consistency
+        renamed = False
+        for info in plot_infos:
+            if info["is_error"]:
+                continue
+            col = find_plot_column(info["name"])
+            if col is not None and col.LongName and not col.LongName.startswith("\\b("):
+                col.LongName = f"\\b({col.LongName})"
+                renamed = True
+        if renamed:
+            execute_labtalk(f"win -a {safe_graph_name}; legend -r;")
+            time.sleep(0.3)
 
-    execute_labtalk('legend.fsize = 20; legend.font$ = "Arial";')
+    execute_labtalk('legend.fsize = 20; legend.font$ = "Arial"; legend.background = 0;')
     position_legend(safe_graph_name, legend_position)
 
-    styled = len(plot_names)
     return (
         f"Publication style applied to {safe_graph_name}: "
-        f"{styled} plots styled, Arial bold labels, "
-        f"inward ticks, closed frame, no grid"
+        f"{data_index} data plots styled (pastel palette, 2.5 pt lines), "
+        f"Arial bold labels, inward ticks, closed frame, no grid, "
+        f"borderless bold legend"
     )
 
 
@@ -219,7 +306,8 @@ def set_graph_font(
     safe_font_name = labtalk_string(font_name, "font_name")
     safe_font_size = positive_int(font_size, "font_size")
     safe_target = labtalk_choice(target, {"all", "axes", "title", "legend", "tick"}, "target")
-    execute_labtalk(f"win -a {safe_graph_name};")
+    require_graph(safe_graph_name)
+    activate_window(safe_graph_name, "graph_name")
 
     if safe_target in ("all", "axes"):
         execute_labtalk(f"xb.font$ = {safe_font_name}; xb.fsize = {safe_font_size};")
@@ -259,7 +347,8 @@ def set_legend(
     """
     safe_graph_name = labtalk_name(graph_name, "graph_name")
     safe_position = labtalk_choice(position, {"top-left", "top-right", "bottom-left", "bottom-right"}, "position")
-    execute_labtalk(f"win -a {safe_graph_name};")
+    require_graph(safe_graph_name)
+    activate_window(safe_graph_name, "graph_name")
 
     if not visible:
         execute_labtalk("legend.show = 0;")
@@ -270,9 +359,10 @@ def set_legend(
     if entries:
         import time
         time.sleep(0.3)
-        entry_list = [e.strip() for e in entries.split(",")]
+        entry_list = [f"\\b({e.strip()})" for e in entries.split(",")]
         set_legend_entries(safe_graph_name, entry_list)
 
+    execute_labtalk("legend.background = 0;")
     position_legend(safe_graph_name, safe_position)
 
     return f"Updated legend for {safe_graph_name}"
@@ -299,6 +389,7 @@ def set_tick_style(
         Success message
     """
     safe_graph_name = labtalk_name(graph_name, "graph_name")
+    require_graph(safe_graph_name)
     dir_map = {"in": 1, "out": 2, "both": 3}
     safe_tick_direction = labtalk_choice(tick_direction, dir_map, "tick_direction")
     d = dir_map[safe_tick_direction]

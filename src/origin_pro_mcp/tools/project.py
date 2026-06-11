@@ -1,8 +1,11 @@
-from ..app import mcp
-from ..origin_connection import get_origin, execute_labtalk
-from ..labtalk_safe import labtalk_choice, labtalk_path, positive_int
+import os
 
-EXPORT_FORMATS = {"png", "jpg", "tif", "bmp", "emf", "eps", "pdf", "svg"}
+from ..app import mcp
+from ..origin_connection import get_origin, graph_names
+from ..labtalk_safe import labtalk_choice, windows_path
+from .graph import EXPORT_IMAGE_FORMATS, export_graph_to_file
+
+PROJECT_EXTENSIONS = {".opj", ".opju"}
 
 @mcp.tool()
 def new_project() -> str:
@@ -16,33 +19,58 @@ def save_project(file_path: str = "") -> str:
     """Save the current Origin project.
 
     Args:
-        file_path: Full Windows path to save (e.g., C:\\Users\\data\\experiment.opju).
-                   If empty, saves to current location.
+        file_path: Output path for the .opju file (Windows or WSL style).
+                   ".opju" is appended when no extension is given.
+                   If empty, saves to the project's current location.
 
     Returns:
         Save confirmation with path
     """
     o = get_origin()
     if file_path:
-        o.Save(file_path)
-        return f"Project saved to: {file_path}"
-    else:
-        o.Save("")
-        return "Project saved"
+        path = windows_path(file_path, "file_path")
+        ext = os.path.splitext(path)[1].lower()
+        if not ext:
+            path = f"{path}.opju"
+        elif ext not in PROJECT_EXTENSIONS:
+            msg = f"file_path must end in .opj or .opju, got '{ext}'."
+            raise ValueError(msg)
+        out_dir = os.path.dirname(path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        if not o.Save(path):
+            msg = f"Origin could not save the project to {path}."
+            raise ValueError(msg)
+        return f"Project saved to: {path}"
+    if not o.Save(""):
+        msg = (
+            "Origin could not save: the project has no file location yet. "
+            "Pass file_path to save it somewhere."
+        )
+        raise ValueError(msg)
+    return "Project saved"
 
 @mcp.tool()
 def load_project(file_path: str) -> str:
-    """Open an Origin project file.
+    """Open an Origin project file. Replaces the current project.
 
     Args:
-        file_path: Full Windows path to .opj or .opju file
+        file_path: Path to a .opj or .opju file (Windows or WSL style)
 
     Returns:
         Success message
     """
     o = get_origin()
-    o.Load(file_path)
-    return f"Loaded project: {file_path}"
+    path = windows_path(file_path, "file_path")
+    # Check before calling Load: a failed Load can still discard the
+    # currently open project, so a typo must not reach Origin.
+    if not os.path.isfile(path):
+        msg = f"Project file not found: {path}"
+        raise ValueError(msg)
+    if not o.Load(path):
+        msg = f"Origin could not open the project file: {path}"
+        raise ValueError(msg)
+    return f"Loaded project: {path}"
 
 @mcp.tool()
 def export_all_graphs(
@@ -52,33 +80,41 @@ def export_all_graphs(
     width: int = 800,
     height: int = 600
 ) -> str:
-    """Export all graphs in the current project to image files.
+    """Export every graph in the project to image files (one per graph).
+
+    Uses the same clipboard-based export as export_graph, so the Windows
+    clipboard contents are replaced during export.
 
     Args:
-        output_dir: Windows directory path for output files
-        format: Image format (png, jpg, tif, emf, eps, pdf, svg)
-        dpi: Resolution (default 300)
-        width: Width in pixels
-        height: Height in pixels
+        output_dir: Output directory (Windows or WSL style). Created if missing.
+        format: Image format: png, jpg, tif, bmp
+        dpi: Unused (kept for API compatibility; size determined by Origin page)
+        width: Unused (kept for API compatibility)
+        height: Unused (kept for API compatibility)
 
     Returns:
-        Confirmation message
+        Per-graph list of exported files
     """
-    safe_format = labtalk_choice(format, EXPORT_FORMATS, "format")
-    safe_width = positive_int(width, "width")
-    safe_height = positive_int(height, "height")
-    safe_dpi = positive_int(dpi, "dpi")
-    safe_output_dir = labtalk_path(output_dir, "output_dir")
+    safe_format = labtalk_choice(format.lower(), EXPORT_IMAGE_FORMATS, "format")
+    out_dir = windows_path(output_dir, "output_dir")
+    os.makedirs(out_dir, exist_ok=True)
 
-    script = (
-        'doc -ef G {'
-        '  string __gname$ = page.name$;'
-        '  win -a %(__gname$);'
-        f"  string __outdir$ = {safe_output_dir};"
-        f'  string __outpath$ = __outdir$ + "\\\\" + __gname$ + ".{safe_format}";'
-        f'  expGraph type:={safe_format} path:=__outpath$ '
-        f'  tr1.Width.nVal:={safe_width} tr1.Height.nVal:={safe_height} tr1.Resolution.nVal:={safe_dpi};'
-        '};'
-    )
-    execute_labtalk(script)
-    return f"Exported all graphs to: {output_dir}"
+    names = graph_names()
+    if not names:
+        return "No graphs found in the current project."
+
+    exported = []
+    failed = []
+    for name in names:
+        path = os.path.join(out_dir, f"{name}.{safe_format}")
+        try:
+            exported.append(export_graph_to_file(name, path))
+        except (ValueError, RuntimeError) as exc:
+            failed.append(f"{name}: {exc}")
+
+    lines = [f"Exported {len(exported)} of {len(names)} graphs to {out_dir}:"]
+    lines.extend(f"  {p}" for p in exported)
+    if failed:
+        lines.append("Failed:")
+        lines.extend(f"  {f}" for f in failed)
+    return "\n".join(lines)

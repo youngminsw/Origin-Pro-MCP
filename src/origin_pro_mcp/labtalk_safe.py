@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from typing import Final
 
 _NAME_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_WSL_PATH_RE: Final = re.compile(r"^/mnt/([A-Za-z])(/.*)?$")
 _VARIABLE_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*[$]?$")
 _STRING_BLOCKLIST: Final = {'"', "\r", "\n"}
 _LABTALK_BLOCKED_PATTERNS: Final = (
@@ -39,6 +40,25 @@ def labtalk_variable(value: str, field: str) -> str:
         msg = f"{field} must be a LabTalk variable name."
         raise ValueError(msg)
     return value
+
+
+def windows_path(value: str, field: str) -> str:
+    """Normalize a user-supplied path to a Windows path.
+
+    Strips stray quotes/whitespace and converts WSL-style paths
+    (/mnt/c/Users/...) to Windows form (C:\\Users\\...) so agents running
+    in WSL can pass their native paths.
+    """
+    path = value.strip().strip('"').strip("'")
+    if not path:
+        msg = f"{field} cannot be empty."
+        raise ValueError(msg)
+    match = _WSL_PATH_RE.fullmatch(path)
+    if match:
+        drive = match.group(1).upper()
+        rest = (match.group(2) or "/").replace("/", "\\")
+        path = f"{drive}:{rest}"
+    return path
 
 
 def labtalk_path(value: str, field: str) -> str:

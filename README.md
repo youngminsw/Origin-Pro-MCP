@@ -107,6 +107,23 @@ pip install -e .
 
 > **Note**: If Claude Code runs in WSL, make sure the `uvx` or `python` command points to your **Windows** Python, not WSL Python. Origin COM only works from Windows.
 
+### 3. Origin Startup
+
+You do not need to start Python or Origin manually. The MCP client starts `origin-pro-mcp`, and the server connects to Origin through `Origin.ApplicationSI`. If Origin is already open, the server uses it; otherwise COM launches Origin and the server makes it visible.
+
+### 4. Use It
+
+Just ask Claude to work with Origin:
+
+```
+"Create a scatter plot from this data: x=[1,2,3,4,5], y=[2.1,4.0,5.9,8.1,10.0]"
+"Apply publication styling to Fig1 with axis labels Temperature (K) and Absorbance (a.u.)"
+"Fit a Gaussian to the data in Book1"
+"Export all graphs to C:\Users\me\figures\"
+```
+
+File paths can be Windows style (`C:\Users\me\fig.png`) or WSL style (`/mnt/c/Users/me/fig.png`) — the server converts WSL paths automatically, so agents running in WSL can pass their native paths.
+
 ### Agent Location vs Server Runtime
 
 The agent does not have to run on Windows. These setups are valid:
@@ -120,26 +137,11 @@ The unsupported setup is WSL/Linux `origin-pro-mcp` server -> Origin Pro, becaus
 
 This project is currently verified only with **Origin Pro 2020**. The implementation uses Origin's COM Automation Server and LabTalk, which exist across multiple Origin releases, so other versions may work. Treat them as unverified until someone runs the test suite and a real graph/export smoke test on that version.
 
-### Direct LabTalk Safety
+## Direct LabTalk Safety
 
 The `run_labtalk` tool is available by default for styling, analysis, graph tweaks, and other advanced Origin operations. It blocks common destructive or file-writing LabTalk commands such as project reset, delete, save/open, file dialogs, external script execution, and graph export. Use the typed tools for saving, loading, importing, and exporting.
 
 This is an accident-prevention guard, not a security sandbox for untrusted code.
-
-### 4. Origin Startup
-
-You do not need to start Python manually. The MCP client starts `origin-pro-mcp`, and the server connects to Origin through `Origin.ApplicationSI`. If Origin is already open, the server uses it; otherwise COM can launch Origin and the server makes it visible.
-
-### 5. Use It
-
-Just ask Claude to work with Origin:
-
-```
-"Create a scatter plot from this data: x=[1,2,3,4,5], y=[2.1,4.0,5.9,8.1,10.0]"
-"Apply publication styling to Fig1 with axis labels Temperature (K) and Absorbance (a.u.)"
-"Fit a Gaussian to the data in Book1"
-"Export all graphs to C:\Users\me\figures\"
-```
 
 ## Architecture
 
@@ -169,7 +171,7 @@ Origin Pro (GUI visible in real-time)
 | `set_worksheet_data` | Write column data (JSON arrays) |
 | `get_worksheet_data` | Read worksheet data as JSON |
 | `import_csv_to_worksheet` | Import CSV/text file |
-| `list_worksheets` | List all open workbooks and graphs |
+| `list_worksheets` | List open workbooks (with sheets) and graphs |
 
 ### Graphing
 | Tool | Description |
@@ -178,8 +180,12 @@ Origin Pro (GUI visible in real-time)
 | `add_plot_to_graph` | Add another dataset to existing graph |
 | `set_axis_labels` | Set X/Y axis labels and title |
 | `set_axis_range` | Set axis min/max values |
-| `export_graph` | Export graph to PNG/JPG image |
+| `export_graph` | Export graph to PNG/JPG/TIF/BMP image |
 | `export_all_graphs` | Export every graph in the project |
+
+> Export uses Origin's clipboard copy (the only export route that works
+> over COM), so the Windows clipboard contents are replaced during export
+> and the image size follows the Origin page setup.
 
 ### Styling
 | Tool | Description |
@@ -193,7 +199,7 @@ Origin Pro (GUI visible in real-time)
 ### Analysis
 | Tool | Description |
 |------|-------------|
-| `curve_fit` | Curve fitting with R², SSR statistics |
+| `curve_fit` | Curve fitting: parameters ± std errors, R², SSR, reduced χ²; optional `plot_on_graph` draws the fit curve on a graph |
 | `list_fitting_functions` | Show available fit functions |
 
 ### Advanced
@@ -275,6 +281,9 @@ Copy `skills/publication-figure.md` to your project and edit freely — it's mea
 | `expGraph` doesn't produce files via COM | Use `CopyPage` + Pillow clipboard |
 | `nlr.r2` returns 0 after `nlend` | Read statistics BEFORE `nlend` |
 | Plot styling commands can conflict | Add 0.2s delay between `set` commands |
+| `[Book]Sheet!col(n).type = ...` silently ignored | Activate the sheet, then use `wks.col(n).type` |
+| `set <plot>` fails when the graph isn't active | Run `win -a <graph>` before `set` commands |
+| Typed LabTalk locals (`int x = ...`) unreadable later | Use untyped assignment to read values back via COM |
 
 ## Supported Plot Types
 
@@ -303,28 +312,39 @@ Copy `skills/publication-figure.md` to your project and edit freely — it's mea
 | Growth/Sigmoidal | `boltzmann`, `hill`, `logistic`, `lognormal` |
 | Other | `power`, `sine` |
 
+`curve_fit` returns the fitted parameter values with standard errors plus
+R², SSR, reduced χ², and DoF. Exception: `power` fits and draws the curve,
+but Origin 2020 does not expose its parameter values over COM, so only the
+statistics are returned. Use `list_fitting_functions` to see the parameter
+names for each function.
+
 ## Color Palette
 
-Default colorblind-safe order used by `apply_publication_style`:
+`apply_publication_style` uses a muted pastel palette (no pure primaries —
+easier on the eyes, survives grayscale printing, colorblind-distinguishable):
 
-| Order | Color | Best for |
-|-------|-------|----------|
-| 1st | Blue | Primary dataset |
-| 2nd | Red | Comparison dataset |
-| 3rd | Green | Third dataset |
-| 4th | Orange | Fourth dataset |
-| 5th | Purple | Fifth dataset |
-| 6th | Cyan | Sixth dataset |
+| Order | Color | RGB |
+|-------|-------|-----|
+| 1st | Soft steel blue | (93, 143, 179) |
+| 2nd | Muted rose | (204, 102, 119) |
+| 3rd | Muted teal | (68, 170, 153) |
+| 4th | Soft amber | (221, 170, 102) |
+| 5th | Soft purple | (153, 136, 187) |
+| 6th | Gray cyan | (119, 170, 187) |
 
-> **Tip**: Never use red + green as the only two colors — colorblind users cannot distinguish them. Use blue + red or blue + orange instead.
+Error bars automatically match their data series color. The fit curve drawn
+by `curve_fit(plot_on_graph=...)` uses a muted brick red (170, 68, 80).
+
+> **Tip**: Never use red + green as the only two colors — colorblind users cannot distinguish them.
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| "Origin.ApplicationSI" error | Make sure Origin Pro is running before starting the server |
+| "Could not connect to Origin via COM" | Check that Origin/OriginPro is installed and licensed; if it is, run Origin once as administrator to re-register the Automation Server |
 | Tools timeout | Origin may be showing a dialog — check the Origin window |
-| Export returns empty | Increase the clipboard wait time; check if Origin window is minimized |
+| Export fails with a clipboard error | The server already polls the clipboard for up to 5 s; check that the Origin window is not minimized and no other app holds the clipboard |
+| "Window 'X' not found" errors | The error lists every open workbook/graph — use one of those names (Origin may have renamed the window if the name was taken) |
 | Legend missing after styling | Legend uses data coordinates — verify axis range is set before positioning |
 | Symbols appear hollow | Do NOT use `set -d` flag (it's for dash patterns, not fill) |
 

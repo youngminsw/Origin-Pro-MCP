@@ -30,8 +30,13 @@ If unspecified, choose a conservative manuscript default: line+symbol for ordere
 
 - Use a restrained scientific style, not decorative styling.
 - Put units in axis labels: `Temperature (K)`, `Current density (mA cm^-2)`.
-- Use a colorblind-safe order: blue, orange, green, red, purple, cyan.
+- Use the muted pastel palette (`apply_publication_style` default): soft
+  steel blue, muted rose, muted teal, soft amber, soft purple, gray cyan.
+  Avoid pure primary colors — they tire the eyes and dominate the figure.
 - Avoid red and green as the only two series colors.
+- Keep lines at 2.5 pt and tick labels uncrowded (~5 major intervals);
+  the one-call style tool handles both.
+- Legends: borderless with bold entries (the style tools do this).
 - Use distinct symbols when colors alone may not survive grayscale printing.
 - Keep axis ranges tight but honest; do not crop important outliers.
 - Use legends only when labels cannot be placed directly or series count requires it.
@@ -126,6 +131,19 @@ Use fitting only when it answers the scientific question:
 curve_fit(data_book="Data", data_sheet="Sheet1", x_col=1, y_col=2, function="line")
 ```
 
+For the classic paper presentation (data symbols + fit line), pass the
+graph name and the fitted curve is drawn on it as a red 2 pt line with a
+short legend entry ("Gauss fit"):
+
+```text
+curve_fit(data_book="Data", data_sheet="Sheet1", x_col=1, y_col=2,
+          function="gauss", plot_on_graph="Fig1")
+```
+
+Call `apply_publication_style` BEFORE `curve_fit(plot_on_graph=...)` —
+running it afterwards would restyle the fit curve like a data series
+(palette color + symbols).
+
 Report fit parameters and statistics in plain language. Do not hide weak fits behind styling.
 
 ### 5. Export And Inspect
@@ -145,9 +163,12 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | Bold axis title properties are unreliable | Use Origin text markup such as `\b(Label)` through typed tools |
 | `%C` plot shortcuts can fail through COM | Use plot names from `FindGraphLayer().DataPlots`; MCP style tools do this |
 | Legend text is awkward through COM | Set worksheet Long Names, rebuild with `legend -r`, then position |
-| Legend coordinates use data units | Set axis range before final legend placement |
+| Legend coordinates use data units | Set axis range before final legend placement; MCP tools keep the legend box inside the frame automatically |
 | `expGraph` may not write files reliably | Use `export_graph`, which copies the rendered page and saves via Pillow |
 | Fit statistics can reset after `nlend` | Read statistics before ending the nonlinear fit session |
+| Error-bar plots appear as separate entries in `DataPlots` | MCP styling tools detect them via the column's Y-Error designation and only color-match them — symbol/line commands would redraw error bars as connected lines |
+| `set <plot>` silently fails when the graph window is not active | Run `win -a <graph>` first |
+| `[Book]Sheet!col(n).type = ...` is silently ignored | Activate the sheet and use `wks.col(n).type` instead |
 
 ## Pre-Export Checklist
 

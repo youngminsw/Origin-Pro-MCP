@@ -1,7 +1,23 @@
 import json
+import os
+
 from ..app import mcp
-from ..origin_connection import get_origin, execute_labtalk
-from ..labtalk_safe import labtalk_choice, labtalk_name, labtalk_path, labtalk_string
+from ..origin_connection import (
+    activate_window,
+    execute_labtalk,
+    get_origin,
+    graph_names,
+    require_worksheet,
+    workbook_names,
+)
+from ..labtalk_safe import (
+    labtalk_choice,
+    labtalk_name,
+    labtalk_path,
+    labtalk_string,
+    windows_path,
+)
+
 
 @mcp.tool()
 def create_worksheet(book_name: str, sheet_name: str = "Sheet1") -> str:
@@ -12,7 +28,7 @@ def create_worksheet(book_name: str, sheet_name: str = "Sheet1") -> str:
         sheet_name: Name for the sheet (default: Sheet1)
 
     Returns:
-        Created workbook name
+        Created workbook name (may differ from book_name if it was taken)
     """
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
@@ -44,20 +60,48 @@ def set_worksheet_data(
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
     safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
-    target = f"[{safe_book_name}]{safe_sheet_name}"
-    cols = json.loads(columns)
+    target = require_worksheet(safe_book_name, safe_sheet_name)
+
+    try:
+        cols = json.loads(columns)
+    except json.JSONDecodeError as exc:
+        msg = (
+            "columns must be a JSON array of arrays, e.g. [[1,2,3],[4,5,6]]. "
+            f"Parse error: {exc}"
+        )
+        raise ValueError(msg) from exc
+    if isinstance(cols, list) and cols and all(
+        isinstance(x, (int, float)) and not isinstance(x, bool) for x in cols
+    ):
+        # Forgive a flat array: treat [1,2,3] as one column
+        cols = [cols]
+    if (
+        not isinstance(cols, list)
+        or not cols
+        or not all(isinstance(c, list) and c for c in cols)
+    ):
+        msg = "columns must be a non-empty JSON array of non-empty arrays, e.g. [[1,2,3],[4,5,6]]."
+        raise ValueError(msg)
 
     for i, col_data in enumerate(cols):
-        float_data = [float(x) for x in col_data]
-        o.PutWorksheet(target, float_data, 0, i)
+        try:
+            float_data = [float(x) for x in col_data]
+        except (TypeError, ValueError) as exc:
+            msg = f"Column {i + 1} contains non-numeric values; only numbers are supported."
+            raise ValueError(msg) from exc
+        if not o.PutWorksheet(target, float_data, 0, i):
+            msg = f"Origin rejected the data for column {i + 1} of {target}."
+            raise ValueError(msg)
 
     if column_names:
         names = [n.strip() for n in column_names.split(",")]
-        execute_labtalk(f"win -a {safe_book_name};")
+        activate_window(safe_book_name, "book_name")
+        execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet_name, "sheet_name")};')
         for i, name in enumerate(names):
             execute_labtalk(f"wks.col{i+1}.lname$ = {labtalk_string(name, 'column_names')};")
 
-    return f"Set {len(cols)} columns x {len(cols[0])} rows in {target}"
+    n_rows = max(len(c) for c in cols)
+    return f"Set {len(cols)} columns x {n_rows} rows in {target}"
 
 @mcp.tool()
 def get_worksheet_data(book_name: str, sheet_name: str) -> str:
@@ -75,8 +119,12 @@ def get_worksheet_data(book_name: str, sheet_name: str) -> str:
     safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
     target = f"[{safe_book_name}]{safe_sheet_name}"
     data = o.GetWorksheet(target)
-    if data is None:
-        return json.dumps({"error": f"Worksheet {target} not found"})
+    # On failure GetWorksheet returns None or an HRESULT int, never a sequence
+    if not isinstance(data, (list, tuple)):
+        books = ", ".join(workbook_names()) or "(none)"
+        return json.dumps(
+            {"error": f"Worksheet {target} not found. Open workbooks: {books}."}
+        )
 
     if len(data) == 0:
         return json.dumps({"columns": []})
@@ -97,7 +145,8 @@ def import_csv_to_worksheet(
     """Import a CSV/text file into an Origin worksheet.
 
     Args:
-        file_path: Full Windows path to the file (e.g., C:\\Users\\data.csv)
+        file_path: Path to the file (Windows or WSL style, e.g.
+                   C:\\Users\\data.csv or /mnt/c/Users/data.csv)
         book_name: Optional workbook name. Auto-generated if empty.
         delimiter: Column delimiter (default: comma)
 
@@ -105,47 +154,47 @@ def import_csv_to_worksheet(
         Name of the created workbook
     """
     o = get_origin()
+    path = windows_path(file_path, "file_path")
+    if not os.path.isfile(path):
+        msg = f"File not found: {path}"
+        raise ValueError(msg)
+
     if book_name:
         safe_book_name = labtalk_name(book_name, "book_name")
         o.CreatePage(2, safe_book_name, "origin")
         execute_labtalk(f"win -a {safe_book_name};")
 
     if delimiter == ",":
-        execute_labtalk(f"impasc fname:={labtalk_path(file_path, 'file_path')} options.FileStruct.Delimiter:=1;")
+        ok = execute_labtalk(f"impasc fname:={labtalk_path(path, 'file_path')} options.FileStruct.Delimiter:=1;")
     elif delimiter == "\t":
-        execute_labtalk(f"impasc fname:={labtalk_path(file_path, 'file_path')} options.FileStruct.Delimiter:=0;")
+        ok = execute_labtalk(f"impasc fname:={labtalk_path(path, 'file_path')} options.FileStruct.Delimiter:=0;")
     else:
         safe_delimiter = labtalk_choice(delimiter, {";", "|", " "}, "delimiter")
-        execute_labtalk(
-            f"impasc fname:={labtalk_path(file_path, 'file_path')} "
+        ok = execute_labtalk(
+            f"impasc fname:={labtalk_path(path, 'file_path')} "
             f"options.FileStruct.CustomDelimiter:={labtalk_string(safe_delimiter, 'delimiter')};"
         )
+    if not ok:
+        msg = f"Origin could not import {path} — check the file format and delimiter."
+        raise ValueError(msg)
 
     active_book = o.LTStr("page.name$")
     return f"Imported to workbook: {active_book}"
 
 @mcp.tool()
 def list_worksheets() -> str:
-    """List all open workbooks and worksheets in Origin.
+    """List all open workbooks (with their sheets) and graph windows.
 
     Returns:
-        JSON list of workbooks with their sheets
+        JSON object: {"workbooks": [{"name", "sheets"}], "graphs": [names]}
     """
     o = get_origin()
-    result = []
+    workbooks = []
+    pages = o.WorksheetPages
+    for i in range(pages.Count):
+        page = pages.Item(i)
+        layers = page.Layers
+        sheets = [layers.Item(j).Name for j in range(layers.Count)]
+        workbooks.append({"name": page.Name, "sheets": sheets})
 
-    execute_labtalk('int __n = doc.pages();')
-    n_pages = int(o.LTVar("__n"))
-
-    for i in range(1, n_pages + 1):
-        execute_labtalk(f'string __pname$ = doc.page{i}.name$;')
-        execute_labtalk(f'int __ptype = doc.page{i}.type;')
-        pname = o.LTStr("__pname$")
-        ptype = int(o.LTVar("__ptype"))
-
-        if ptype == 2:
-            result.append({"book": pname, "type": "workbook"})
-        elif ptype == 3:
-            result.append({"book": pname, "type": "graph"})
-
-    return json.dumps(result)
+    return json.dumps({"workbooks": workbooks, "graphs": graph_names()})
