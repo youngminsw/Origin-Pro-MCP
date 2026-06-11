@@ -1,4 +1,5 @@
 import json
+import math
 
 from ..app import mcp
 from ..origin_connection import (
@@ -260,3 +261,121 @@ def find_peaks(
     ys = _read_column(safe_book, safe_sheet, cy)
     peaks = [{"x": x, "y": y} for x, y in zip(xs, ys)]
     return json.dumps({"peaks": peaks, "count": len(peaks)})
+
+
+@mcp.tool()
+def column_statistics(data_book: str, data_sheet: str, col: int) -> str:
+    """Descriptive statistics for one worksheet column.
+
+    Returns:
+        JSON: mean, sd, se, variance, median, min, max, sum, n
+    """
+    safe_book = labtalk_name(data_book, "data_book")
+    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_col = positive_column(col, "col")
+    _activate_sheet(safe_book, safe_sheet)
+    if not execute_labtalk(f"stats col({safe_col});"):
+        msg = f"Statistics failed on [{safe_book}]{safe_sheet} col {safe_col}."
+        raise ValueError(msg)
+    mean = get_lt_var("stats.mean")
+    sd = get_lt_var("stats.sd")
+    n = get_lt_var("stats.n")
+    execute_labtalk(f"__mcp_med = median(col({safe_col}));")
+    median = get_lt_var("__mcp_med")
+    se = sd / math.sqrt(n) if n > 0 else 0.0
+    return json.dumps({
+        "mean": mean,
+        "sd": sd,
+        "se": se,
+        "variance": sd * sd,
+        "median": median,
+        "min": get_lt_var("stats.min"),
+        "max": get_lt_var("stats.max"),
+        "sum": get_lt_var("stats.sum"),
+        "n": n,
+    })
+
+
+@mcp.tool()
+def compare_means(
+    data_book: str,
+    data_sheet: str,
+    col1: int,
+    col2: int,
+    equal_variance: bool = False
+) -> str:
+    """Two-sample t-test between two columns.
+
+    Returns:
+        JSON: t, df, p_value, mean1, mean2, equal_variance
+    """
+    safe_book = labtalk_name(data_book, "data_book")
+    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    c1 = positive_column(col1, "col1")
+    c2 = positive_column(col2, "col2")
+    _activate_sheet(safe_book, safe_sheet)
+    equal = 1 if equal_variance else 0
+    if not execute_labtalk(
+        f"ttest2 irng:=(col({c1}),col({c2})) tail:=two equal:={equal};"
+    ):
+        msg = f"t-test failed on [{safe_book}]{safe_sheet} cols {c1},{c2}."
+        raise ValueError(msg)
+    execute_labtalk(f"__m1 = mean(col({c1})); __m2 = mean(col({c2}));")
+    return json.dumps({
+        "t": get_lt_var("ttest2.stat"),
+        "df": get_lt_var("ttest2.df"),
+        "p_value": get_lt_var("ttest2.prob"),
+        "mean1": get_lt_var("__m1"),
+        "mean2": get_lt_var("__m2"),
+        "equal_variance": bool(equal_variance),
+    })
+
+
+@mcp.tool()
+def frequency_count(
+    data_book: str,
+    data_sheet: str,
+    col: int,
+    bin_min: float,
+    bin_max: float,
+    bin_size: float
+) -> str:
+    """Histogram-style frequency counts for one column.
+
+    Args:
+        bin_min: lowest bin start
+        bin_max: highest bin end
+        bin_size: bin width (increment)
+
+    Returns:
+        JSON list of {center, end, count, cumulative}
+    """
+    safe_book = labtalk_name(data_book, "data_book")
+    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_col = positive_column(col, "col")
+    if bin_size <= 0:
+        msg = "bin_size must be positive."
+        raise ValueError(msg)
+    if bin_max <= bin_min:
+        msg = "bin_max must be greater than bin_min."
+        raise ValueError(msg)
+    _activate_sheet(safe_book, safe_sheet)
+    out = "FreqCount"
+    if get_origin().FindWorksheet(f"[{safe_book}]{out}") is not None:
+        execute_labtalk(f"win -a {safe_book}; layer -d {out};")
+    cmd = (
+        f"freqcounts irng:=col({safe_col}) min:={bin_min} max:={bin_max} "
+        f"stepby:=0 inc:={bin_size} outleft:=1 outright:=1 rd:=[{safe_book}]{out}!;"
+    )
+    if not execute_labtalk(cmd):
+        msg = f"Frequency count failed on [{safe_book}]{safe_sheet} col {safe_col}."
+        raise ValueError(msg)
+    centers = _read_column(safe_book, out, 1)
+    ends = _read_column(safe_book, out, 2)
+    counts = _read_column(safe_book, out, 3)
+    cumulative = _read_column(safe_book, out, 4)
+    bins = [
+        {"center": c, "end": e, "count": n, "cumulative": cu}
+        for c, e, n, cu in zip(centers, ends, counts, cumulative)
+    ]
+    return json.dumps({"sheet": f"[{safe_book}]{out}", "bins": bins})
