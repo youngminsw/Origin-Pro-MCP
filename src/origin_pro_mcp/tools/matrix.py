@@ -5,11 +5,22 @@ from ..origin_connection import (
     execute_labtalk,
     get_lt_str,
     get_origin,
+    graph_names,
     matrix_names,
     require_matrix,
     require_worksheet,
 )
-from ..labtalk_safe import labtalk_name, positive_column, positive_int
+from ..labtalk_safe import labtalk_choice, labtalk_name, positive_column, positive_int
+
+# matrix plot type -> Origin plot ID (verified live on Origin 2020)
+_MATRIX_PLOT_TYPES = {
+    "surface": 103,   # OpenGL 3D colormap surface
+    "contour": 226,   # filled contour
+    "heatmap": 105,
+    "image": 220,
+}
+# Surface is OpenGL and must own its graph window.
+_MATRIX_OWN_GRAPH = {"surface"}
 
 # Origin stores empty matrix cells as a large sentinel (~ -1.23e308 /
 # 1.23e-300); treat anything this large in magnitude as "missing".
@@ -171,3 +182,49 @@ def worksheet_to_matrix(
         )
         raise ValueError(msg)
     return f"Gridded [{safe_book}]{safe_sheet} into matrix [{name}]MSheet1 ({safe_rows}x{safe_cols})"
+
+
+@mcp.tool()
+def create_matrix_plot(
+    matrix_book: str,
+    plot_type: str = "heatmap",
+    graph_name: str = ""
+) -> str:
+    """Plot a matrix as a surface, contour, heatmap, or image.
+
+    Args:
+        matrix_book: Matrix book name (see create_matrix / worksheet_to_matrix)
+        plot_type: surface (3D), contour, heatmap, or image
+        graph_name: Optional name for the new graph
+
+    Returns:
+        Created graph name
+    """
+    safe_book = labtalk_name(matrix_book, "matrix_book")
+    safe_type = labtalk_choice(plot_type, _MATRIX_PLOT_TYPES, "plot_type")
+    pid = _MATRIX_PLOT_TYPES[safe_type]
+    target = require_matrix(safe_book)
+    o = get_origin()
+    requested = labtalk_name(graph_name, "graph_name") if graph_name else None
+
+    if safe_type in _MATRIX_OWN_GRAPH:
+        # OpenGL surface must own its graph; activate the matrix (a
+        # non-graph window) so plotm creates a fresh 3D window.
+        execute_labtalk(f"win -a {safe_book};")
+        before = set(graph_names())
+        if not execute_labtalk(f"plotm im:={target}! plot:={pid};"):
+            msg = f"Could not plot matrix {target} as {safe_type}."
+            raise ValueError(msg)
+        new = set(graph_names()) - before
+        name = new.pop() if new else get_lt_str("page.name$")
+        if requested and name != requested and execute_labtalk(
+            f"win -r {name} {requested};"
+        ):
+            name = requested
+    else:
+        name = o.CreatePage(3, requested or "MatrixPlot", "origin")
+        if not execute_labtalk(f"plotm im:={target}! plot:={pid} ogl:=[{name}]Layer1;"):
+            execute_labtalk(f"win -cd {name};")
+            msg = f"Could not plot matrix {target} as {safe_type}."
+            raise ValueError(msg)
+    return f"Created graph: {name} ({safe_type} from {safe_book})"

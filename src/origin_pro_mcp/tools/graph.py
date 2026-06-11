@@ -6,6 +6,7 @@ from ..origin_connection import (
     activate_window,
     execute_labtalk,
     get_origin,
+    graph_names,
     require_graph,
     require_worksheet,
 )
@@ -31,12 +32,16 @@ PLOT_TYPES = {
     "pie": 225,
     "histogram": 219,    # Y range
     "contour": 243,      # XYZ range
+    "3d_scatter": 240,   # XYZ range (OpenGL, owns its graph)
 }
 
 # Take a single Y column instead of an X,Y pair.
 _Y_ONLY_TYPES = {"histogram"}
 # Need X, Y, Z columns and are drawn with plotxyz.
-_XYZ_TYPES = {"contour"}
+_XYZ_TYPES = {"contour", "3d_scatter"}
+# OpenGL 3D types that must own their graph window — plotting them into a
+# pre-made 2D page collapses them to an empty/flat projection.
+_OWN_GRAPH_TYPES = {"3d_scatter"}
 
 # Clipboard-based export (CopyPage) only produces raster images
 EXPORT_IMAGE_FORMATS = {"png", "jpg", "tif", "bmp"}
@@ -151,21 +156,42 @@ def create_graph(
                 "title.x = 50; title.y = 95;"
             )
 
-    # --- XYZ plots: contour (drawn with plotxyz) ---
+    # --- XYZ plots: contour (2D) and 3d_scatter (OpenGL), via plotxyz ---
     if safe_plot_type in _XYZ_TYPES:
         if z_col < 1:
             msg = f"plot_type '{safe_plot_type}' requires z_col (1-based Z column)."
             raise ValueError(msg)
         safe_z_col = positive_column(z_col, "z_col")
         xyz = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col},{safe_z_col})"
-        name = o.CreatePage(3, safe_graph_name, "origin")
-        if not execute_labtalk(f"plotxyz iz:={xyz} plot:={ptype} ogl:=[{name}]Layer1;"):
-            execute_labtalk(f"win -cd {name};")
-            msg = (
-                f"Could not plot {xyz}. Check that columns "
-                f"{safe_x_col}, {safe_y_col}, {safe_z_col} contain data."
-            )
-            raise ValueError(msg)
+        if safe_plot_type in _OWN_GRAPH_TYPES:
+            # Activate the source sheet (a non-graph window) so plotxyz
+            # creates a fresh OpenGL 3D graph instead of merging into an
+            # active 2D graph and collapsing to a flat projection.
+            execute_labtalk(f"win -a {safe_book};")
+            before = set(graph_names())
+            if not execute_labtalk(f"plotxyz iz:={xyz} plot:={ptype};"):
+                msg = (
+                    f"Could not create a 3D plot from {xyz}. Check that the "
+                    "columns contain numeric data."
+                )
+                raise ValueError(msg)
+            new = set(graph_names()) - before
+            name = new.pop() if new else o.LTStr("page.name$")
+            if name != safe_graph_name and execute_labtalk(
+                f"win -r {name} {safe_graph_name};"
+            ):
+                name = safe_graph_name
+        else:
+            name = o.CreatePage(3, safe_graph_name, "origin")
+            if not execute_labtalk(
+                f"plotxyz iz:={xyz} plot:={ptype} ogl:=[{name}]Layer1;"
+            ):
+                execute_labtalk(f"win -cd {name};")
+                msg = (
+                    f"Could not plot {xyz}. Check that columns "
+                    f"{safe_x_col}, {safe_y_col}, {safe_z_col} contain data."
+                )
+                raise ValueError(msg)
         _set_title()
         return f"Created graph: {name} ({safe_plot_type})"
 

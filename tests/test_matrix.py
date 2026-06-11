@@ -62,3 +62,18 @@ def test_worksheet_to_matrix_unknown_sheet(fake_origin):
 
     with pytest.raises(ValueError, match="not found"):
         worksheet_to_matrix("Ghost", "Sheet1", 1, 2, 3)
+
+
+def test_create_matrix_plot_unknown_matrix(fake_origin):
+    from origin_pro_mcp.tools.matrix import create_matrix_plot
+
+    with pytest.raises(ValueError, match="not found"):
+        create_matrix_plot("Ghost", plot_type="heatmap")
+
+
+def test_create_matrix_plot_rejects_bad_type(fake_origin):
+    from origin_pro_mcp.tools.matrix import create_matrix_plot
+
+    fake_origin.matrices = [FakeMatrix("Mtx")]
+    with pytest.raises(ValueError, match="plot_type must be one of"):
+        create_matrix_plot("Mtx", plot_type="wireframe")
