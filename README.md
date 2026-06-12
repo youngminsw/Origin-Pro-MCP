@@ -222,7 +222,7 @@ always exposes exactly the tools listed below.
 | `create_matrix` | Create a matrix book |
 | `set_matrix_data` / `get_matrix_data` | Write / read a 2D grid |
 | `worksheet_to_matrix` | Grid scattered XYZ into a matrix (xyz2mat) |
-| `create_matrix_plot` | Surface (3D), contour, heatmap, or image from a matrix |
+| `create_matrix_plot` | Surface (3D), contour, heatmap, or image from a matrix (with a data-linked color scale) |
 
 ### Graphing
 | Tool | Description |
@@ -237,7 +237,7 @@ always exposes exactly the tools listed below.
 | `add_reference_line` | Horizontal/vertical line at a value |
 | `add_line` | Straight line between two data points |
 | `add_arrow` | Single/double-headed arrow between two points |
-| `apply_color_map` | Apply a palette (Fire, Rainbow, …) to a colormapped graph |
+| `apply_color_map` | Apply a colormap; bundles viridis/cividis/plasma/inferno/magma (colorblind-safe) plus Origin built-ins |
 | `set_colormap_levels` | Set the Z color-scale range |
 | `add_text_annotation` | Place a text label at data coordinates |
 | `export_graph` | Export via clipboard (page size) |

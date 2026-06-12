@@ -27,6 +27,15 @@ _MATRIX_PLOT_TYPES = {
 }
 # Surface is OpenGL and must own its graph window.
 _MATRIX_OWN_GRAPH = {"surface"}
+# Each plot type is created from its Origin system template so it carries a
+# data-linked color scale by default (the skill requires a labeled scale on
+# every colormap plot). Verified live on Origin 2020.
+_MATRIX_TEMPLATES = {
+    "surface": "glcmap",   # OpenGL Z-colored surface + color scale
+    "contour": "CONTOUR",  # filled contour + color scale
+    "heatmap": "HeatMap",  # cell heatmap + color scale
+    "image": "image",      # image plot + color scale
+}
 
 # Origin stores empty matrix cells as a large sentinel (~ -1.23e308 /
 # 1.23e-300); treat anything this large in magnitude as "missing".
@@ -214,7 +223,6 @@ def create_matrix_plot(
     safe_type = labtalk_choice(plot_type, _MATRIX_PLOT_TYPES, "plot_type")
     pid = _MATRIX_PLOT_TYPES[safe_type]
     target = require_matrix(safe_book)
-    o = get_origin()
     requested = labtalk_name(graph_name, "graph_name") if graph_name else None
     # The matrix long name flows into %(?Z) → Z-axis title + color scale.
     if z_label:
@@ -222,26 +230,23 @@ def create_matrix_plot(
             f'win -a {safe_book}; wks.col1.lname$ = {labtalk_string(z_label, "z_label")};'
         )
 
-    if safe_type in _MATRIX_OWN_GRAPH:
-        # OpenGL color-map surface must own its graph; activate the matrix
-        # (a non-graph window) so plotm creates a fresh 3D window. The
-        # `glcmap` template makes the surface colored by Z (a plain plot:=103
-        # renders a single-color mesh).
-        execute_labtalk(f"win -a {safe_book};")
-        before = set(graph_names())
-        if not execute_labtalk(f"plotm im:={target}! ogl:=<new template:=glcmap>;"):
-            msg = f"Could not plot matrix {target} as {safe_type}."
-            raise ValueError(msg)
-        new = set(graph_names()) - before
-        name = new.pop() if new else get_lt_str("page.name$")
-        if requested and name != requested and execute_labtalk(
-            f"win -r {name} {requested};"
-        ):
-            name = requested
-    else:
-        name = o.CreatePage(3, requested or "MatrixPlot", "origin")
-        if not execute_labtalk(f"plotm im:={target}! plot:={pid} ogl:=[{name}]Layer1;"):
-            execute_labtalk(f"win -cd {name};")
-            msg = f"Could not plot matrix {target} as {safe_type}."
-            raise ValueError(msg)
+    tmpl = _MATRIX_TEMPLATES[safe_type]
+    # Surface is an OpenGL Z-colored mesh (no 2D plot id); its colormap comes
+    # from the glcmap template. The 2D types (contour/heatmap/image) take their
+    # plot id plus the matching template, which supplies the data-linked color
+    # scale. Activate the matrix first so plotm spawns a fresh graph window.
+    plot_clause = "" if safe_type in _MATRIX_OWN_GRAPH else f"plot:={pid} "
+    execute_labtalk(f"win -a {safe_book};")
+    before = set(graph_names())
+    if not execute_labtalk(
+        f"plotm im:={target}! {plot_clause}ogl:=<new template:={tmpl}>;"
+    ):
+        msg = f"Could not plot matrix {target} as {safe_type}."
+        raise ValueError(msg)
+    new = set(graph_names()) - before
+    name = new.pop() if new else get_lt_str("page.name$")
+    if requested and name != requested and execute_labtalk(
+        f"win -r {name} {requested};"
+    ):
+        name = requested
     return f"Created graph: {name} ({safe_type} from {safe_book})"

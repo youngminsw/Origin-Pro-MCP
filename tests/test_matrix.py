@@ -87,3 +87,38 @@ def test_create_matrix_plot_z_label_sets_matrix_longname(fake_origin):
     assert any(
         'wks.col1.lname$ = "Intensity (a.u.)"' in s for s in fake_origin.executed
     )
+
+
+def test_create_matrix_plot_uses_colorscale_templates(fake_origin):
+    """Each matrix plot type must plot from the system template that carries a
+    data-linked color scale (regression guard for the missing-colorbar fix)."""
+    from origin_pro_mcp.tools.matrix import create_matrix_plot
+
+    cases = {"contour": "CONTOUR", "heatmap": "HeatMap",
+             "image": "image", "surface": "glcmap"}
+    for plot_type, tmpl in cases.items():
+        fake_origin.matrices = [FakeMatrix("Mtx")]
+        fake_origin.executed = []
+        create_matrix_plot("Mtx", plot_type=plot_type)
+        assert any(
+            f"template:={tmpl}" in s and "plotm" in s
+            for s in fake_origin.executed
+        ), f"{plot_type} did not plot via template {tmpl}"
+
+
+def test_create_matrix_plot_surface_omits_plot_id(fake_origin):
+    """Surface is a Z-colored OpenGL mesh from glcmap and must NOT pass a 2D
+    plot id; the 2D types must pass theirs."""
+    from origin_pro_mcp.tools.matrix import create_matrix_plot
+
+    fake_origin.matrices = [FakeMatrix("Mtx")]
+    fake_origin.executed = []
+    create_matrix_plot("Mtx", plot_type="surface")
+    plotm = next(s for s in fake_origin.executed if "plotm" in s)
+    assert "plot:=" not in plotm
+
+    fake_origin.matrices = [FakeMatrix("Mtx")]
+    fake_origin.executed = []
+    create_matrix_plot("Mtx", plot_type="contour")
+    plotm = next(s for s in fake_origin.executed if "plotm" in s)
+    assert "plot:=226" in plotm

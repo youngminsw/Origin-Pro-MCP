@@ -65,26 +65,54 @@ everywhere, readable bold labels), adapted to surfaces, contours,
 heatmaps, and 3D scatter.
 
 - **The colormap is the 3D palette — choose it as carefully as 2D colors.**
-  Use a perceptually-uniform, colorblind- and grayscale-safe map. Good
-  built-ins that load by single-word name with `apply_color_map`:
-  `Heatmap4ColorBlind` and `BlueGreenYellow` (sequential magnitude),
-  `RedWhiteBlue` (diverging / signed data centered on zero), `GrayScale`
-  (print-safe). Avoid plain `Rainbow`/`Jet` for quantitative data — they
-  invent false boundaries and fail in grayscale. (Origin's
-  `Rainbow Isolum`/`Rainbow Balanced` are better rainbows but their names
-  contain spaces, so apply them in the GUI for now.)
+  Use a perceptually-uniform, colorblind- and grayscale-safe map. The server
+  **bundles the gold-standard scientific colormaps** (viridis/cividis were
+  added to Origin only after 2020, so they ship with the MCP and load by name
+  via `apply_color_map`): `Viridis` (default, best general sequential),
+  `Cividis` (optimized for red-green CVD), `Plasma`/`Inferno`/`Magma`
+  (high-contrast sequential). Origin's own colorblind-safe built-ins also
+  work: `Heatmap4ColorBlind`, `GrayScale` (print-safe), `RedWhiteBlue`
+  (diverging). **Avoid `Rainbow`/`Jet` AND `BlueGreenYellow`** for
+  quantitative data — they are not perceptually uniform, invent false
+  boundaries, and fail in grayscale. Verify by eye: a good map reads as a
+  smooth light→dark ramp with no banding.
+- **Pastel/muted aesthetic:** to keep colormaps in the same soft, low-saturation
+  family as the figA/B/C pastel series, use the bundled `PastelViridis` /
+  `PastelCividis` (viridis/cividis blended toward white) instead of the punchy
+  full-saturation versions. They stay perceptually-ordered and colorblind-safe
+  but read soft, matching muted 2D series colors.
 - **Sequential vs. diverging:** sequential map for one-directional
   magnitude (0→max); diverging map with the midpoint at 0 for signed data
   (deviation, difference, charge).
-- **Always show a labeled color scale with units** — it is the legend of a
-  colormap plot. Never ship a heatmap/contour without it.
+- **A labeled color scale is the legend of a colormap plot — never ship a
+  heatmap/contour/surface without it.** `create_matrix_plot` now plots every
+  type (surface/contour/heatmap/image) from the Origin system template that
+  carries a data-linked color scale, so the scale appears automatically and
+  always reflects the real palette and Z range. To match the rest of the
+  figure (figA-style bold Arial), drive the `Spectrum1` object via
+  `run_labtalk`. **The numeric labels only honour `bold`/`font` after you turn
+  off auto-display first:**
+  `Spectrum1.labels.autodisp=0; Spectrum1.labels.bold=1; Spectrum1.labels.fsize=14; Spectrum1.labels.font=font(Arial); Spectrum1.barthick=130;`
+  Keep the numeric labels SHORT — set the format explicitly so you don't get
+  `0.5000`/`1.000`: `Spectrum1.labels.numdisp=1; Spectrum1.labels.decplaces=1;`
+  (→ `0.0, 0.5, 1.0`). Pin the over/under-range colors to the map's ends so the
+  bar has no white speck on top or black block on the bottom:
+  `layer.cmap.colorAbove=color(254,243,146); layer.cmap.colorBelow=color(162,128,170);`.
+  Bold the scale title with the `\b(...)` escape (a plain `.title$` is not
+  bold): `Spectrum1.title$="\b(Intensity (a.u.))";`.
 - **Set the Z range honestly** with `set_colormap_levels(z_min, z_max)` to
   the real data range; don't clip features into saturation just to boost
   contrast, and state the range.
-- **Label every axis with units, including Z.** On a colormap surface the
-  Z-axis title and the color-scale title both come from the matrix long
-  name — set it with `create_matrix_plot(..., z_label="Intensity (a.u.)")`.
-  X/Y titles use `set_axis_labels(x_label=, y_label=)`.
+- **Label every axis with units, including Z — and make EVERY text element
+  bold Arial, not just X/Y.** The skill's reference figures bold all titles
+  and tick labels; a half-bolded figure looks inconsistent. On 3D plots the
+  axis-title objects are `xb` (X), `yl` (Y) and **`zf` (Z)** — note `zl`/`zt`
+  silently no-op for the OpenGL Z title — so bold the Z title with
+  `zf.text$="\b(Intensity (a.u.))";`. Bold the tick labels through the layer:
+  `layer.x.label.bold=1; layer.y.label.bold=1; layer.z.label.bold=1;`. The
+  matrix long name (set via `create_matrix_plot(..., z_label=)`) still seeds
+  both the Z-axis title and the color-scale title; X/Y titles also via
+  `set_axis_labels`.
 - **Prefer a 2D contour or heatmap over a 3D surface when exact values
   matter** — a top-down colormap is easier to read off than a tilted
   surface. Use the 3D surface for shape/intuition, the contour for
@@ -92,14 +120,41 @@ heatmaps, and 3D scatter.
 - **Keep surfaces uncluttered:** a light mesh or a smooth color-mapped
   surface reads better than a dense wireframe; pick one clear viewing
   angle and keep it consistent across a figure set.
-- **3D scatter:** make symbols large enough to read at print size (the
-  same "bigger symbols" lesson as 2D) and rely on Z color/height, not tiny
-  dots, to carry the third dimension. Its X/Y/Z axis titles come from the
-  source column long names, so name the columns with units up front
-  (e.g. `column_names="X (mm),Y (mm),Signal (a.u.)"`).
+- **3D scatter:** the default Origin 3D scatter is tiny red dots with red
+  droplines — restyle it to the figure-set palette and a readable size with
+  `run_labtalk`: `set %C -c color(93,143,179); set %C -z 12; set %C -kf 1;`
+  (steel blue, size 12, solid fill). Changing the symbol color also recolors
+  the droplines, so they fade into a subtle guide instead of dominating. Rely
+  on Z color/height — not tiny dots — to carry the third dimension. Its X/Y/Z
+  axis titles come from the source column long names, so name the columns with
+  units up front (e.g. `column_names="X (mm),Y (mm),Signal (a.u.)"`).
 - **Match the rest of the figure set:** same fonts, same export pixel size
   (`export_graph_sized`), same labeling conventions as the 2D panels so a
   mixed figure looks like one family.
+- **Keep the 3D box honest and uncrowded.** Give X and Y the *same* range and
+  origin so the floor reads as a square grid (e.g. both 0→10); a matrix's
+  default 1→N coordinates look lopsided, so set them with
+  `run_labtalk("range mm=[Book]MSheet1; mm.x1=0; mm.x2=10; mm.y1=0; mm.y2=10;")`
+  before plotting. Use few, short major ticks (3 per axis reads cleanest on a
+  small 3D cube — e.g. `layer.x.from=0; layer.x.to=10; layer.x.inc=5;` and
+  `layer.x.minor=0; layer.x.majorLen=3;`), and bold the tick numbers
+  (`layer.x.label.bold=1`). Keep the color scale compact so it doesn't dwarf
+  the cube: `Spectrum1.barthick=130;` plus 3 labels via
+  `Spectrum1.levels.major=3; Spectrum1.levels.from=0; Spectrum1.levels.to=1; Spectrum1.levels.inc=1; Spectrum1.levels.inc$=0.5;`.
+- **Put the origin (0,0) at the front corner so X=0 and Y=0 meet at one point**
+  (common-sense layout). Origin draws X/Y tick labels on the two front edges,
+  so reverse the X axis to bring its 0 to the front:
+  `layer.x.from=10; layer.x.to=0; layer.x.inc=5;` with Y normal
+  (`layer.y.from=0; layer.y.to=10`). Pick a viewing-friendly data layout (e.g.
+  tall feature far from the origin) so the front peak doesn't hide the rest.
+- **Origin 2020 OpenGL caveat (verified):** axis rotation/tilt
+  (`xrotate`/`zrotate`/`psi`), tick-label repositioning, and per-tick hiding are
+  all **no-ops via LabTalk** in this version. Consequence: the Z bottom tick
+  label collides with the X far-corner label at the Z base, and it cannot be
+  nudged apart by script. Fix by hiding the Z tick NUMBERS
+  (`layer.z.label.color=color(white)`) and keeping the bold Z title — read Z
+  magnitude from the color scale (surfaces). Only `from/to/inc`, tick length,
+  bold, font, and label color respond to LabTalk on OpenGL axes.
 - Export once, inspect, then adjust colormap, Z range, viewing angle, and
   label sizes — exactly the 2D "export and inspect" loop.
 
@@ -108,7 +163,7 @@ Verified colormap-surface recipe (Origin 2020):
 ```text
 worksheet_to_matrix(data_book="D", data_sheet="Sheet1", x_col=1, y_col=2, z_col=3)
 create_matrix_plot(matrix_book="Matrix", plot_type="surface", z_label="Intensity (a.u.)")
-apply_color_map(graph_name="Graph1", palette="Heatmap4ColorBlind")
+apply_color_map(graph_name="Graph1", palette="Viridis")
 set_colormap_levels(graph_name="Graph1", z_min=0, z_max=1)
 set_axis_labels(graph_name="Graph1", x_label="X (mm)", y_label="Y (mm)")
 export_graph_sized(graph_name="Graph1", file_path="C:\\fig\\surface.png", width=1600)
@@ -260,7 +315,7 @@ first, then plot:
 ```text
 worksheet_to_matrix(data_book="D", data_sheet="Sheet1", x_col=1, y_col=2, z_col=3)
 create_matrix_plot(matrix_book="Matrix", plot_type="surface")   # or contour, heatmap, image
-apply_color_map(graph_name="Graph1", palette="Fire")            # Fire, Rainbow, GrayScale, Maple, ...
+apply_color_map(graph_name="Graph1", palette="Viridis")        # Viridis, Cividis, Plasma, Inferno, Magma, GrayScale, ...
 set_colormap_levels(graph_name="Graph1", z_min=0, z_max=1)
 ```
 

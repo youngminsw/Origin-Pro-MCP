@@ -1,4 +1,6 @@
 import os
+import shutil
+import tempfile
 import time
 import uuid
 
@@ -593,27 +595,71 @@ def export_graph_sized(
     return f"Exported {safe_graph} to {path} ({safe_width}px wide, {os.path.getsize(path)} bytes)"
 
 
+# Perceptually-uniform, colorblind-safe colormaps that Origin 2020 does NOT
+# ship (viridis/cividis/etc. were added to Origin only in later versions). We
+# bundle them as RIFF .pal files and load them by full path. Names are matched
+# case-insensitively against this directory.
+_BUNDLED_PAL_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), os.pardir, "palettes")
+)
+
+
+def _bundled_palette_path(name: str) -> str:
+    """Full path to a bundled .pal whose stem matches `name` (case-insensitive),
+    or "" if none. Bundled maps win over same-named built-ins."""
+    if not name or not os.path.isdir(_BUNDLED_PAL_DIR):
+        return ""
+    want = f"{name.strip().lower()}.pal"
+    for fn in os.listdir(_BUNDLED_PAL_DIR):
+        if fn.lower() == want:
+            return os.path.join(_BUNDLED_PAL_DIR, fn)
+    return ""
+
+
 @mcp.tool()
-def apply_color_map(graph_name: str, palette: str = "Fire") -> str:
+def apply_color_map(graph_name: str, palette: str = "Viridis") -> str:
     """Apply a color palette to a contour/heatmap/surface graph.
 
     Args:
         graph_name: Graph name (must hold a colormapped plot)
-        palette: Palette name (a built-in Origin .pal), e.g. Fire,
-            Rainbow, GrayScale, Maple, Thermometer, Temperature
+        palette: Palette name. Bundled perceptually-uniform, colorblind-safe
+            maps (recommended for quantitative data): Viridis, Cividis, Plasma,
+            Inferno, Magma; muted/pastel variants matching a soft figure
+            aesthetic: PastelViridis, PastelCividis. Also accepts built-in
+            Origin .pal names, e.g. Heatmap4ColorBlind, GrayScale, RedWhiteBlue,
+            Fire, Temperature.
 
     Returns:
         Success message
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
-    safe_palette = labtalk_name(palette, "palette")
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
     execute_labtalk("layer1;")
-    if not execute_labtalk(f"layer.cmap.load({safe_palette}.pal); layer.cmap.updateScale();"):
-        msg = f"Could not apply palette '{safe_palette}' to {safe_graph}."
+
+    bundled = _bundled_palette_path(palette)
+    if bundled:
+        # Copy to a clean, space-free temp path so LabTalk's load never trips on
+        # spaces in the install path (e.g. "My Drive"). The file is guaranteed
+        # to exist, so load cannot raise Origin's modal "file not found" dialog.
+        disp = os.path.splitext(os.path.basename(bundled))[0]
+        tmp = os.path.join(tempfile.gettempdir(), f"opm_{disp}.pal")
+        try:
+            shutil.copyfile(bundled, tmp)
+        except OSError as exc:
+            msg = f"Could not stage bundled palette '{disp}': {exc}"
+            raise ValueError(msg) from exc
+        load_arg = f'"{tmp}"'
+    else:
+        disp = labtalk_name(palette, "palette")
+        load_arg = f"{disp}.pal"
+
+    if not execute_labtalk(
+        f"layer.cmap.load({load_arg}); layer.cmap.updateScale();"
+    ):
+        msg = f"Could not apply palette '{disp}' to {safe_graph}."
         raise ValueError(msg)
-    return f"Applied '{safe_palette}' palette to {safe_graph}"
+    return f"Applied '{disp}' palette to {safe_graph}"
 
 
 @mcp.tool()

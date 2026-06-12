@@ -80,6 +80,27 @@ def test_apply_color_map_runs(fake_origin):
     apply_color_map("Graph1", "Fire")
     assert any("layer.cmap.load(Fire.pal)" in s for s in fake_origin.executed)
 
+def test_apply_color_map_bundled_viridis_full_path(fake_origin):
+    """Bundled perceptually-uniform maps (viridis/cividis/...) are not Origin
+    2020 built-ins, so they must be loaded from the bundled .pal by full,
+    quoted path (regression for the colorblind-safe palette feature)."""
+    from origin_pro_mcp.tools.graph import apply_color_map
+
+    apply_color_map("Graph1", "Viridis")
+    loads = [s for s in fake_origin.executed if "layer.cmap.load(" in s]
+    assert loads, "no cmap load issued"
+    assert any('opm_Viridis.pal"' in s and "load(\"" in s for s in loads), loads
+
+
+def test_bundled_palettes_present():
+    """The viridis-class .pal files must ship inside the package."""
+    import os
+    from origin_pro_mcp.tools.graph import _BUNDLED_PAL_DIR
+
+    have = {f.lower() for f in os.listdir(_BUNDLED_PAL_DIR)}
+    for name in ("viridis.pal", "cividis.pal"):
+        assert name in have, (name, have)
+
 
 def test_set_colormap_levels_bad_range(fake_origin):
     from origin_pro_mcp.tools.graph import set_colormap_levels
