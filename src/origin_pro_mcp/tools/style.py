@@ -294,13 +294,14 @@ def apply_publication_style(
             time.sleep(0.3)
 
     execute_labtalk('legend.fsize = 20; legend.font$ = "Arial"; legend.background = 0;')
-    place_legend_avoiding_data(safe_graph_name, safe_legend_position)
+    placement = place_legend_avoiding_data(safe_graph_name, safe_legend_position)
 
+    moved_out = " — moved outside the frame to avoid the data" if placement.startswith("outside") else ""
     return (
         f"Publication style applied to {safe_graph_name}: "
         f"{data_index} data plots styled (pastel palette, {_PUB_LINE_WIDTH_PT} pt lines), "
         f"Arial bold labels, inward ticks, closed frame, no grid, "
-        f"borderless bold legend"
+        f"borderless bold legend ({placement}){moved_out}"
     )
 
 
@@ -383,9 +384,10 @@ def set_legend(
         set_legend_entries(safe_graph_name, entry_list)
 
     execute_labtalk("legend.background = 0;")
-    place_legend_avoiding_data(safe_graph_name, safe_position)
+    placement = place_legend_avoiding_data(safe_graph_name, safe_position)
 
-    return f"Updated legend for {safe_graph_name}"
+    moved_out = " (moved outside the frame to avoid the data)" if placement.startswith("outside") else ""
+    return f"Updated legend for {safe_graph_name}: placed {placement}{moved_out}"
 
 
 def _set_tick_style_impl(

@@ -41,8 +41,12 @@ If unspecified, choose a conservative manuscript default: line+symbol for ordere
 - **The legend must never overlap the data.** `apply_publication_style`,
   `set_legend`, and the fit-curve path auto-place the legend in the
   emptiest corner (the requested `legend_position` is only a preference,
-  overridden when data sits there). If every corner is crowded, widen the
-  axis range to open a gap rather than letting the legend cover points.
+  overridden when data sits there). **When every inside corner still
+  overlaps data, the legend is automatically moved OUTSIDE the frame — to
+  the right of the plot, vertically centered — and the plot is shrunk to
+  make room.** The tool reports `outside-right` and "moved outside the frame
+  to avoid the data" when this happens; no manual step is needed. (A dense
+  scatter that fills all four corners is the usual trigger.)
 - Legends: borderless with bold entries (the style tools do this).
 - Use distinct symbols when colors alone may not survive grayscale printing.
 - Keep axis ranges tight but honest; do not crop important outliers.
@@ -363,7 +367,7 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | Bold axis title properties are unreliable | Use Origin text markup such as `\b(Label)` through typed tools |
 | `%C` plot shortcuts can fail through COM | Use plot names from `FindGraphLayer().DataPlots`; MCP style tools do this |
 | Legend text is awkward through COM | Set worksheet Long Names, rebuild with `legend -r`, then position |
-| Legend coordinates use data units | Set axis range before final legend placement; MCP tools keep the legend box inside the frame automatically |
+| Legend overlaps a dense plot with no clear corner | Handled automatically: the legend is moved outside the frame (right of the plot, vertically centered) with the plot shrunk — `place_legend_avoiding_data` returns `outside-right`. Origin clamps `legend.left` back inside the frame on the first assignment, so the tool sets it TWICE (with `legend.attach = 1`); the second assignment escapes the clamp |
 | `expGraph` needs a directory `path:=` + `filename:=` and `overwrite:=replace` (a full file path or missing args opens a dialog) | `export_graph` (clipboard, page size) and `export_graph_sized` (expGraph, `tr1.unit:=2 tr1.width:=` pixels) both handle this correctly |
 | Graphic-object arrowheads use `arrowEndShape`/`arrowBeginShape` (1=filled, 2=chevron), not `arrowEnd`/`arrowEndType` | `add_arrow` draws the line and sets `arrowEndShape`; the begin/end length/width are `arrowEndLength`/`arrowEndWidth` |
 | Save a graph template with `save -t <window> <fullpath.otpu>` (or `-tj` for `.otp`) — both window and full path+extension are required or a dialog opens | `save_graph_template` supplies both, so it never opens a dialog |

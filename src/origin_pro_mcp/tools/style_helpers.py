@@ -207,22 +207,23 @@ def _corner_rect(values: dict, corner: str, pad: float = 0.03):
     return rx0, rx1, ry0, ry1
 
 
-def choose_legend_corner(graph_name: str, preferred: str | None = None) -> str:
-    """Pick the corner whose legend box overlaps the fewest data points.
+def choose_legend_corner_overlap(
+    graph_name: str, preferred: str | None = None
+) -> tuple[str, int]:
+    """(emptiest corner, how many data points its legend box still covers).
 
-    Guarantees the legend never sits on the data when any corner is
-    clear. Ties prefer `preferred`, then top-right, top-left, bottom-right,
-    bottom-left. Falls back to `preferred` (or top-right) if geometry or
-    data can't be read.
+    An overlap count of 0 means that corner is clean. When geometry or data
+    can't be read, returns (fallback, 0) — i.e. assume clear, preserving the
+    old corner-placement behavior.
     """
     fallback = preferred or "top-right"
     values = _read_legend_geometry(graph_name)
     if values is None:
-        return fallback
+        return fallback, 0
     xs, ys = _collect_xy(graph_name)
     points = [(x, y) for x, y in zip(xs, ys) if x is not None]
     if not points:
-        return fallback
+        return fallback, 0
     corners = ["top-right", "top-left", "bottom-right", "bottom-left"]
     counts = {}
     for corner in corners:
@@ -234,16 +235,87 @@ def choose_legend_corner(graph_name: str, preferred: str | None = None) -> str:
     order = ([preferred] if preferred else []) + corners
     for corner in order:
         if counts.get(corner) == fewest:
-            return corner
-    return fallback
+            return corner, fewest
+    return fallback, fewest
+
+
+def choose_legend_corner(graph_name: str, preferred: str | None = None) -> str:
+    """Pick the corner whose legend box overlaps the fewest data points."""
+    return choose_legend_corner_overlap(graph_name, preferred)[0]
+
+
+def _read_page_layout(graph_name: str):
+    """Page size + plot-box geometry + legend size, or None when unavailable.
+
+    `page.width/height` and `legend.left/top/width/height` are in page units;
+    `layer.left/top/width/height` are in % of the page (layer.unit == 1).
+    """
+    execute_labtalk(f"win -a {graph_name};")
+    reads = {
+        "page_w": "page.width",
+        "page_h": "page.height",
+        "layer_left": "layer.left",
+        "layer_top": "layer.top",
+        "layer_w": "layer.width",
+        "layer_h": "layer.height",
+        "legend_w": "legend.width",
+        "legend_h": "legend.height",
+    }
+    vals = {}
+    for key, expr in reads.items():
+        if not execute_labtalk(f"__mcp_{key} = {expr};"):
+            return None
+        vals[key] = get_lt_var(f"__mcp_{key}")
+    if vals["page_w"] <= 0 or vals["layer_w"] <= 0:
+        return None
+    return vals
+
+
+_OUTSIDE_RIGHT_EDGE_PCT = 66.0  # plot-box right edge after shrinking, % of page
+
+
+def _place_legend_outside(graph_name: str) -> bool:
+    """Shrink the plot and park the legend in the freed strip to the RIGHT.
+
+    Used when no inside corner is clear. The plot box is shrunk to a fixed
+    right edge (so repeated calls converge to the same layout — idempotent),
+    then the legend is moved just past that edge and vertically centered.
+    `legend.attach = 1` plus setting `legend.left` TWICE is required: Origin
+    clamps the first assignment back inside the frame, and only the second
+    escapes it (confirmed against Origin 2020). Returns True on success, False
+    if geometry is unavailable or there isn't room (caller falls back to a
+    corner).
+    """
+    vals = _read_page_layout(graph_name)
+    if vals is None:
+        return False
+    page_w, page_h = vals["page_w"], vals["page_h"]
+    legend_w, legend_h = vals["legend_w"], vals["legend_h"]
+    new_w = _OUTSIDE_RIGHT_EDGE_PCT - vals["layer_left"]
+    if new_w < 35.0:  # too cramped to free a usable strip
+        return False
+    execute_labtalk(f"win -a {graph_name}; layer.width = {new_w};")
+    plot_right = _OUTSIDE_RIGHT_EDGE_PCT / 100.0 * page_w
+    left = plot_right + 0.02 * page_w
+    left = min(left, page_w - legend_w - 0.01 * page_w)  # keep on the page
+    top = (vals["layer_top"] + vals["layer_h"] / 2.0) / 100.0 * page_h - legend_h / 2.0
+    # First left-set clamps inside the frame; the second escapes it.
+    execute_labtalk(f"legend.attach = 1; legend.left = {left};")
+    execute_labtalk(f"legend.left = {left}; legend.top = {top};")
+    return True
 
 
 def place_legend_avoiding_data(graph_name: str, preferred: str | None = None) -> str:
-    """Place the legend at the emptiest corner so it never covers data.
+    """Place the legend so it never covers data.
 
-    Returns the corner used.
+    Prefers the emptiest inside corner; when every corner still overlaps data,
+    falls back to placing the legend OUTSIDE the frame on the right (shrinking
+    the plot to make room). Returns the placement used ("top-right", …, or
+    "outside-right").
     """
     safe_graph_name = labtalk_name(graph_name, "graph_name")
-    corner = choose_legend_corner(safe_graph_name, preferred)
+    corner, overlap = choose_legend_corner_overlap(safe_graph_name, preferred)
+    if overlap > 0 and _place_legend_outside(safe_graph_name):
+        return "outside-right"
     _place_legend(safe_graph_name, corner)
     return corner
