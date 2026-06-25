@@ -8,13 +8,27 @@ _NAME_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _WSL_PATH_RE: Final = re.compile(r"^/mnt/([A-Za-z])(/.*)?$")
 _VARIABLE_RE: Final = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*[$]?$")
 _STRING_BLOCKLIST: Final = {'"', "\r", "\n"}
-_LABTALK_BLOCKED_PATTERNS: Final = (
-    re.compile(r"\b(delete|del|save|saveas|open|file|exit|dll|dde|run|expgraph)\b", re.IGNORECASE),
-    re.compile(r"\b(doc)\s*-\s*[sn]\b", re.IGNORECASE),
-    re.compile(r"\b(win|window)\s*-\s*c[dt]?\b", re.IGNORECASE),
-    re.compile(r"\blabel\s*-\s*r\b", re.IGNORECASE),
-    re.compile(r"\b(getfilename|getsavename)\b", re.IGNORECASE),
-    re.compile(r"\b(system\.|system\s*\()", re.IGNORECASE),
+
+# Confirm-list: real LabTalk command tokens that can touch files, the project,
+# or the system. Everything else (incl. save, saveAs, open, expGraph, file) is
+# allowed by default. Each entry is (human label, pattern matched against the
+# string/comment-stripped script). Anchored to whole-token / command syntax so
+# identifiers merely *containing* a gated word (e.g. `delete_me`, `myrun`,
+# `system_id`) never trigger.
+_LABTALK_CONFIRM_PATTERNS: Final = (
+    ("system.", re.compile(r"\bsystem\s*\.", re.IGNORECASE)),
+    ("system(", re.compile(r"\bsystem\s*\(", re.IGNORECASE)),
+    ("run.section", re.compile(r"\brun\s*\.\s*section\b", re.IGNORECASE)),
+    ("run -", re.compile(r"\brun\s*-\s*[A-Za-z]", re.IGNORECASE)),
+    ("dll", re.compile(r"\bdll\b", re.IGNORECASE)),
+    ("dde", re.compile(r"\bdde\b", re.IGNORECASE)),
+    ("getfilename", re.compile(r"\bgetfilename\b", re.IGNORECASE)),
+    ("getsavename", re.compile(r"\bgetsavename\b", re.IGNORECASE)),
+    ("doc -s", re.compile(r"\bdoc\s*-\s*s\b", re.IGNORECASE)),
+    ("doc -n", re.compile(r"\bdoc\s*-\s*n\b", re.IGNORECASE)),
+    ("del/delete", re.compile(r"\b(?:del|delete)\b", re.IGNORECASE)),
+    ("win -c/-cd/-ct", re.compile(r"\bwin\s*-\s*c[dt]?\b", re.IGNORECASE)),
+    ("label -r", re.compile(r"\blabel\s*-\s*r\b", re.IGNORECASE)),
 )
 
 
@@ -106,10 +120,94 @@ def positive_int(value: int, field: str) -> int:
     return value
 
 
+def _strip_strings_and_comments(script: str) -> str:
+    """Blank out string literals and comments so command keywords inside them
+    never trigger the confirm gate.
+
+    LabTalk strings are double-quoted; comments are `//` to end-of-line and
+    `/* ... */` blocks. Stripped characters are replaced with spaces (newlines
+    preserved) so token boundaries and match offsets are unaffected.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(script)
+    state = "normal"  # normal | string | line_comment | block_comment
+    while i < n:
+        ch = script[i]
+        nxt = script[i + 1] if i + 1 < n else ""
+        if state == "normal":
+            if ch == '"':
+                state = "string"
+                out.append(" ")
+                i += 1
+            elif ch == "/" and nxt == "/":
+                state = "line_comment"
+                out.append("  ")
+                i += 2
+            elif ch == "/" and nxt == "*":
+                state = "block_comment"
+                out.append("  ")
+                i += 2
+            else:
+                out.append(ch)
+                i += 1
+        elif state == "string":
+            # An unescaped double-quote closes the string.
+            if ch == '"':
+                state = "normal"
+            out.append("\n" if ch == "\n" else " ")
+            i += 1
+        elif state == "line_comment":
+            if ch == "\n":
+                state = "normal"
+                out.append("\n")
+            else:
+                out.append(" ")
+            i += 1
+        else:  # block_comment
+            if ch == "*" and nxt == "/":
+                state = "normal"
+                out.append("  ")
+                i += 2
+            else:
+                out.append("\n" if ch == "\n" else " ")
+                i += 1
+    return "".join(out)
+
+
+def classify_labtalk_script(script: str) -> tuple[bool, bool, str]:
+    """Classify a LabTalk script for the run_labtalk confirm gate.
+
+    Allow-by-default: most operations (including save, saveAs, open, expGraph,
+    file) run freely. Only a narrow confirm-list of real command tokens that can
+    touch files, the project, or the system requires explicit confirmation.
+
+    String literals and comments are stripped before scanning, so keywords
+    inside `"..."`, `//`, or `/* ... */` never trigger.
+
+    Returns:
+        (ok, requires_confirm, reason). ``ok`` is always True — nothing is
+        hard-blocked. ``requires_confirm`` is True when a confirm-list token is
+        present, and ``reason`` names the earliest such token (else "").
+    """
+    cleaned = _strip_strings_and_comments(script)
+    best_start: int | None = None
+    best_label = ""
+    for label, pattern in _LABTALK_CONFIRM_PATTERNS:
+        match = pattern.search(cleaned)
+        if match is not None and (best_start is None or match.start() < best_start):
+            best_start = match.start()
+            best_label = label
+    if best_start is None:
+        return (True, False, "")
+    return (True, True, best_label)
+
+
 def safe_labtalk_script(value: str) -> str:
-    for pattern in _LABTALK_BLOCKED_PATTERNS:
-        match = pattern.search(value)
-        if match is not None:
-            msg = f"LabTalk command is blocked by the safety guard: {match.group(0)}"
-            raise ValueError(msg)
+    """Backward-compatible pass-through shim.
+
+    The old denylist hard-blocked core operations; gating now flows through
+    :func:`classify_labtalk_script` (used by run_labtalk with a confirm flag).
+    Nothing is hard-blocked here, so the script is returned unchanged.
+    """
     return value

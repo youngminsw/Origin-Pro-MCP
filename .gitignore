@@ -11,3 +11,6 @@ build/
 
 # GJC runtime/workflow state
 .gjc/
+
+# OMC runtime/session state
+.omc/

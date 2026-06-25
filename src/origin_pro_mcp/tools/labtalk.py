@@ -1,23 +1,41 @@
 from ..app import mcp
 from ..origin_connection import execute_labtalk, get_lt_var, get_lt_str
-from ..labtalk_safe import labtalk_variable, safe_labtalk_script
+from ..labtalk_safe import labtalk_variable, classify_labtalk_script
 
 @mcp.tool()
-def run_labtalk(script: str) -> str:
-    """Execute a LabTalk script in Origin Pro.
+def run_labtalk(script: str, confirm: bool = False) -> str:
+    """Execute a LabTalk script in Origin Pro — the universal escape hatch.
 
-    Use this for any Origin operation not covered by other tools.
-    LabTalk is Origin's built-in scripting language.
+    Use this for any Origin operation not covered by other tools. LabTalk is
+    Origin's built-in scripting language. Most operations (data, plotting,
+    styling, save, saveAs, open, expGraph, file, etc.) run freely.
+
+    A narrow confirm gate protects a few real command tokens that can touch
+    files, the project, or the system (e.g. `doc -s`/`doc -n`, `del`/`delete`,
+    `win -c`/`-cd`/`-ct`, `system.`/`system(`, `run.section`/`run -*`, `dll`,
+    `dde`, `getfilename`, `getsavename`, `label -r`). Keywords inside string
+    literals or comments never trigger the gate. When a gated token is present
+    and `confirm` is False, the script is NOT executed and a message naming the
+    token is returned; re-call with `confirm=True` to run it anyway.
 
     Args:
         script: LabTalk script to execute
+        confirm: Set True to run a script that uses a gated command token
 
     Returns:
-        Success/failure message
+        Success/failure message, or an actionable not-executed message when a
+        gated token is present and confirm is False
     """
-    safe_script = safe_labtalk_script(script)
-    success = execute_labtalk(safe_script)
-    return f"Executed {'successfully' if success else 'with errors'}: {safe_script}"
+    _ok, requires_confirm, reason = classify_labtalk_script(script)
+    if requires_confirm and not confirm:
+        return (
+            f"NOT EXECUTED. This script uses a gated command token ('{reason}') "
+            "that can affect files, the project, or the system. Review it, then "
+            "re-call run_labtalk with confirm=True to run it anyway.\n"
+            f"Script: {script}"
+        )
+    success = execute_labtalk(script)
+    return f"Executed {'successfully' if success else 'with errors'}: {script}"
 
 @mcp.tool()
 def get_labtalk_variable(name: str) -> str:
