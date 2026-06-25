@@ -72,6 +72,8 @@ For a local checkout before publishing/installing, point Windows `uvx` at the Wi
 
 Keep the command and args as separate JSON array entries. That avoids quoting problems when a Windows path contains spaces. If WSL cannot find `uvx.exe`, set `command` to the full WSL path for the Windows executable, for example `/mnt/c/Users/YOU/.local/bin/uvx.exe`.
 
+> **WSL users — the package must live on a Windows-local path, not a `\\wsl.localhost\...` (UNC) path.** The server runs a background daemon (`python -m origin_pro_mcp.daemon`); Windows cannot resolve a `-m` module or use a working directory over a UNC path, so launching it from a WSL-filesystem checkout fails silently (Origin never opens and a console window flashes). `uvx`/`pip install` already install to a Windows-local location, so they are unaffected. If you point at a local checkout, **clone it under a Windows drive** (e.g. `C:\Users\YOU\Origin-Pro-MCP`) and reference that path — do not point the MCP config at a repo inside the WSL filesystem.
+
 **Option B: pip install from PyPI**
 
 ```bash

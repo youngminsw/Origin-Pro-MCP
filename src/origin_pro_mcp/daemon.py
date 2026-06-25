@@ -1151,27 +1151,44 @@ class _InPackageFakeOrigin:
 # so two concurrent session launches can't mis-attribute each other's new PID,
 # and the captured PID is stashed on a thread-local that ``_real_origin_get_pid``
 # reads back on the SAME worker thread (factory + get_pid run sequentially there).
-_ORIGIN_IMAGE = "Origin64.exe"
+# Candidate Origin executable image names, across versions/bitness. Override
+# with ORIGIN_PRO_MCP_ORIGIN_IMAGE (comma-separated) for a non-standard install.
+# If none match, PID capture returns nothing and the watchdog's safe-fail guard
+# applies — graceful close + idle-exit still reclaim sessions, only the hard
+# force-kill backstop is unavailable.
+_DEFAULT_ORIGIN_IMAGES = ("Origin64.exe", "Origin.exe", "OriginPro.exe")
 _LAUNCH_LOCK = threading.Lock()
 _real_pid_tls = threading.local()
 
 
+def _origin_image_names() -> tuple:
+    override = os.environ.get("ORIGIN_PRO_MCP_ORIGIN_IMAGE")
+    if override:
+        return tuple(n.strip() for n in override.split(",") if n.strip())
+    return _DEFAULT_ORIGIN_IMAGES
+
+
 def _origin_process_pids() -> set:
-    """PIDs of all running ``Origin64.exe`` processes (Windows, best-effort)."""
+    """PIDs of all running Origin processes (Windows, best-effort).
+
+    Matches any of the candidate image names so it works across Origin
+    versions and 32/64-bit installs.
+    """
     import subprocess
 
-    out = subprocess.run(
-        ["tasklist", "/FI", f"IMAGENAME eq {_ORIGIN_IMAGE}", "/FO", "CSV", "/NH"],
-        capture_output=True, text=True,
-    ).stdout
     pids = set()
-    for line in out.splitlines():
-        line = line.strip()
-        if not line or _ORIGIN_IMAGE not in line:
-            continue
-        parts = [p.strip('"') for p in line.split('","')]
-        if len(parts) >= 2 and parts[1].isdigit():
-            pids.add(int(parts[1]))
+    for image in _origin_image_names():
+        out = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True,
+        ).stdout
+        for line in out.splitlines():
+            line = line.strip()
+            if not line or image not in line:
+                continue
+            parts = [p.strip('"') for p in line.split('","')]
+            if len(parts) >= 2 and parts[1].isdigit():
+                pids.add(int(parts[1]))
     return pids
 
 
