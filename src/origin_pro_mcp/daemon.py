@@ -1257,6 +1257,11 @@ def main(argv: Optional[list] = None) -> int:
     lockfile_path = os.environ.get("ORIGIN_PRO_MCP_LOCKFILE") or None
     _grace_env = os.environ.get("ORIGIN_PRO_MCP_RECONNECT_GRACE")
     reconnect_grace = float(_grace_env) if _grace_env is not None else DEFAULT_RECONNECT_GRACE
+    # A cold Origin launch via DispatchEx takes ~8-15s (longer on first launch /
+    # slow disks), so the production session start timeout must be generous —
+    # well above the test default of 10s. Overridable via env.
+    _start_env = os.environ.get("ORIGIN_PRO_MCP_START_TIMEOUT")
+    start_timeout = float(_start_env) if _start_env is not None else 45.0
     factory = resolve_origin_factory()
     # Wire the real child-PID resolver so production force-kills the spawned
     # Origin.exe (never the daemon's own pid); falls back to the safe default
@@ -1265,7 +1270,8 @@ def main(argv: Optional[list] = None) -> int:
     daemon = Daemon()
     if not daemon.start(origin_factory=factory, get_pid=get_pid,
                         lockfile_path=lockfile_path,
-                        reconnect_grace=reconnect_grace):
+                        reconnect_grace=reconnect_grace,
+                        start_timeout=start_timeout):
         return 0  # another daemon owns the singleton; the loser exits cleanly
 
     stop = threading.Event()

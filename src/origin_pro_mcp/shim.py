@@ -29,6 +29,7 @@ import inspect
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -105,7 +106,11 @@ def _spawn_daemon(lockfile_path: str,
         stderr=subprocess.DEVNULL,
         close_fds=True,
         env=env,
-        cwd=os.getcwd(),
+        # NOT os.getcwd(): when the shim is launched from WSL the inherited
+        # working directory is a UNC path (\\wsl.localhost\...), which Windows
+        # cannot use as a process CWD — it fails the spawn and flashes a console
+        # window. A local temp dir is always a valid Windows CWD.
+        cwd=tempfile.gettempdir(),
     )
     if sys.platform == "win32":
         DETACHED_PROCESS = 0x00000008
@@ -183,7 +188,10 @@ class ShimClient:
     def __init__(self, lockfile_path: Optional[str] = None, *,
                  session_id: Optional[str] = None,
                  heartbeat_interval: float = 10.0,
-                 call_timeout: float = 30.0,
+                 # Must exceed the daemon's session start_timeout (~45s for a
+                 # cold Origin launch) so the first tool call doesn't give up
+                 # while Origin is still launching.
+                 call_timeout: float = 60.0,
                  allow_spawn: bool = True,
                  ensure_kwargs: Optional[dict] = None):
         self._lockfile_path = lockfile_path
