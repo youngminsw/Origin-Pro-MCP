@@ -29,17 +29,18 @@ def test_export_worksheet_writes_csv(fake_origin, tmp_path):
 
 
 def test_import_excel_missing_file(fake_origin, tmp_path):
-    from origin_pro_mcp.tools.worksheet import import_excel
+    from origin_pro_mcp.tools.worksheet import import_data
 
+    # format="auto" routes .xlsx through the Excel impl.
     with pytest.raises(ValueError, match="File not found"):
-        import_excel(str(tmp_path / "nope.xlsx"))
+        import_data(str(tmp_path / "nope.xlsx"))
 
 
 def test_export_graph_sized_unknown_graph(fake_origin, tmp_path):
-    from origin_pro_mcp.tools.graph import export_graph_sized
+    from origin_pro_mcp.tools.graph import export_graph
 
     with pytest.raises(ValueError, match="not found"):
-        export_graph_sized("Ghost", str(tmp_path / "g.png"))
+        export_graph("Ghost", str(tmp_path / "g.png"), sized=True)
 
 
 def test_save_graph_template_unknown_graph(fake_origin, tmp_path):

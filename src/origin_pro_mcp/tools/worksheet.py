@@ -142,8 +142,7 @@ def get_worksheet_data(book_name: str, sheet_name: str) -> str:
 
     return json.dumps({"columns": columns})
 
-@mcp.tool()
-def import_csv_to_worksheet(
+def _import_csv_to_worksheet_impl(
     file_path: str,
     book_name: str = "",
     delimiter: str = ","
@@ -213,8 +212,7 @@ def list_worksheets() -> str:
 _DESIGNATIONS = {"none": 0, "x": 4, "y": 1, "z": 6, "yerr": 3, "xerr": 5, "label": 5}
 
 
-@mcp.tool()
-def set_column_formula(book_name: str, sheet_name: str, col: int, formula: str) -> str:
+def _set_column_formula_impl(book_name: str, sheet_name: str, col: int, formula: str) -> str:
     """Fill a worksheet column from a formula of other columns.
 
     Args:
@@ -269,8 +267,7 @@ def sort_worksheet(book_name: str, sheet_name: str, col: int, descending: bool =
     return f"Sorted [{safe_book}]{safe_sheet} by column {safe_col} ({direction})"
 
 
-@mcp.tool()
-def add_columns(book_name: str, sheet_name: str, count: int = 1) -> str:
+def _add_columns_impl(book_name: str, sheet_name: str, count: int = 1) -> str:
     """Append empty columns to a worksheet.
 
     Args:
@@ -292,8 +289,7 @@ def add_columns(book_name: str, sheet_name: str, count: int = 1) -> str:
     return f"Added {safe_count} column(s) to [{safe_book}]{safe_sheet}"
 
 
-@mcp.tool()
-def delete_columns(book_name: str, sheet_name: str, col: int, count: int = 1) -> str:
+def _delete_columns_impl(book_name: str, sheet_name: str, col: int, count: int = 1) -> str:
     """Delete one or more columns starting at a position.
 
     Args:
@@ -323,8 +319,7 @@ def delete_columns(book_name: str, sheet_name: str, col: int, count: int = 1) ->
     return f"Deleted {deleted} column(s) from [{safe_book}]{safe_sheet}"
 
 
-@mcp.tool()
-def set_column_properties(
+def _set_column_properties_impl(
     book_name: str,
     sheet_name: str,
     col: int,
@@ -467,8 +462,7 @@ def export_worksheet(
     return f"Exported {target} ({rows_written} rows x {ncols} cols) to {path}"
 
 
-@mcp.tool()
-def import_excel(file_path: str, book_name: str = "") -> str:
+def _import_excel_impl(file_path: str, book_name: str = "") -> str:
     """Import an Excel (.xls/.xlsx) file into a new workbook.
 
     Args:
@@ -492,3 +486,102 @@ def import_excel(file_path: str, book_name: str = "") -> str:
         if active != safe_book and execute_labtalk(f"win -r {active} {safe_book};"):
             active = safe_book
     return f"Imported {os.path.basename(path)} into workbook: {active}"
+
+
+# --- Consolidated dispatchers (Phase 2) ---------------------------------------
+
+_MANAGE_COLUMNS_OPS = {"add", "delete", "properties", "formula"}
+
+
+@mcp.tool()
+def manage_columns(
+    book_name: str,
+    sheet_name: str,
+    op: str,
+    col: int | None = None,
+    count: int = 1,
+    long_name: str | None = None,
+    units: str | None = None,
+    comment: str | None = None,
+    designation: str | None = None,
+    formula: str | None = None,
+) -> str:
+    """Add, delete, or edit worksheet columns.
+
+    Args:
+        book_name, sheet_name: Target workbook and sheet.
+        op: Which column operation to run:
+            - "add": append `count` empty columns (default 1).
+            - "delete": delete `count` columns starting at `col` (col required).
+            - "properties": set a column's metadata (col required). Uses
+              `long_name`, `units`, `comment`, and/or `designation`
+              (none/x/y/z/yerr/xerr/label); at least one is required.
+            - "formula": fill `col` from `formula` (col and formula required),
+              e.g. "col(1)^2".
+        col: Target column (1-based; required for delete/properties/formula).
+        count: Column count (op="add" or "delete"; default 1).
+        long_name, units, comment, designation: Column metadata
+            (op="properties").
+        formula: LabTalk column expression (op="formula").
+
+    Returns:
+        Success message for the selected operation.
+    """
+    safe_op = labtalk_choice(op.lower(), _MANAGE_COLUMNS_OPS, "op")
+    if safe_op == "add":
+        return _add_columns_impl(book_name, sheet_name, count)
+    if safe_op == "delete":
+        if col is None:
+            msg = "manage_columns op 'delete' requires col."
+            raise ValueError(msg)
+        return _delete_columns_impl(book_name, sheet_name, col, count)
+    if safe_op == "properties":
+        if col is None:
+            msg = "manage_columns op 'properties' requires col."
+            raise ValueError(msg)
+        return _set_column_properties_impl(
+            book_name, sheet_name, col,
+            long_name=long_name or "",
+            units=units or "",
+            comment=comment or "",
+            designation=designation or "",
+        )
+    # formula
+    if col is None or formula is None:
+        msg = "manage_columns op 'formula' requires col and formula."
+        raise ValueError(msg)
+    return _set_column_formula_impl(book_name, sheet_name, col, formula)
+
+
+_IMPORT_FORMATS = {"auto", "csv", "excel"}
+_EXCEL_EXTENSIONS = (".xls", ".xlsx", ".xlsm")
+
+
+@mcp.tool()
+def import_data(
+    file_path: str,
+    format: str = "auto",
+    book_name: str = "",
+    delimiter: str = ",",
+) -> str:
+    """Import a data file into an Origin worksheet.
+
+    Args:
+        file_path: Path to the file (Windows or WSL style).
+        format: "auto" (detect by extension; default), "csv" (text/CSV), or
+            "excel" (.xls/.xlsx). "auto" treats .xls/.xlsx/.xlsm as Excel and
+            everything else as CSV/text.
+        book_name: Optional workbook name for the result.
+        delimiter: Column delimiter for CSV/text (default comma; ignored for
+            Excel).
+
+    Returns:
+        Name of the workbook the data was imported into.
+    """
+    safe_format = labtalk_choice(format.lower(), _IMPORT_FORMATS, "format")
+    if safe_format == "auto":
+        ext = os.path.splitext(file_path)[1].lower()
+        safe_format = "excel" if ext in _EXCEL_EXTENSIONS else "csv"
+    if safe_format == "excel":
+        return _import_excel_impl(file_path, book_name)
+    return _import_csv_to_worksheet_impl(file_path, book_name, delimiter)

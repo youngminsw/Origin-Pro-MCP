@@ -119,10 +119,10 @@ def test_add_plot_unknown_graph_lists_open_graphs(fake_origin):
 
 
 def test_import_csv_missing_file(fake_origin, tmp_path):
-    from origin_pro_mcp.tools.worksheet import import_csv_to_worksheet
+    from origin_pro_mcp.tools.worksheet import import_data
 
     with pytest.raises(ValueError, match="File not found"):
-        import_csv_to_worksheet(str(tmp_path / "missing.csv"))
+        import_data(str(tmp_path / "missing.csv"))
 
 
 def test_export_graph_unknown_graph(fake_origin, tmp_path):

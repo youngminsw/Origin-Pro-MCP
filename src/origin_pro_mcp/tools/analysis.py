@@ -40,8 +40,7 @@ def _read_column(book: str, sheet: str, col: int) -> list:
     return vals
 
 
-@mcp.tool()
-def integrate(data_book: str, data_sheet: str, x_col: int, y_col: int) -> str:
+def _integrate_impl(data_book: str, data_sheet: str, x_col: int, y_col: int) -> str:
     """Integrate Y over X (area under the curve).
 
     Returns:
@@ -59,8 +58,7 @@ def integrate(data_book: str, data_sheet: str, x_col: int, y_col: int) -> str:
     return json.dumps({"area": get_lt_var("integ1.area")})
 
 
-@mcp.tool()
-def differentiate(data_book: str, data_sheet: str, x_col: int, y_col: int) -> str:
+def _differentiate_impl(data_book: str, data_sheet: str, x_col: int, y_col: int) -> str:
     """Compute the derivative dY/dX into a new column.
 
     Returns:
@@ -81,8 +79,7 @@ def differentiate(data_book: str, data_sheet: str, x_col: int, y_col: int) -> st
     return f"Derivative written to column {out} of [{safe_book}]{safe_sheet}"
 
 
-@mcp.tool()
-def smooth(
+def _smooth_impl(
     data_book: str,
     data_sheet: str,
     x_col: int,
@@ -119,8 +116,7 @@ def smooth(
     return f"Smoothed curve ({safe_method}, {safe_window} pts) written to column {out}"
 
 
-@mcp.tool()
-def interpolate(
+def _interpolate_impl(
     data_book: str,
     data_sheet: str,
     x_col: int,
@@ -169,8 +165,7 @@ def interpolate(
     return json.dumps({"sheet": f"[{out_name}]Sheet1", "x": new_x, "y": new_y})
 
 
-@mcp.tool()
-def fft(data_book: str, data_sheet: str, x_col: int, y_col: int) -> str:
+def _fft_impl(data_book: str, data_sheet: str, x_col: int, y_col: int) -> str:
     """Forward FFT of a signal; outputs a spectrum sheet.
 
     Uses the X column spacing as the sampling interval, so the Frequency
@@ -220,8 +215,7 @@ def _find_named_column(book: str, sheet: str, keyword: str):
     return None
 
 
-@mcp.tool()
-def find_peaks(
+def _find_peaks_impl(
     data_book: str,
     data_sheet: str,
     x_col: int,
@@ -263,8 +257,7 @@ def find_peaks(
     return json.dumps({"peaks": peaks, "count": len(peaks)})
 
 
-@mcp.tool()
-def column_statistics(data_book: str, data_sheet: str, col: int) -> str:
+def _column_statistics_impl(data_book: str, data_sheet: str, col: int) -> str:
     """Descriptive statistics for one worksheet column.
 
     Returns:
@@ -296,8 +289,7 @@ def column_statistics(data_book: str, data_sheet: str, col: int) -> str:
     })
 
 
-@mcp.tool()
-def compare_means(
+def _compare_means_impl(
     data_book: str,
     data_sheet: str,
     col1: int,
@@ -331,8 +323,7 @@ def compare_means(
     })
 
 
-@mcp.tool()
-def frequency_count(
+def _frequency_count_impl(
     data_book: str,
     data_sheet: str,
     col: int,
@@ -379,3 +370,129 @@ def frequency_count(
         for c, e, n, cu in zip(centers, ends, counts, cumulative)
     ]
     return json.dumps({"sheet": f"[{safe_book}]{out}", "bins": bins})
+
+
+# --- Consolidated dispatchers (Phase 2) ---------------------------------------
+
+_TRANSFORM_METHODS = {
+    "integrate", "differentiate", "smooth", "interpolate", "fft", "find_peaks"
+}
+
+
+@mcp.tool()
+def transform(
+    data_book: str,
+    data_sheet: str,
+    x_col: int,
+    y_col: int,
+    method: str,
+    window_size: int | None = None,
+    poly_order: int | None = None,
+    num_points: int | None = None,
+    interp_method: str | None = None,
+    direction: str | None = None,
+    local_points: int | None = None,
+) -> str:
+    """Apply a numerical transform to an XY curve.
+
+    Args:
+        data_book, data_sheet: Source workbook and sheet.
+        x_col, y_col: X and Y column numbers (1-based).
+        method: Which transform to run:
+            - "integrate": area under the curve. Returns JSON {area}.
+            - "differentiate": dY/dX into a new column.
+            - "smooth": Savitzky-Golay smoothing into a new column;
+              uses window_size (points, odd; default 5).
+            - "interpolate": resample onto evenly spaced X; uses num_points
+              (default 100) and interp_method (linear/spline/bspline/akima,
+              default linear). Returns JSON {sheet, x, y}.
+            - "fft": forward FFT spectrum. Returns JSON {spectrum_sheet,
+              dominant_frequency}.
+            - "find_peaks": local-maximum peak search; uses direction
+              (positive/negative/both, default positive) and local_points
+              (neighborhood size, default 10). Returns JSON {peaks, count}.
+        window_size: Smoothing window in points (method="smooth").
+        poly_order: Reserved; not used by any current method.
+        num_points: Output point count (method="interpolate").
+        interp_method: linear/spline/bspline/akima (method="interpolate").
+        direction: positive/negative/both (method="find_peaks").
+        local_points: Local-maximum neighborhood (method="find_peaks").
+
+    Returns:
+        The result of the selected transform (see method above).
+    """
+    safe_method = labtalk_choice(method.lower(), _TRANSFORM_METHODS, "method")
+    if safe_method == "integrate":
+        return _integrate_impl(data_book, data_sheet, x_col, y_col)
+    if safe_method == "differentiate":
+        return _differentiate_impl(data_book, data_sheet, x_col, y_col)
+    if safe_method == "smooth":
+        return _smooth_impl(
+            data_book, data_sheet, x_col, y_col,
+            window=window_size if window_size is not None else 5,
+        )
+    if safe_method == "interpolate":
+        return _interpolate_impl(
+            data_book, data_sheet, x_col, y_col,
+            num_points=num_points if num_points is not None else 100,
+            method=interp_method if interp_method is not None else "linear",
+        )
+    if safe_method == "fft":
+        return _fft_impl(data_book, data_sheet, x_col, y_col)
+    return _find_peaks_impl(
+        data_book, data_sheet, x_col, y_col,
+        direction=direction if direction is not None else "positive",
+        local_points=local_points if local_points is not None else 10,
+    )
+
+
+_STATS_OPS = {"column", "compare_means", "frequency"}
+
+
+@mcp.tool()
+def stats(
+    data_book: str,
+    data_sheet: str,
+    op: str,
+    col: int,
+    col2: int | None = None,
+    bin_min: float | None = None,
+    bin_max: float | None = None,
+    bin_size: float | None = None,
+    equal_variance: bool | None = None,
+) -> str:
+    """Compute statistics on worksheet columns.
+
+    Args:
+        data_book, data_sheet: Source workbook and sheet.
+        op: Which statistic to run:
+            - "column": descriptive stats for one column (uses col). Returns
+              JSON {mean, sd, se, variance, median, min, max, sum, n}.
+            - "compare_means": two-sample t-test between col and col2 (requires
+              col2; equal_variance default False). Returns JSON {t, df,
+              p_value, mean1, mean2, equal_variance}.
+            - "frequency": histogram-style counts for col (requires bin_min,
+              bin_max, bin_size). Returns JSON {sheet, bins}.
+        col: Primary column (1-based).
+        col2: Second column (op="compare_means").
+        bin_min, bin_max, bin_size: Bin range/width (op="frequency").
+        equal_variance: Assume equal variance (op="compare_means").
+
+    Returns:
+        The result of the selected statistic (see op above).
+    """
+    safe_op = labtalk_choice(op.lower(), _STATS_OPS, "op")
+    if safe_op == "column":
+        return _column_statistics_impl(data_book, data_sheet, col)
+    if safe_op == "compare_means":
+        if col2 is None:
+            msg = "stats op 'compare_means' requires col2."
+            raise ValueError(msg)
+        return _compare_means_impl(
+            data_book, data_sheet, col, col2,
+            equal_variance if equal_variance is not None else False,
+        )
+    if bin_min is None or bin_max is None or bin_size is None:
+        msg = "stats op 'frequency' requires bin_min, bin_max, and bin_size."
+        raise ValueError(msg)
+    return _frequency_count_impl(data_book, data_sheet, col, bin_min, bin_max, bin_size)

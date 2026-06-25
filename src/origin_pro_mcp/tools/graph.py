@@ -282,8 +282,7 @@ def add_plot_to_graph(
         raise ValueError(msg)
     return f"Added {safe_plot_type} plot to {safe_graph_name}"
 
-@mcp.tool()
-def set_axis_labels(
+def _set_axis_labels_impl(
     graph_name: str,
     x_label: str = "",
     y_label: str = "",
@@ -310,8 +309,7 @@ def set_axis_labels(
         execute_labtalk(f"label -n title -s {labtalk_string(title, 'title')}; title.x = 50; title.y = 95;")
     return f"Updated labels for {safe_graph_name}"
 
-@mcp.tool()
-def set_axis_range(
+def _set_axis_range_impl(
     graph_name: str,
     x_min: float | None = None,
     x_max: float | None = None,
@@ -342,8 +340,7 @@ def set_axis_range(
         execute_labtalk(f"layer.y.to = {y_max};")
     return f"Set axis range for {safe_graph_name}"
 
-@mcp.tool()
-def export_graph(
+def _export_graph_impl(
     graph_name: str,
     file_path: str,
     format: str = "png",
@@ -385,8 +382,7 @@ def export_graph(
 _AXIS_SCALES = {"linear": 1, "log10": 2, "ln": 8, "log2": 9}
 
 
-@mcp.tool()
-def set_axis_scale(graph_name: str, axis: str = "y", scale: str = "log10") -> str:
+def _set_axis_scale_impl(graph_name: str, axis: str = "y", scale: str = "log10") -> str:
     """Set an axis to linear or a logarithmic scale.
 
     Args:
@@ -480,8 +476,7 @@ def add_layer(graph_name: str, layer_type: str = "right-y") -> str:
     return f"Added {safe_layer_type} layer (layer {layer}) to {safe_graph}"
 
 
-@mcp.tool()
-def add_reference_line(
+def _add_reference_line_impl(
     graph_name: str,
     orientation: str,
     value: float
@@ -510,8 +505,7 @@ def add_reference_line(
     return f"Drew {safe_orientation} reference line at {value} on {safe_graph}"
 
 
-@mcp.tool()
-def add_text_annotation(
+def _add_text_annotation_impl(
     graph_name: str,
     text: str,
     x: float,
@@ -544,8 +538,7 @@ def add_text_annotation(
     return f"Added annotation '{text}' at ({x}, {y}) on {safe_graph}"
 
 
-@mcp.tool()
-def export_graph_sized(
+def _export_graph_sized_impl(
     graph_name: str,
     file_path: str,
     width: int = 1200,
@@ -616,8 +609,7 @@ def _bundled_palette_path(name: str) -> str:
     return ""
 
 
-@mcp.tool()
-def apply_color_map(graph_name: str, palette: str = "Viridis") -> str:
+def _apply_color_map_impl(graph_name: str, palette: str = "Viridis") -> str:
     """Apply a color palette to a contour/heatmap/surface graph.
 
     Args:
@@ -662,8 +654,7 @@ def apply_color_map(graph_name: str, palette: str = "Viridis") -> str:
     return f"Applied '{disp}' palette to {safe_graph}"
 
 
-@mcp.tool()
-def set_colormap_levels(graph_name: str, z_min: float, z_max: float) -> str:
+def _set_colormap_levels_impl(graph_name: str, z_min: float, z_max: float) -> str:
     """Set the Z range (color scale levels) of a colormapped graph.
 
     Args:
@@ -690,8 +681,7 @@ def set_colormap_levels(graph_name: str, z_min: float, z_max: float) -> str:
     return f"Set colormap Z range to [{z_min}, {z_max}] on {safe_graph}"
 
 
-@mcp.tool()
-def add_line(
+def _add_line_impl(
     graph_name: str,
     x1: float,
     y1: float,
@@ -722,8 +712,7 @@ def add_line(
     return f"Drew line ({x1},{y1})->({x2},{y2}) on {safe_graph}"
 
 
-@mcp.tool()
-def add_arrow(
+def _add_arrow_impl(
     graph_name: str,
     x1: float,
     y1: float,
@@ -770,3 +759,228 @@ def add_arrow(
     execute_labtalk(script)
     ends = "double-headed" if double_headed else "single-headed"
     return f"Drew {ends} arrow ({x1},{y1})->({x2},{y2}) on {safe_graph}"
+
+
+# --- Consolidated dispatchers (Phase 2) ---------------------------------------
+
+_AXIS_OPS = {"labels", "range", "scale", "tick"}
+
+
+@mcp.tool()
+def axis(
+    graph_name: str,
+    op: str,
+    axis: str = "both",
+    label: str | None = None,
+    range_min: float | None = None,
+    range_max: float | None = None,
+    scale: str | None = None,
+    tick_direction: str | None = None,
+    major_length: int | None = None,
+    minor_count: int | None = None,
+    show_minor: bool | None = None,
+) -> str:
+    """Configure a graph's axes.
+
+    Args:
+        graph_name: Graph name.
+        op: Which axis aspect to set:
+            - "labels": set an axis label. Uses `axis` ("x", "y", or "both")
+              and `label` (the text). Note: does not set the graph title.
+            - "range": set an axis range. Uses `axis` plus `range_min`/
+              `range_max` (None = auto). With axis="both" the same range is
+              applied to X and Y.
+            - "scale": set an axis scale. Uses `axis` ("x" or "y") and `scale`
+              (linear, log10, ln, log2).
+            - "tick": set tick-mark style. Uses `tick_direction` (in/out/both,
+              default in), `major_length` (default 8), `minor_count`
+              (default 4), `show_minor` (default True).
+        axis: Target axis ("x", "y", or "both"; default "both").
+        label: Axis label text (op="labels").
+        range_min, range_max: Axis range bounds (op="range").
+        scale: Axis scale type (op="scale").
+        tick_direction, major_length, minor_count, show_minor: Tick style
+            (op="tick").
+
+    Returns:
+        Success message for the selected operation.
+    """
+    safe_op = labtalk_choice(op.lower(), _AXIS_OPS, "op")
+    if safe_op == "labels":
+        if label is None:
+            msg = "axis op 'labels' requires label."
+            raise ValueError(msg)
+        safe_axis = labtalk_choice(axis.lower(), {"x", "y", "both"}, "axis")
+        x_label = label if safe_axis in ("x", "both") else ""
+        y_label = label if safe_axis in ("y", "both") else ""
+        return _set_axis_labels_impl(graph_name, x_label=x_label, y_label=y_label)
+    if safe_op == "range":
+        safe_axis = labtalk_choice(axis.lower(), {"x", "y", "both"}, "axis")
+        kwargs: dict = {}
+        if safe_axis in ("x", "both"):
+            kwargs["x_min"] = range_min
+            kwargs["x_max"] = range_max
+        if safe_axis in ("y", "both"):
+            kwargs["y_min"] = range_min
+            kwargs["y_max"] = range_max
+        return _set_axis_range_impl(graph_name, **kwargs)
+    if safe_op == "scale":
+        if scale is None:
+            msg = "axis op 'scale' requires scale."
+            raise ValueError(msg)
+        # scale targets a single axis; the documented/old default is "y".
+        # Treat the dispatcher's "both" default (or unset) as "y" so a
+        # default call succeeds instead of hitting the impl's x/y guard.
+        scale_axis = "y" if axis in (None, "both") else axis
+        return _set_axis_scale_impl(graph_name, axis=scale_axis, scale=scale)
+    # tick
+    from .style import _set_tick_style_impl
+    return _set_tick_style_impl(
+        graph_name,
+        tick_direction=tick_direction if tick_direction is not None else "in",
+        major_length=major_length if major_length is not None else 8,
+        minor_count=minor_count if minor_count is not None else 4,
+        show_minor=show_minor if show_minor is not None else True,
+    )
+
+
+_ANNOTATE_KINDS = {"reference_line", "text", "line", "arrow"}
+
+
+@mcp.tool()
+def annotate(
+    graph_name: str,
+    kind: str,
+    x1: float | None = None,
+    y1: float | None = None,
+    x2: float | None = None,
+    y2: float | None = None,
+    value: float | None = None,
+    text: str | None = None,
+    orientation: str | None = None,
+    double_headed: bool = False,
+    head_size: int = 10,
+    name: str = "anno",
+) -> str:
+    """Add an annotation object to a graph.
+
+    Args:
+        graph_name: Graph name.
+        kind: Which annotation to add:
+            - "reference_line": horizontal/vertical line. Uses `orientation`
+              ("horizontal"/"vertical") and `value` (axis value).
+            - "text": text label. Uses `text` and position `x1`/`y1` (data
+              coordinates) and `name` (object name).
+            - "line": straight line from (x1,y1) to (x2,y2).
+            - "arrow": arrow from (x1,y1) to (x2,y2). Uses `double_headed`
+              and `head_size`.
+        x1, y1: Start/position in data coordinates.
+        x2, y2: End point in data coordinates (line/arrow).
+        value: Axis value (kind="reference_line").
+        text: Annotation text (kind="text").
+        orientation: "horizontal" or "vertical" (kind="reference_line").
+        double_headed: Arrowhead on both ends (kind="arrow").
+        head_size: Arrowhead size in points (kind="arrow").
+        name: Object name (kind="text").
+
+    Returns:
+        Success message for the selected annotation.
+    """
+    safe_kind = labtalk_choice(kind.lower(), _ANNOTATE_KINDS, "kind")
+    if safe_kind == "reference_line":
+        if orientation is None or value is None:
+            msg = "annotate kind 'reference_line' requires orientation and value."
+            raise ValueError(msg)
+        return _add_reference_line_impl(graph_name, orientation, value)
+    if safe_kind == "text":
+        if text is None or x1 is None or y1 is None:
+            msg = "annotate kind 'text' requires text, x1, and y1."
+            raise ValueError(msg)
+        return _add_text_annotation_impl(graph_name, text, x1, y1, name=name)
+    if safe_kind == "line":
+        if x1 is None or y1 is None or x2 is None or y2 is None:
+            msg = "annotate kind 'line' requires x1, y1, x2, and y2."
+            raise ValueError(msg)
+        return _add_line_impl(graph_name, x1, y1, x2, y2)
+    # arrow
+    if x1 is None or y1 is None or x2 is None or y2 is None:
+        msg = "annotate kind 'arrow' requires x1, y1, x2, and y2."
+        raise ValueError(msg)
+    return _add_arrow_impl(
+        graph_name, x1, y1, x2, y2,
+        double_headed=double_headed, head_size=head_size,
+    )
+
+
+@mcp.tool()
+def colormap(
+    graph_name: str,
+    palette: str | None = None,
+    z_min: float | None = None,
+    z_max: float | None = None,
+) -> str:
+    """Configure the color map of a contour/heatmap/surface graph.
+
+    Applies a palette when `palette` is given and/or sets the Z color-scale
+    range when both `z_min` and `z_max` are given. At least one of those must
+    be supplied.
+
+    Args:
+        graph_name: Graph name (must hold a colormapped plot).
+        palette: Palette name (e.g. Viridis, Cividis, Plasma, Fire). Bundled
+            perceptually-uniform, colorblind-safe maps are preferred for
+            quantitative data; Origin built-in .pal names are also accepted.
+        z_min, z_max: Z range for the color scale (both required together).
+
+    Returns:
+        Success message describing what was changed.
+    """
+    if palette is None and z_min is None and z_max is None:
+        msg = "colormap requires palette and/or z_min+z_max."
+        raise ValueError(msg)
+    if (z_min is None) != (z_max is None):
+        msg = "colormap requires both z_min and z_max together."
+        raise ValueError(msg)
+    messages = []
+    if palette is not None:
+        messages.append(_apply_color_map_impl(graph_name, palette))
+    if z_min is not None and z_max is not None:
+        messages.append(_set_colormap_levels_impl(graph_name, z_min, z_max))
+    return " ".join(messages)
+
+
+@mcp.tool()
+def export_graph(
+    graph_name: str,
+    file_path: str,
+    format: str = "png",
+    width: int = 600,
+    height: int = 400,
+    dpi: int = 300,
+    sized: bool = False,
+) -> str:
+    """Export a graph to an image file.
+
+    Args:
+        graph_name: Graph to export.
+        file_path: Output path (Windows or WSL style). Missing directories
+            are created.
+        format: Image format: png, jpg, tif, bmp.
+        width: Output pixel width (only used when sized=True).
+        height: Output pixel height (only used when sized=True; 0 = keep
+            aspect ratio).
+        dpi: Unused (kept for API compatibility).
+        sized: When False (default), export via clipboard at the Origin page
+            size (width/height/dpi ignored). When True, export via expGraph at
+            the chosen pixel width/height.
+
+    Returns:
+        Path to the exported file.
+    """
+    if sized:
+        return _export_graph_sized_impl(
+            graph_name, file_path, width=width, height=height, format=format
+        )
+    return _export_graph_impl(
+        graph_name, file_path, format=format, width=width, height=height, dpi=dpi
+    )

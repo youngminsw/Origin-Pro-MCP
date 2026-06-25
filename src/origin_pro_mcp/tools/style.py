@@ -388,8 +388,7 @@ def set_legend(
     return f"Updated legend for {safe_graph_name}"
 
 
-@mcp.tool()
-def set_tick_style(
+def _set_tick_style_impl(
     graph_name: str,
     tick_direction: str = "in",
     major_length: int = 8,

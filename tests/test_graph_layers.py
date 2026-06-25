@@ -1,25 +1,29 @@
-"""Guard tests for layer/axis tools (no Origin needed)."""
+"""Guard tests for layer/axis tools (no Origin needed).
+
+These drive the consolidated ``axis``, ``annotate``, and ``colormap``
+dispatchers.
+"""
 import pytest
 
 
 def test_set_axis_scale_bad_scale(fake_origin):
-    from origin_pro_mcp.tools.graph import set_axis_scale
+    from origin_pro_mcp.tools.graph import axis
 
     with pytest.raises(ValueError, match="scale must be one of"):
-        set_axis_scale("Graph1", "y", "logarithmic")
+        axis("Graph1", op="scale", axis="y", scale="logarithmic")
 
 
 def test_set_axis_scale_unknown_graph(fake_origin):
-    from origin_pro_mcp.tools.graph import set_axis_scale
+    from origin_pro_mcp.tools.graph import axis
 
     with pytest.raises(ValueError, match="not found"):
-        set_axis_scale("Ghost", "y", "log10")
+        axis("Ghost", op="scale", axis="y", scale="log10")
 
 
 def test_set_axis_scale_runs(fake_origin):
-    from origin_pro_mcp.tools.graph import set_axis_scale
+    from origin_pro_mcp.tools.graph import axis
 
-    msg = set_axis_scale("Graph1", "y", "log10")
+    msg = axis("Graph1", op="scale", axis="y", scale="log10")
     assert "log10" in msg
     assert any("layer.y.type = 2" in s for s in fake_origin.executed)
 
@@ -39,54 +43,54 @@ def test_add_layer_bad_type(fake_origin):
 
 
 def test_add_reference_line_bad_orientation(fake_origin):
-    from origin_pro_mcp.tools.graph import add_reference_line
+    from origin_pro_mcp.tools.graph import annotate
 
     with pytest.raises(ValueError, match="orientation must be one of"):
-        add_reference_line("Graph1", "diagonal", 5)
+        annotate("Graph1", kind="reference_line", orientation="diagonal", value=5)
 
 
 def test_add_reference_line_runs(fake_origin):
-    from origin_pro_mcp.tools.graph import add_reference_line
+    from origin_pro_mcp.tools.graph import annotate
 
-    add_reference_line("Graph1", "horizontal", 5)
+    annotate("Graph1", kind="reference_line", orientation="horizontal", value=5)
     assert any("draw -l -h 5.0" in s for s in fake_origin.executed)
 
 
 def test_add_text_annotation_blocks_injection(fake_origin):
-    from origin_pro_mcp.tools.graph import add_text_annotation
+    from origin_pro_mcp.tools.graph import annotate
 
     with pytest.raises(ValueError, match="cannot be empty or contain"):
-        add_text_annotation("Graph1", "hi; doc -s", 1, 2)
+        annotate("Graph1", kind="text", text="hi; doc -s", x1=1, y1=2)
 
 
 def test_add_text_annotation_runs(fake_origin):
-    from origin_pro_mcp.tools.graph import add_text_annotation
+    from origin_pro_mcp.tools.graph import annotate
 
-    msg = add_text_annotation("Graph1", "Peak", 3.0, 70.0)
+    msg = annotate("Graph1", kind="text", text="Peak", x1=3.0, y1=70.0)
     assert "Peak" in msg
     assert any("label -p 3.0 70.0 -n anno Peak" in s for s in fake_origin.executed)
 
 
 def test_apply_color_map_unknown_graph(fake_origin):
-    from origin_pro_mcp.tools.graph import apply_color_map
+    from origin_pro_mcp.tools.graph import colormap
 
     with pytest.raises(ValueError, match="not found"):
-        apply_color_map("Ghost", "Fire")
+        colormap("Ghost", palette="Fire")
 
 
 def test_apply_color_map_runs(fake_origin):
-    from origin_pro_mcp.tools.graph import apply_color_map
+    from origin_pro_mcp.tools.graph import colormap
 
-    apply_color_map("Graph1", "Fire")
+    colormap("Graph1", palette="Fire")
     assert any("layer.cmap.load(Fire.pal)" in s for s in fake_origin.executed)
 
 def test_apply_color_map_bundled_viridis_full_path(fake_origin):
     """Bundled perceptually-uniform maps (viridis/cividis/...) are not Origin
     2020 built-ins, so they must be loaded from the bundled .pal by full,
     quoted path (regression for the colorblind-safe palette feature)."""
-    from origin_pro_mcp.tools.graph import apply_color_map
+    from origin_pro_mcp.tools.graph import colormap
 
-    apply_color_map("Graph1", "Viridis")
+    colormap("Graph1", palette="Viridis")
     loads = [s for s in fake_origin.executed if "layer.cmap.load(" in s]
     assert loads, "no cmap load issued"
     assert any('opm_Viridis.pal"' in s and "load(\"" in s for s in loads), loads
@@ -103,16 +107,30 @@ def test_bundled_palettes_present():
 
 
 def test_set_colormap_levels_bad_range(fake_origin):
-    from origin_pro_mcp.tools.graph import set_colormap_levels
+    from origin_pro_mcp.tools.graph import colormap
 
     with pytest.raises(ValueError, match="z_max must be greater"):
-        set_colormap_levels("Graph1", 5, 5)
+        colormap("Graph1", z_min=5, z_max=5)
+
+
+def test_colormap_requires_an_argument(fake_origin):
+    from origin_pro_mcp.tools.graph import colormap
+
+    with pytest.raises(ValueError, match="requires palette"):
+        colormap("Graph1")
+
+
+def test_colormap_requires_both_z_bounds(fake_origin):
+    from origin_pro_mcp.tools.graph import colormap
+
+    with pytest.raises(ValueError, match="both z_min and z_max"):
+        colormap("Graph1", z_min=1)
 
 
 def test_add_line_runs(fake_origin):
-    from origin_pro_mcp.tools.graph import add_line
+    from origin_pro_mcp.tools.graph import annotate
 
-    add_line("Graph1", 1, 2, 3, 4)
+    annotate("Graph1", kind="line", x1=1, y1=2, x2=3, y2=4)
     assert any("draw -l {1.0,2.0,3.0,4.0}" in s for s in fake_origin.executed)
 
 
@@ -125,23 +143,23 @@ def test_create_graph_box_designates_y(fake_origin):
 
 
 def test_add_arrow_sets_arrowhead(fake_origin):
-    from origin_pro_mcp.tools.graph import add_arrow
+    from origin_pro_mcp.tools.graph import annotate
 
-    msg = add_arrow("Graph1", 1, 2, 3, 4)
+    msg = annotate("Graph1", kind="arrow", x1=1, y1=2, x2=3, y2=4)
     assert "single-headed" in msg
     assert any(".arrowEndShape = 1" in s for s in fake_origin.executed)
     assert not any("arrowBeginShape" in s for s in fake_origin.executed)
 
 
 def test_add_arrow_double_headed(fake_origin):
-    from origin_pro_mcp.tools.graph import add_arrow
+    from origin_pro_mcp.tools.graph import annotate
 
-    add_arrow("Graph1", 1, 2, 3, 4, double_headed=True)
+    annotate("Graph1", kind="arrow", x1=1, y1=2, x2=3, y2=4, double_headed=True)
     assert any("arrowBeginShape = 1" in s for s in fake_origin.executed)
 
 
 def test_add_arrow_unknown_graph(fake_origin):
-    from origin_pro_mcp.tools.graph import add_arrow
+    from origin_pro_mcp.tools.graph import annotate
 
     with pytest.raises(ValueError, match="not found"):
-        add_arrow("Ghost", 1, 2, 3, 4)
+        annotate("Ghost", kind="arrow", x1=1, y1=2, x2=3, y2=4)

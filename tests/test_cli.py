@@ -53,13 +53,44 @@ def test_coerce_handles_optional_float():
 
 def test_coerce_handles_int_and_bool():
     import inspect
-    from origin_pro_mcp.tools.style import set_plot_style, set_tick_style
+    from origin_pro_mcp.tools.style import set_plot_style
+    from origin_pro_mcp.tools.graph import axis
 
     kv = cli._parse_kv(["--plot_index", "2"], inspect.signature(set_plot_style))
     assert kv == {"plot_index": 2} and isinstance(kv["plot_index"], int)
 
-    kv2 = cli._parse_kv(["--show_minor", "false"], inspect.signature(set_tick_style))
+    # axis op="tick" exposes show_minor as bool | None; --show_minor must coerce
+    kv2 = cli._parse_kv(["--show_minor", "false"], inspect.signature(axis))
     assert kv2 == {"show_minor": False}
+
+
+def test_consolidated_tool_coerces_typed_params(fake_origin):
+    # The transform dispatcher uses explicit typed params (no **kwargs), so the
+    # CLI must coerce each arg by annotation and dispatch without "unknown
+    # argument". window_size/poly_order/x_col/y_col are ints; method is str.
+    argv = ["transform", "--data_book", "Book1", "--data_sheet", "Sheet1",
+            "--x_col", "1", "--y_col", "2", "--method", "smooth",
+            "--window_size", "5", "--poly_order", "2"]
+    fake_origin.lt_vars["wks.ncols"] = 4
+    assert cli.main(argv) == 0
+
+
+def test_consolidated_tool_parse_kv_types():
+    import inspect
+    from origin_pro_mcp.tools.analysis import transform
+
+    sig = inspect.signature(transform)
+    kwargs = cli._parse_kv(
+        ["--data_book", "B", "--data_sheet", "S", "--x_col", "1", "--y_col", "2",
+         "--method", "smooth", "--window_size", "5", "--poly_order", "2"],
+        sig,
+    )
+    assert kwargs == {
+        "data_book": "B", "data_sheet": "S", "x_col": 1, "y_col": 2,
+        "method": "smooth", "window_size": 5, "poly_order": 2,
+    }
+    assert all(isinstance(kwargs[k], int) for k in ("x_col", "y_col", "window_size", "poly_order"))
+    assert isinstance(kwargs["method"], str)
 
 
 def test_json_args_dispatch(fake_origin, capsys):
