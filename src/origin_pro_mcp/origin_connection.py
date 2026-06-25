@@ -1,6 +1,10 @@
+import threading
+
 from .labtalk_safe import labtalk_name
 
-_origin = None
+# Per-thread COM proxy store. Each thread (e.g. a daemon session worker) holds
+# its own Origin instance, so the cached proxy never leaks across threads.
+_state = threading.local()
 _MAINWND_SHOW = 1
 
 def _connection_alive(origin) -> bool:
@@ -14,11 +18,23 @@ def _connection_alive(origin) -> bool:
     return True
 
 
+def set_session_origin(origin) -> None:
+    """Bind a COM proxy to the current thread (daemon worker / test injection)."""
+    _state.origin = origin
+
+
+def clear_session_origin() -> None:
+    """Drop the current thread's proxy so the next get_origin() reconnects."""
+    if hasattr(_state, "origin"):
+        del _state.origin
+
+
 def get_origin():
-    global _origin
-    if _origin is not None and not _connection_alive(_origin):
-        _origin = None  # Origin was closed or restarted; reconnect below
-    if _origin is None:
+    origin = getattr(_state, "origin", None)
+    if origin is not None and not _connection_alive(origin):
+        origin = None  # Origin was closed or restarted; reconnect below
+        clear_session_origin()
+    if origin is None:
         try:
             import win32com.client
             import pywintypes
@@ -29,7 +45,7 @@ def get_origin():
             )
             raise RuntimeError(msg) from exc
         try:
-            _origin = win32com.client.Dispatch("Origin.ApplicationSI")
+            origin = win32com.client.Dispatch("Origin.ApplicationSI")
         except pywintypes.com_error as exc:
             msg = (
                 "Could not connect to Origin via COM (Origin.ApplicationSI). "
@@ -39,10 +55,11 @@ def get_origin():
             )
             raise RuntimeError(msg) from exc
         try:
-            _origin.Visible = _MAINWND_SHOW
+            origin.Visible = _MAINWND_SHOW
         except (AttributeError, pywintypes.com_error):
             pass
-    return _origin
+        set_session_origin(origin)
+    return origin
 
 def execute_labtalk(script: str) -> bool:
     o = get_origin()
