@@ -18,6 +18,19 @@ This MCP server is intentionally **Windows-runtime-only**. The AI agent or MCP c
 
 ## Quick Start
 
+### Agentic Setup (read this if you are an AI agent configuring this server)
+
+Copy-paste rules to self-configure the `origin-pro` MCP with zero human steps:
+
+1. **Environment requirement.** This server only works on **Windows** with a licensed **Origin/OriginPro** install and **Windows Python with `pywin32`**. COM automation cannot run from WSL or Linux Python. If the agent runs in WSL, it must launch the **Windows** executable (`uvx.exe` / Windows `origin-pro-mcp`), never WSL Python.
+2. **Preferred install path.** Use `uvx` (zero setup) or `pip install origin-pro-mcp`. Both install to a Windows-local location and "just work":
+   ```json
+   { "mcpServers": { "origin-pro": { "command": "uvx", "args": ["--quiet", "origin-pro-mcp"] } } }
+   ```
+   From WSL, call `uvx.exe` instead of `uvx` (see Option A below).
+3. **Critical UNC rule.** If you point at a **local checkout** from WSL, the repo MUST live under a **Windows drive** (e.g. `C:\Users\YOU\Origin-Pro-MCP`). **Never** reference it through a `\\wsl.localhost\...` UNC path: the background daemon (`python -m origin_pro_mcp.daemon`) cannot resolve a `-m` module or a working directory over UNC, so it fails silently (Origin never opens). `uvx`/`pip install` avoid this entirely.
+4. **Discover skills first.** After connecting, call the **`list_skills`** tool to see bundled skills (e.g. `publication-figure`) and when to use each, then **`get_skill(name)`** to load the full step-by-step instructions before producing figures/plots/analysis. No file copying is needed — skills ship inside the package and are exposed by the server.
+
 ### 1. Prerequisites
 
 - **Windows** with a licensed Origin/OriginPro installation that exposes the Automation Server
@@ -114,7 +127,21 @@ pip install -e .
 
 ### 3. Origin Startup
 
-You do not need to start Python or Origin manually. The MCP client starts `origin-pro-mcp`, and the server connects to Origin through `Origin.ApplicationSI`. If Origin is already open, the server uses it; otherwise COM launches Origin and the server makes it visible.
+You do not need to start Python or Origin manually. The MCP client starts `origin-pro-mcp`, which launches an isolated Origin instance for the session. By default the Origin window is **visible**, so you watch the agent create worksheets and plot graphs in real time.
+
+**Display mode** — set the `ORIGIN_PRO_MCP_VISIBLE` environment variable in your MCP config:
+
+| Value | Mode | Use for |
+| :--- | :--- | :--- |
+| `1` (default) | **Visible** — Origin window shown | Watching the agent work interactively |
+| `0` | **Invisible** — Origin runs hidden | Headless/batch runs, many concurrent agents, no window pop-ups |
+
+```json
+{ "mcpServers": { "origin-pro": {
+  "command": "origin-pro-mcp",
+  "env": { "ORIGIN_PRO_MCP_VISIBLE": "0" }
+} } }
+```
 
 ### 4. Use It
 
@@ -321,10 +348,13 @@ Result: A publication-ready figure with bold Arial labels, colorblind-safe color
 
 ## Claude Code Skill: Publication Figure
 
-This repo includes a **skill file** (`skills/publication-figure.md`) that teaches Claude how to create journal-quality figures step by step. To use it:
+This server ships a **bundled skill** (`src/origin_pro_mcp/skills/publication-figure.md`) that teaches Claude how to create journal-quality figures step by step. **No manual copying is needed** — the skill is packaged inside the wheel and exposed over MCP, so any connecting agent discovers it automatically:
 
-1. Copy `skills/publication-figure.md` to your Claude Code skills directory
-2. When you ask Claude to "make a publication figure", it will automatically follow the skill's workflow:
+1. Call the **`list_skills`** tool — it returns each skill's name, title, and when to use it (e.g. `publication-figure`).
+2. Call **`get_skill("publication-figure")`** to load the full markdown instructions.
+3. Each skill is also available as an MCP **resource** at `skill://<name>` (e.g. `skill://publication-figure`) for clients that browse resources.
+
+When you ask Claude to "make a publication figure", it can autonomously pull this skill and follow its workflow:
    - Ask about data source, figure type, target journal
    - Use colorblind-safe color palette (blue → red → green → orange → purple → cyan)
    - Apply proper typography (Arial, bold, correct sizes)
@@ -343,7 +373,7 @@ The included skill is a generic starting template for paper-grade Origin figures
 - **Figure recipes**: Add templates for your common figure types (XRD patterns, IV curves, etc.)
 - **Journal presets**: Add specific formatting rules for your target journals (Nature, ACS, RSC, etc.)
 
-Copy `skills/publication-figure.md` to your project and edit freely — it's meant to be a starting point, not a rigid template.
+Pull the skill with `get_skill("publication-figure")` (or copy `src/origin_pro_mcp/skills/publication-figure.md`) into your project and edit freely — it's meant to be a starting point, not a rigid template.
 
 ### Key Origin Pro 2020 COM Quirks (documented in skill)
 

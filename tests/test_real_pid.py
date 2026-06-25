@@ -56,6 +56,20 @@ def test_real_get_pid_defaults_to_none_when_unset():
     assert result["pid"] is None
 
 
+def test_origin_visible_mode(monkeypatch):
+    # Default: visible (watch the agent work).
+    monkeypatch.delenv("ORIGIN_PRO_MCP_VISIBLE", raising=False)
+    assert daemon._origin_visible() == 1
+    # Truthy values -> visible.
+    for v in ("1", "true", "yes", "on", "visible"):
+        monkeypatch.setenv("ORIGIN_PRO_MCP_VISIBLE", v)
+        assert daemon._origin_visible() == 1
+    # Falsey/hidden values -> invisible.
+    for v in ("0", "false", "no", "off", "hidden", "invisible", "FALSE", " 0 "):
+        monkeypatch.setenv("ORIGIN_PRO_MCP_VISIBLE", v)
+        assert daemon._origin_visible() == 0
+
+
 def test_session_has_com_init_helpers():
     # The worker thread must initialize a COM apartment (Origin 2020 needs it);
     # the helpers are guarded no-ops where pythoncom is unavailable (WSL).

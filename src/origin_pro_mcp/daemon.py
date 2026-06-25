@@ -1192,6 +1192,18 @@ def _origin_process_pids() -> set:
     return pids
 
 
+def _origin_visible() -> int:
+    """Whether a launched Origin shows its window. Env: ORIGIN_PRO_MCP_VISIBLE.
+
+    Default 1 (visible — watch the agent work). Set to 0/false/hidden/invisible
+    for headless/batch runs (e.g. many concurrent sessions with no windows).
+    """
+    val = os.environ.get("ORIGIN_PRO_MCP_VISIBLE")
+    if val is None:
+        return 1
+    return 0 if val.strip().lower() in ("0", "false", "no", "off", "hidden", "invisible") else 1
+
+
 def _real_origin_factory():
     """Default factory: a fresh, isolated ``Origin.exe`` per session (Windows).
 
@@ -1215,12 +1227,11 @@ def _real_origin_factory():
                 pid = sorted(new)[0]
                 break
             time.sleep(0.2)
-    # Make the instance's main window visible so the user watches the agent
-    # work in real time — DispatchEx instances start hidden, unlike the old
-    # ApplicationSI path which set this. Best-effort: a headless/odd build may
-    # reject it.
+    # Show (or hide, per ORIGIN_PRO_MCP_VISIBLE) the instance's window —
+    # DispatchEx instances start hidden, unlike the old ApplicationSI path.
+    # Best-effort: a headless/odd build may reject it.
     try:
-        instance.Visible = 1
+        instance.Visible = _origin_visible()
     except Exception:
         pass
     _real_pid_tls.pid = pid
