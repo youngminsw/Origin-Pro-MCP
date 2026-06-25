@@ -1215,6 +1215,14 @@ def _real_origin_factory():
                 pid = sorted(new)[0]
                 break
             time.sleep(0.2)
+    # Make the instance's main window visible so the user watches the agent
+    # work in real time — DispatchEx instances start hidden, unlike the old
+    # ApplicationSI path which set this. Best-effort: a headless/odd build may
+    # reject it.
+    try:
+        instance.Visible = 1
+    except Exception:
+        pass
     _real_pid_tls.pid = pid
     return instance
 
