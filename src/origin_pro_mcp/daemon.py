@@ -1171,24 +1171,30 @@ def _origin_image_names() -> tuple:
 def _origin_process_pids() -> set:
     """PIDs of all running Origin processes (Windows, best-effort).
 
-    Matches any of the candidate image names so it works across Origin
-    versions and 32/64-bit installs.
+    ONE ``tasklist`` call (all processes, filtered in Python) — matching any
+    candidate image name so it works across Origin versions and 32/64-bit
+    installs. The call uses ``CREATE_NO_WINDOW`` so it never flashes a console
+    window: the daemon is a windowless background process, so a console child
+    would otherwise pop a window every call (and this runs in a tight poll loop).
     """
     import subprocess
 
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    out = subprocess.run(
+        ["tasklist", "/FO", "CSV", "/NH"],
+        capture_output=True, text=True, **kwargs,
+    ).stdout
+    names = {n.lower() for n in _origin_image_names()}
     pids = set()
-    for image in _origin_image_names():
-        out = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {image}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True,
-        ).stdout
-        for line in out.splitlines():
-            line = line.strip()
-            if not line or image not in line:
-                continue
-            parts = [p.strip('"') for p in line.split('","')]
-            if len(parts) >= 2 and parts[1].isdigit():
-                pids.add(int(parts[1]))
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip('"') for p in line.split('","')]
+        if len(parts) >= 2 and parts[0].lower() in names and parts[1].isdigit():
+            pids.add(int(parts[1]))
     return pids
 
 
