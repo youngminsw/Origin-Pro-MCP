@@ -18,23 +18,43 @@ def _connection_alive(origin) -> bool:
     return True
 
 
-def set_session_origin(origin) -> None:
-    """Bind a COM proxy to the current thread (daemon worker / test injection)."""
+def set_session_origin(origin, factory=None) -> None:
+    """Bind a COM proxy to the current thread (daemon worker / test injection).
+
+    ``factory`` (daemon sessions) is the zero-arg callable that launched this
+    session's OWN isolated instance. If the proxy later dies (e.g. the user
+    closes the window), ``get_origin`` re-runs it to relaunch a fresh isolated
+    instance — instead of falling back to the shared ``ApplicationSI``, which
+    could silently attach the agent to a DIFFERENT or user-opened Origin and
+    modify the user's work.
+    """
     _state.origin = origin
+    if factory is not None:
+        _state.factory = factory
 
 
 def clear_session_origin() -> None:
-    """Drop the current thread's proxy so the next get_origin() reconnects."""
-    if hasattr(_state, "origin"):
-        del _state.origin
+    """Drop the current thread's proxy and factory (full session teardown)."""
+    for attr in ("origin", "factory"):
+        if hasattr(_state, attr):
+            delattr(_state, attr)
 
 
 def get_origin():
     origin = getattr(_state, "origin", None)
     if origin is not None and not _connection_alive(origin):
         origin = None  # Origin was closed or restarted; reconnect below
-        clear_session_origin()
+        if hasattr(_state, "origin"):
+            del _state.origin  # keep the factory so a daemon session can relaunch
     if origin is None:
+        factory = getattr(_state, "factory", None)
+        if factory is not None:
+            # Daemon session: relaunch THIS session's own isolated instance.
+            # Never fall through to ApplicationSI — that could hijack the user's
+            # open Origin or another session's instance.
+            origin = factory()
+            _state.origin = origin
+            return origin
         try:
             import win32com.client
             import pywintypes

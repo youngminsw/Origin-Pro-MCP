@@ -23,6 +23,25 @@ class DeadProxy:
         raise OSError("The object invoked has disconnected from its clients.")
 
 
+def test_dead_proxy_with_factory_relaunches_via_factory_not_applicationsi():
+    # Daemon path: a session binds its instance WITH a factory. When the proxy
+    # dies, get_origin must re-run the session's own factory (relaunch an
+    # isolated instance), NOT fall back to ApplicationSI (which on WSL would
+    # raise the win32com import error, and on Windows could hijack the user's
+    # open Origin).
+    fresh = StubOrigin()
+    calls = []
+
+    def factory():
+        calls.append(1)
+        return fresh
+
+    origin_connection.set_session_origin(DeadProxy(), factory)
+    got = origin_connection.get_origin()
+    assert got is fresh          # relaunched via the factory
+    assert calls == [1]          # factory was used (no ApplicationSI Dispatch)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_thread_local():
     """Guarantee no proxy leaks between tests on the main thread."""

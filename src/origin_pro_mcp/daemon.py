@@ -154,7 +154,10 @@ class Session:
                 self._start_error = exc
                 self._ready.set()
                 return
-            set_session_origin(self.instance)
+            # Pass the factory so a dead proxy relaunches THIS session's own
+            # isolated instance, never the shared ApplicationSI (which could
+            # hijack the user's open Origin).
+            set_session_origin(self.instance, self._factory)
             try:
                 pid = self._get_pid(self.instance)
                 self.pid = int(pid) if pid is not None else None
