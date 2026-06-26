@@ -1,7 +1,6 @@
 import os
 import shutil
 import tempfile
-import time
 import uuid
 
 from ..app import mcp
@@ -48,7 +47,7 @@ _XYZ_TYPES = {"contour", "3d_scatter"}
 # pre-made 2D page collapses them to an empty/flat projection.
 _OWN_GRAPH_TYPES = {"3d_scatter"}
 
-# Clipboard-based export (CopyPage) only produces raster images
+# Raster image formats produced by the expGraph file export.
 EXPORT_IMAGE_FORMATS = {"png", "jpg", "tif", "bmp"}
 
 
@@ -61,58 +60,17 @@ def _designate_error_column(book: str, sheet: str, col: int) -> None:
     execute_labtalk(f"wks.col{col}.type = 3;")
 
 
-def export_graph_to_file(graph_name: str, file_path: str) -> str:
-    """Export one graph via CopyPage + clipboard. Shared by export tools.
+def export_graph_to_file(graph_name: str, file_path: str, format: str = "png") -> str:
+    """Export one graph directly to a file. Shared by export tools.
 
-    Returns the output path. Raises ValueError with a friendly message on
-    failure. Note: this overwrites the Windows clipboard contents.
+    Writes the file via Origin's expGraph X-Function with NO clipboard, so
+    the user's clipboard contents are preserved. Exports at ~1200px wide with
+    the aspect ratio kept. Returns the output path. Raises ValueError with a
+    friendly message on failure.
     """
-    try:
-        from PIL import ImageGrab
-    except ImportError as exc:
-        msg = "Pillow (PIL) is required for export. Install with: pip install Pillow"
-        raise RuntimeError(msg) from exc
-
-    o = get_origin()
-    safe_graph_name = labtalk_name(graph_name, "graph_name")
-    require_graph(safe_graph_name)
-    activate_window(safe_graph_name, "graph_name")
-
-    out_dir = os.path.dirname(file_path)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-
-    # CopyPage: format=4 (BMP to clipboard), then save via Pillow.
-    # expGraph does not produce files over COM on Origin 2020.
-    if not o.CopyPage(safe_graph_name, 4, 96, 24):
-        msg = f"Origin could not copy graph '{safe_graph_name}' to the clipboard."
-        raise ValueError(msg)
-
-    # Clipboard write is asynchronous — poll instead of a fixed sleep.
-    img = None
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        time.sleep(0.2)
-        img = ImageGrab.grabclipboard()
-        if img is not None:
-            break
-    if img is None:
-        msg = (
-            f"Export failed: no image appeared on the clipboard for "
-            f"'{safe_graph_name}'. Check that the Origin window is not "
-            "minimized and that no other app is using the clipboard."
-        )
-        raise ValueError(msg)
-
-    try:
-        img.save(file_path)
-    except (ValueError, OSError) as exc:
-        msg = f"Could not save image to {file_path}: {exc}"
-        raise ValueError(msg) from exc
-    if not os.path.exists(file_path):
-        msg = f"Export failed: {file_path} was not created."
-        raise ValueError(msg)
-    return file_path
+    return _export_via_expgraph(
+        graph_name, file_path, width=1200, height=0, format=format
+    )
 
 
 @mcp.tool()
@@ -350,9 +308,10 @@ def _export_graph_impl(
 ) -> str:
     """Export a graph to an image file.
 
-    Uses Origin's CopyPage + clipboard, so the Windows clipboard contents
-    are replaced during export. Image size is determined by the Origin
-    page (width/height/dpi are accepted but have no effect).
+    Writes the file directly via Origin's expGraph X-Function (no clipboard),
+    so the user's clipboard is preserved. Exports at ~1200px wide with the
+    aspect ratio kept (width/height/dpi are accepted but have no effect here;
+    use export_graph(sized=True) for explicit pixel sizes).
 
     Args:
         graph_name: Graph name to export
@@ -361,7 +320,7 @@ def _export_graph_impl(
                    Missing directories are created.
         format: Image format: png, jpg, tif, bmp. Used as the file
                 extension when file_path has none.
-        width: Unused (kept for API compatibility; size determined by Origin page)
+        width: Unused (kept for API compatibility; ~1200px wide is used)
         height: Unused (kept for API compatibility)
         dpi: Unused (kept for API compatibility)
 
@@ -373,7 +332,7 @@ def _export_graph_impl(
     if not os.path.splitext(path)[1]:
         path = f"{path}.{safe_format}"
 
-    out = export_graph_to_file(graph_name, path)
+    out = export_graph_to_file(graph_name, path, format=safe_format)
     size = os.path.getsize(out)
     return f"Exported to: {out} ({size} bytes)"
 
@@ -538,27 +497,20 @@ def _add_text_annotation_impl(
     return f"Added annotation '{text}' at ({x}, {y}) on {safe_graph}"
 
 
-def _export_graph_sized_impl(
+def _export_via_expgraph(
     graph_name: str,
     file_path: str,
-    width: int = 1200,
+    *,
+    width: int,
     height: int = 0,
-    format: str = "png"
+    format: str = "png",
 ) -> str:
-    """Export a graph to an image at a chosen pixel size (expGraph).
+    """Export one graph directly to an image file via Origin's expGraph.
 
-    Unlike export_graph (clipboard, page-size only), this controls the
-    output pixel width/height directly.
-
-    Args:
-        graph_name: Graph to export
-        file_path: Output path (Windows or WSL style)
-        width: Image width in pixels (default 1200)
-        height: Image height in pixels (0 = keep aspect ratio)
-        format: png, jpg, tif, or bmp
-
-    Returns:
-        Path and pixel/byte size of the exported file
+    Writes the file with NO clipboard (the user's clipboard is preserved).
+    Verified on Origin 2020: `tr1.unit:=2` selects pixels, `tr1.width`/
+    `tr1.height` set the size (height omitted = keep aspect ratio). Returns the
+    output path. Raises ValueError with a friendly message on failure.
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
     safe_format = labtalk_choice(format.lower(), EXPORT_IMAGE_FORMATS, "format")
@@ -585,7 +537,39 @@ def _export_graph_sized_impl(
     if not os.path.exists(path):
         msg = f"Export failed: {path} was not created."
         raise ValueError(msg)
-    return f"Exported {safe_graph} to {path} ({safe_width}px wide, {os.path.getsize(path)} bytes)"
+    return path
+
+
+def _export_graph_sized_impl(
+    graph_name: str,
+    file_path: str,
+    width: int = 1200,
+    height: int = 0,
+    format: str = "png"
+) -> str:
+    """Export a graph to an image at a chosen pixel size (expGraph).
+
+    Like export_graph (also clipboard-free via expGraph), but controls the
+    output pixel width/height directly.
+
+    Args:
+        graph_name: Graph to export
+        file_path: Output path (Windows or WSL style)
+        width: Image width in pixels (default 1200)
+        height: Image height in pixels (0 = keep aspect ratio)
+        format: png, jpg, tif, or bmp
+
+    Returns:
+        Path and pixel/byte size of the exported file
+    """
+    safe_width = positive_int(width, "width")
+    path = _export_via_expgraph(
+        graph_name, file_path, width=width, height=height, format=format
+    )
+    return (
+        f"Exported {labtalk_name(graph_name, 'graph_name')} to {path} "
+        f"({safe_width}px wide, {os.path.getsize(path)} bytes)"
+    )
 
 
 # Perceptually-uniform, colorblind-safe colormaps that Origin 2020 does NOT
@@ -961,6 +945,9 @@ def export_graph(
 ) -> str:
     """Export a graph to an image file.
 
+    Export never touches the Windows clipboard: the file is written directly
+    via Origin's expGraph X-Function, so the user's clipboard is preserved.
+
     Args:
         graph_name: Graph to export.
         file_path: Output path (Windows or WSL style). Missing directories
@@ -970,9 +957,9 @@ def export_graph(
         height: Output pixel height (only used when sized=True; 0 = keep
             aspect ratio).
         dpi: Unused (kept for API compatibility).
-        sized: When False (default), export via clipboard at the Origin page
-            size (width/height/dpi ignored). When True, export via expGraph at
-            the chosen pixel width/height.
+        sized: When False (default), export at ~1200px wide with the aspect
+            ratio kept (width/height/dpi ignored). When True, export at the
+            chosen pixel width/height.
 
     Returns:
         Path to the exported file.

@@ -9,7 +9,6 @@ pytestmark = pytest.mark.requires_origin
 
 def test_full_workflow():
     import win32com.client
-    from PIL import ImageGrab
 
     o = win32com.client.gencache.EnsureDispatch("Origin.ApplicationSI")
     o.NewProject()
@@ -32,13 +31,16 @@ def test_full_workflow():
     o.Execute('xb.fsize = 12;')
     o.Execute('yl.fsize = 12;')
 
-    # 4. Export via CopyPage + clipboard (expGraph requires interactive window focus)
-    out = os.path.join(os.path.expanduser("~"), "test_integration_fig.png")
-    # CopyPage format=4 gives high-res BMP copy to clipboard
-    o.CopyPage("Figure1", 4, 96, 24)
-    img = ImageGrab.grabclipboard()
-    assert img is not None, "CopyPage clipboard grab returned None"
-    img.save(out)
+    # 4. Export DIRECTLY to file via expGraph (no clipboard — the user's
+    #    clipboard contents are preserved). tr1.unit:=2 = pixels.
+    out_dir = os.path.expanduser("~")
+    out = os.path.join(out_dir, "test_integration_fig.png")
+    o.Execute("win -a Figure1;")
+    o.Execute(
+        f'expGraph type:=png path:="{out_dir}" '
+        'filename:="test_integration_fig" overwrite:=replace '
+        "tr1.unit:=2 tr1.width:=1200;"
+    )
 
     assert os.path.exists(out), "Export failed: file not created"
     size = os.path.getsize(out)

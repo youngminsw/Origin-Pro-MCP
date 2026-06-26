@@ -88,13 +88,14 @@ def export_all_graphs(
 ) -> str:
     """Export every graph in the project to image files (one per graph).
 
-    Uses the same clipboard-based export as export_graph, so the Windows
-    clipboard contents are replaced during export.
+    Uses the same clipboard-free export as export_graph (Origin's expGraph
+    X-Function), so the user's clipboard is preserved. Each graph is exported
+    at ~1200px wide with the aspect ratio kept.
 
     Args:
         output_dir: Output directory (Windows or WSL style). Created if missing.
         format: Image format: png, jpg, tif, bmp
-        dpi: Unused (kept for API compatibility; size determined by Origin page)
+        dpi: Unused (kept for API compatibility; ~1200px wide is used)
         width: Unused (kept for API compatibility)
         height: Unused (kept for API compatibility)
 
@@ -114,7 +115,7 @@ def export_all_graphs(
     for name in names:
         path = os.path.join(out_dir, f"{name}.{safe_format}")
         try:
-            exported.append(export_graph_to_file(name, path))
+            exported.append(export_graph_to_file(name, path, format=safe_format))
         except (ValueError, RuntimeError) as exc:
             failed.append(f"{name}: {exc}")
 

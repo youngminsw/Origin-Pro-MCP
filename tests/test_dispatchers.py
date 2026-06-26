@@ -63,7 +63,9 @@ def _registry():
 
 
 def test_registry_has_exactly_37_tools():
-    assert len(_registry()) == 37
+    # 37 Origin tools + list_skills + get_skill = 39 (skills are now exposed
+    # as first-class MCP tools via origin_pro_mcp.skills.register_skills).
+    assert len(_registry()) == 39
 
 
 def test_eight_new_dispatchers_registered():
@@ -330,12 +332,29 @@ def test_colormap_requires_both_bounds(fake_origin):
 # --- export_graph: 2 branches -------------------------------------------------
 
 def test_export_graph_plain_equiv(fake_origin, tmp_path):
-    # Clipboard export can't run under the fake; the unknown-graph guard path
-    # exercises the same code in both impl and dispatcher (sized=False).
+    # The fake can't produce a real file, so the file-existence check fails;
+    # the unknown-graph guard path exercises the same code in both impl and
+    # dispatcher (sized=False).
     p = str(tmp_path / "fig.png")
     _assert_equiv(fake_origin,
                   G._export_graph_impl, ("Ghost", p),
                   G.export_graph, ("Ghost", p))
+
+
+def test_export_graph_default_is_clipboard_free(fake_origin, tmp_path, monkeypatch):
+    # The default export (sized=False) must issue an expGraph LabTalk command
+    # (clipboard-free) and never touch CopyPage. Pretend the file was written
+    # so the impl's existence/size checks pass under the fake.
+    monkeypatch.setattr(G.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(G.os.path, "getsize", lambda _p: 12345)
+    p = str(tmp_path / "fig.png")
+    fake_origin.executed.clear()
+    msg = G.export_graph("Graph1", p)
+    cmds = " ".join(fake_origin.executed)
+    assert "expGraph" in cmds
+    assert "tr1.width" in cmds
+    assert "CopyPage" not in cmds
+    assert "Exported to:" in msg
 
 
 def test_export_graph_sized_equiv(fake_origin, tmp_path):

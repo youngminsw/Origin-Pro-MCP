@@ -356,7 +356,9 @@ name), `add_columns`/`delete_columns`, `transpose_worksheet`, `import_excel`,
 - `save_graph_template(graph, path)` captures a finished layout as `.otpu`
   to reuse across figures.
 - `export_graph_sized(graph, path, width=1600)` exports at an exact pixel
-  width (vs. `export_graph`, which follows the Origin page size).
+  width (vs. `export_graph`, which exports at ~1200px wide). Both write the
+  file directly via expGraph with no clipboard, so the user's clipboard is
+  preserved.
 
 ## Origin COM Notes
 
@@ -368,7 +370,7 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | `%C` plot shortcuts can fail through COM | Use plot names from `FindGraphLayer().DataPlots`; MCP style tools do this |
 | Legend text is awkward through COM | Set worksheet Long Names, rebuild with `legend -r`, then position |
 | Legend overlaps a dense plot with no clear corner | Handled automatically: the legend is moved outside the frame (right of the plot, vertically centered) with the plot shrunk — `place_legend_avoiding_data` returns `outside-right`. Origin clamps `legend.left` back inside the frame on the first assignment, so the tool sets it TWICE (with `legend.attach = 1`); the second assignment escapes the clamp |
-| `expGraph` needs a directory `path:=` + `filename:=` and `overwrite:=replace` (a full file path or missing args opens a dialog) | `export_graph` (clipboard, page size) and `export_graph_sized` (expGraph, `tr1.unit:=2 tr1.width:=` pixels) both handle this correctly |
+| `expGraph` needs a directory `path:=` + `filename:=` and `overwrite:=replace` (a full file path or missing args opens a dialog) | `export_graph` (expGraph, ~1200px wide) and `export_graph_sized` (expGraph, `tr1.unit:=2 tr1.width:=` pixels) both write the file directly with no clipboard |
 | Graphic-object arrowheads use `arrowEndShape`/`arrowBeginShape` (1=filled, 2=chevron), not `arrowEnd`/`arrowEndType` | `add_arrow` draws the line and sets `arrowEndShape`; the begin/end length/width are `arrowEndLength`/`arrowEndWidth` |
 | Save a graph template with `save -t <window> <fullpath.otpu>` (or `-tj` for `.otp`) — both window and full path+extension are required or a dialog opens | `save_graph_template` supplies both, so it never opens a dialog |
 | Colormap palettes load via `layer.cmap.load(<name>.pal); layer.cmap.updateScale()` (the `()` matters) | `apply_color_map` / `set_colormap_levels` wrap this |
