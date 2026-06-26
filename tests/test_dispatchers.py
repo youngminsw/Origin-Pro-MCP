@@ -63,9 +63,10 @@ def _registry():
 
 
 def test_registry_has_exactly_37_tools():
-    # 37 Origin tools + list_skills + get_skill = 39 (skills are now exposed
-    # as first-class MCP tools via origin_pro_mcp.skills.register_skills).
-    assert len(_registry()) == 39
+    # 38 Origin tools (delete_graph added) + list_skills + get_skill = 40
+    # (skills are now exposed as first-class MCP tools via
+    # origin_pro_mcp.skills.register_skills).
+    assert len(_registry()) == 40
 
 
 def test_eight_new_dispatchers_registered():

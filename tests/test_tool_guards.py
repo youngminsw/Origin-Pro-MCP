@@ -255,3 +255,101 @@ def test_add_plot_rejects_non_xy_type(fake_origin):
 
     with pytest.raises(ValueError, match="only X,Y"):
         add_plot_to_graph("Graph1", "Book1", "Sheet1", 1, 2, plot_type="histogram")
+
+
+# --- publication-figure quality rules ----------------------------------------
+
+def test_nice_increment_caps_at_six_ticks():
+    from origin_pro_mcp.tools.style import _nice_increment
+
+    # Every non-None increment must yield at most 5 intervals (<= 6 major ticks).
+    for lo, hi in [(0, 10), (0, 5), (0, 1), (0, 100), (-5, 5), (0, 8), (0, 60), (0, 0.4)]:
+        inc = _nice_increment(lo, hi)
+        if inc is not None:
+            intervals = abs(hi - lo) / inc
+            assert intervals <= 5 + 1e-9, (lo, hi, inc, intervals)
+
+
+def test_nice_increment_tighter_than_old_eight_interval_cap():
+    from origin_pro_mcp.tools.style import _nice_increment
+
+    # span 60: the old 3-8 rule picked inc=10 (6 intervals); the capped rule
+    # must give <= 5 intervals.
+    inc = _nice_increment(0, 60)
+    assert inc is not None
+    assert (60 / inc) <= 5
+
+
+def test_apply_publication_style_tightens_axes_to_data(fake_origin, monkeypatch):
+    from origin_pro_mcp.tools import style
+
+    monkeypatch.setattr(style, "_collect_xy",
+                        lambda g: ([0.0, 5.0, 10.0], [2.0, 8.0, 20.0]))
+    scripts = []
+    monkeypatch.setattr(style, "graph_layer_execute",
+                        lambda g, s: scripts.append(s) or True)
+
+    style.apply_publication_style("Graph1")
+    joined = " ".join(scripts)
+    # Tight to the data extent: no padding before/after the data.
+    assert "layer.x.from = 0.0;" in joined
+    assert "layer.x.to = 10.0;" in joined
+    assert "layer.x.inc" in joined
+    assert "layer.y.from = 2.0;" in joined
+    assert "layer.y.to = 20.0;" in joined
+    assert "layer.y.inc" in joined
+    # Minor ticks reduced to 1 (not 4) so ticks are not dense.
+    assert "layer.x.minor = 1;" in joined
+    assert "layer.y.minor = 1;" in joined
+
+
+def test_apply_publication_style_uses_explicit_axis_bounds(fake_origin, monkeypatch):
+    from origin_pro_mcp.tools import style
+
+    monkeypatch.setattr(style, "_collect_xy",
+                        lambda g: ([0.0, 10.0], [0.0, 100.0]))
+    scripts = []
+    monkeypatch.setattr(style, "graph_layer_execute",
+                        lambda g, s: scripts.append(s) or True)
+
+    style.apply_publication_style("Graph1", x_min=1.0, x_max=9.0)
+    joined = " ".join(scripts)
+    # Explicit bounds win over the data extent.
+    assert "layer.x.from = 1.0;" in joined
+    assert "layer.x.to = 9.0;" in joined
+    # Y still tightens to the data.
+    assert "layer.y.from = 0.0;" in joined
+    assert "layer.y.to = 100.0;" in joined
+
+
+def test_apply_publication_style_skips_axis_when_data_unreadable(fake_origin, monkeypatch):
+    from origin_pro_mcp.tools import style
+
+    def _boom(_g):
+        raise RuntimeError("cannot read data")
+
+    monkeypatch.setattr(style, "_collect_xy", _boom)
+    scripts = []
+    monkeypatch.setattr(style, "graph_layer_execute",
+                        lambda g, s: scripts.append(s) or True)
+
+    # Best-effort: an unreadable graph must not raise, and no from/to is set.
+    style.apply_publication_style("Graph1")
+    joined = " ".join(scripts)
+    assert "layer.x.from" not in joined
+    assert "layer.y.from" not in joined
+
+
+def test_delete_graph_closes_window(fake_origin):
+    from origin_pro_mcp.tools.graph import delete_graph
+
+    msg = delete_graph("Graph1")
+    assert "Deleted graph 'Graph1'." == msg
+    assert any(s.startswith("win -cd Graph1") for s in fake_origin.executed)
+
+
+def test_delete_graph_unknown_lists_open_graphs(fake_origin):
+    from origin_pro_mcp.tools.graph import delete_graph
+
+    with pytest.raises(ValueError, match="Open graphs: Graph1"):
+        delete_graph("Ghost")

@@ -2,6 +2,7 @@ from ..app import mcp
 from ..origin_connection import activate_window, execute_labtalk, get_lt_var, require_graph
 from ..labtalk_safe import labtalk_choice, labtalk_name, labtalk_string, positive_int
 from .style_helpers import (
+    _collect_xy,
     find_plot_column,
     get_plot_info,
     graph_layer_execute,
@@ -65,21 +66,63 @@ def _plot_has_symbols(plot_name: str) -> bool:
 
 
 def _nice_increment(low: float, high: float):
-    """A round tick increment giving roughly 5 major intervals, or None."""
+    """A round tick increment giving ~4 major intervals (4-6 ticks), or None.
+
+    Caps the count at 5 intervals (so at most 6 major ticks) to keep the axis
+    uncrowded, and scores toward 4 intervals.
+    """
     import math
     span = abs(high - low)
     if span <= 0:
         return None
-    exponent = math.floor(math.log10(span / 5))
+    exponent = math.floor(math.log10(span / 4))
     best = None
     for mantissa in (1, 2, 2.5, 5, 10):
         inc = mantissa * 10 ** exponent
         intervals = span / inc
-        if 3 <= intervals <= 8:
-            score = abs(intervals - 5)
+        if 3 <= intervals <= 5:
+            score = abs(intervals - 4)
             if best is None or score < best[0]:
                 best = (score, inc)
     return best[1] if best else None
+
+
+def _tight_axis_cmds(
+    graph_name: str,
+    x_min: float | None,
+    x_max: float | None,
+    y_min: float | None,
+    y_max: float | None,
+) -> list[str]:
+    """LabTalk commands that tighten each axis to the data (best-effort).
+
+    For each axis the effective [lo, hi] is the explicit min/max when given,
+    else the data extent read via ``_collect_xy``. ``from``/``to`` are set
+    TIGHT (no padding, so the curve touches the axes; if the data starts at 0
+    the axis starts at 0) plus a capped tick increment. Never raises: when the
+    data can't be read (or an axis has no usable points) that axis is left on
+    Origin's auto range.
+    """
+    try:
+        xs, ys = _collect_xy(graph_name)
+    except Exception:
+        xs, ys = [], []
+    x_vals = [x for x in xs if x is not None]
+
+    cmds: list[str] = []
+    for prefix, lo_opt, hi_opt, values in (
+        ("x", x_min, x_max, x_vals),
+        ("y", y_min, y_max, ys),
+    ):
+        lo = lo_opt if lo_opt is not None else (min(values) if values else None)
+        hi = hi_opt if hi_opt is not None else (max(values) if values else None)
+        if lo is None or hi is None:
+            continue
+        cmds.append(f"layer.{prefix}.from = {lo}; layer.{prefix}.to = {hi};")
+        inc = _nice_increment(lo, hi)
+        if inc is not None:
+            cmds.append(f"layer.{prefix}.inc = {inc};")
+    return cmds
 
 
 @mcp.tool()
@@ -196,31 +239,19 @@ def apply_publication_style(
     graph_layer_execute(safe_graph_name, 'layer.x.label.pt = 22; layer.y.label.pt = 22;')
     graph_layer_execute(safe_graph_name, 'layer.x.label.bold = 1; layer.y.label.bold = 1;')
 
-    # 3. Axis range + readable tick spacing (~5 major intervals)
-    range_cmds = []
-    if x_min is not None:
-        range_cmds.append(f"layer.x.from = {x_min};")
-    if x_max is not None:
-        range_cmds.append(f"layer.x.to = {x_max};")
-    if y_min is not None:
-        range_cmds.append(f"layer.y.from = {y_min};")
-    if y_max is not None:
-        range_cmds.append(f"layer.y.to = {y_max};")
-    if x_min is not None and x_max is not None:
-        inc = _nice_increment(x_min, x_max)
-        if inc is not None:
-            range_cmds.append(f"layer.x.inc = {inc};")
-    if y_min is not None and y_max is not None:
-        inc = _nice_increment(y_min, y_max)
-        if inc is not None:
-            range_cmds.append(f"layer.y.inc = {inc};")
+    # 3. Axis range — TIGHT to the data by default (no empty gap before the
+    # first or after the last point; if the data starts at 0 the axis starts
+    # at 0) + readable tick spacing (~4 major intervals). Explicit min/max
+    # override the data extent. Best-effort: unreadable data leaves the axis
+    # on Origin's auto range.
+    range_cmds = _tight_axis_cmds(safe_graph_name, x_min, x_max, y_min, y_max)
     if range_cmds:
         graph_layer_execute(safe_graph_name, " ".join(range_cmds))
 
     # 4. Ticks — inward, minor ticks on, proper lengths
     graph_layer_execute(safe_graph_name,
         "layer.x.ticks = 1; layer.y.ticks = 1; "
-        "layer.x.minor = 4; layer.y.minor = 4; "
+        "layer.x.minor = 1; layer.y.minor = 1; "
         "layer.x.majorLen = 8; layer.y.majorLen = 8;"
     )
 

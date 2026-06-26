@@ -240,6 +240,23 @@ def add_plot_to_graph(
         raise ValueError(msg)
     return f"Added {safe_plot_type} plot to {safe_graph_name}"
 
+@mcp.tool()
+def delete_graph(graph_name: str) -> str:
+    """Delete a graph window to keep the Origin project lightweight — use this
+    to remove a badly-drawn or rejected figure.
+
+    Args:
+        graph_name: Graph to delete
+
+    Returns:
+        Confirmation message
+    """
+    safe_graph_name = labtalk_name(graph_name, "graph_name")
+    require_graph(safe_graph_name)
+    execute_labtalk(f"win -cd {safe_graph_name};")
+    return f"Deleted graph '{safe_graph_name}'."
+
+
 def _set_axis_labels_impl(
     graph_name: str,
     x_label: str = "",

@@ -36,8 +36,19 @@ If unspecified, choose a conservative manuscript default: line+symbol for ordere
 - Avoid red and green as the only two series colors.
 - `apply_publication_style` defaults are tuned for print: 3.0 pt data
   lines, size-14 symbols, and 2.5 pt error-bar lines with whisker caps
-  matched to the symbol size. Keep tick labels
-  uncrowded (~5 major intervals); the one-call tool handles spacing.
+  matched to the symbol size.
+- **Axis rules (strict — `apply_publication_style` enforces these):**
+  - **No empty axis gap on a linear graph.** The axis range is TIGHT to the
+    data — no padding before the first or after the last point. If the data
+    starts at 0, the axis starts at 0 (0 is the Y-intercept; the curve touches
+    the Y axis). Never leave a blank stretch where there is no data.
+  - **Major ticks capped at 4–6 per axis.** Never crowd the axis with ticks;
+    the tool picks a round increment giving ≤6 labelled ticks, with sparse
+    minor ticks. If you set ranges manually, keep within 4–6 major ticks.
+- **Keep the project lightweight — delete bad graphs.** When a figure comes
+  out wrong (mis-scaled, wrong plot type, rejected attempt), remove it with
+  the `delete_graph` tool instead of leaving it in the project. A project full
+  of discarded graphs gets heavy and slow.
 - **The legend must never overlap the data.** `apply_publication_style`,
   `set_legend`, and the fit-curve path auto-place the legend in the
   emptiest corner (the requested `legend_position` is only a preference,
