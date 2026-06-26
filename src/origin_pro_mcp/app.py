@@ -2,7 +2,9 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("origin-pro", log_level="ERROR")
+from .skills import SERVER_INSTRUCTIONS
+
+mcp = FastMCP("origin-pro", log_level="ERROR", instructions=SERVER_INSTRUCTIONS)
 
 # Cutover flag: Phase 3d FLIPPED this to True — the daemon-backed shim is now the
 # default entrypoint (auto-spawn + orphan self-cleanup). Force the legacy

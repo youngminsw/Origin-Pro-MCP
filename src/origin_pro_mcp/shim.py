@@ -340,11 +340,21 @@ def _make_forwarder(tool_name: str, real_fn, client: ShimClient):
 
 
 def build_shim_server(client: ShimClient, *, name: str = "origin-pro") -> FastMCP:
-    """Build a fresh shim ``FastMCP`` whose tools forward through ``client``."""
-    shim = FastMCP(name, log_level="ERROR")
+    """Build a fresh shim ``FastMCP`` whose tools forward through ``client``.
+
+    The Origin tools become daemon-forwarders, but the skill tools
+    (``list_skills`` / ``get_skill``) read bundled markdown only — no COM — so
+    they are registered LOCALLY on the shim and never routed to the daemon.
+    """
+    from .skills import SERVER_INSTRUCTIONS, SKILL_TOOL_NAMES, register_skills
+
+    shim = FastMCP(name, log_level="ERROR", instructions=SERVER_INSTRUCTIONS)
     for tool_name, real_fn in _real_registry().items():
+        if tool_name in SKILL_TOOL_NAMES:
+            continue  # served locally below — never forward to the daemon
         shim.add_tool(_make_forwarder(tool_name, real_fn, client),
                       name=tool_name)
+    register_skills(shim)
     return shim
 
 
