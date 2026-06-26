@@ -70,6 +70,33 @@ def test_origin_visible_mode(monkeypatch):
         assert daemon._origin_visible() == 0
 
 
+def test_dismiss_origin_dialogs_closes_owned_dialogs():
+    closed = []
+    n = daemon._dismiss_origin_dialogs(
+        1234,
+        find_dialogs=lambda pid: [101, 202] if pid == 1234 else [],
+        close=closed.append,
+    )
+    assert n == 2
+    assert closed == [101, 202]
+
+
+def test_dismiss_origin_dialogs_noop_without_pid():
+    closed = []
+    assert daemon._dismiss_origin_dialogs(
+        None, find_dialogs=lambda pid: [1], close=closed.append) == 0
+    assert daemon._dismiss_origin_dialogs(
+        0, find_dialogs=lambda pid: [1], close=closed.append) == 0
+    assert closed == []
+
+
+def test_dismiss_origin_dialogs_swallows_errors():
+    # A Win32 failure must never propagate into the launch path.
+    def boom(pid):
+        raise OSError("enum failed")
+    assert daemon._dismiss_origin_dialogs(1234, find_dialogs=boom) == 0
+
+
 def test_session_has_com_init_helpers():
     # The worker thread must initialize a COM apartment (Origin 2020 needs it);
     # the helpers are guarded no-ops where pythoncom is unavailable (WSL).

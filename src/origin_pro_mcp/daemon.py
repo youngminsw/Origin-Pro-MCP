@@ -1213,6 +1213,77 @@ def _origin_visible() -> int:
     return 0 if val.strip().lower() in ("0", "false", "no", "off", "hidden", "invisible") else 1
 
 
+def _find_origin_dialogs(pid: int) -> list:
+    """HWNDs of visible modal dialogs (#32770) owned by Origin process ``pid``."""
+    import win32gui
+    import win32process
+
+    out: list = []
+
+    def _cb(hwnd, _):
+        try:
+            if (win32gui.IsWindowVisible(hwnd)
+                    and win32gui.GetClassName(hwnd) == "#32770"
+                    and win32process.GetWindowThreadProcessId(hwnd)[1] == pid):
+                out.append(hwnd)
+        except Exception:
+            pass
+        return True
+
+    win32gui.EnumWindows(_cb, None)
+    return out
+
+
+def _close_window(hwnd) -> None:
+    import win32con
+    import win32gui
+
+    win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+
+
+def _dismiss_origin_dialogs(pid: int, find_dialogs=None, close=None) -> int:
+    """Close any modal dialog owned by our Origin child ``pid``; return the count.
+
+    Origin's startup "New Workbook" template chooser is modal and, when the
+    user has "show on startup" enabled, blocks COM automation. We dismiss it
+    out-of-band via Win32 (works even while the COM/STA thread is wedged on the
+    modal). Only touches dialogs owned by OUR launched Origin. ``find_dialogs``
+    / ``close`` are injection seams for tests.
+    """
+    if not pid:
+        return 0
+    try:
+        finder = find_dialogs or _find_origin_dialogs
+        closer = close or _close_window
+        hwnds = finder(pid)
+        for hwnd in hwnds:
+            closer(hwnd)
+        return len(hwnds)
+    except Exception:
+        return 0
+
+
+def _spawn_dialog_dismisser(pid: int, duration: float = 30.0,
+                            interval: float = 1.0) -> None:
+    """Background thread: for ``duration`` s after launch, close any startup
+    dialog on Origin ``pid`` (it appears once, asynchronously, during init)."""
+    if not pid or sys.platform != "win32":
+        return
+
+    def _run():
+        end = time.monotonic() + duration
+        closed_any = False
+        while time.monotonic() < end:
+            if _dismiss_origin_dialogs(pid):
+                closed_any = True
+            elif closed_any:
+                return  # dismissed and nothing left — startup is past
+            time.sleep(interval)
+
+    threading.Thread(target=_run, name=f"dialog-dismiss-{pid}",
+                     daemon=True).start()
+
+
 def _real_origin_factory():
     """Default factory: a fresh, isolated ``Origin.exe`` per session (Windows).
 
@@ -1243,6 +1314,9 @@ def _real_origin_factory():
         instance.Visible = _origin_visible()
     except Exception:
         pass
+    # Auto-dismiss the modal "New Workbook" startup dialog (if the user's Origin
+    # is set to show it) so it can't block automation.
+    _spawn_dialog_dismisser(pid)
     _real_pid_tls.pid = pid
     return instance
 
