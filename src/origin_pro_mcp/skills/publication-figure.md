@@ -370,11 +370,16 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
 - **n=3 mean±SD error bars.** Put the SD/SE in its own column and either
   create the plot with them, `create_graph(..., y_error_col=N)`, or attach
   them afterward with `set_error_bars(graph, book, sheet, y_col, err_col)` —
-  which reuses Origin's `set <err> -o <y>` idiom so no duplicate curve is left.
-  Designate an error column explicitly with
+  which plots the error column, reassigns it as error bars (`set <err> -o <y>`),
+  designates it as an error column, and rebuilds the legend, so no stray curve
+  or extra legend entry is left. Or designate a column yourself with
   `set_column_designation(book, sheet, col, "yerr")` (or `"xerr"`).
+- **Open (hollow) markers** — publication standard — via
+  `set_plot_style(graph, plot_index, symbol_shape=2, open_symbol=True)`
+  (`open_symbol` maps to LabTalk `set -kf 1`; `-kf 0` is solid).
 - **Remove a stray/dead plot** with `remove_plot(graph, plot_index)` — it uses
-  `layer -d`, which actually deletes the curve (a bare `delete range` does not).
+  `layer -e` + `layer -ie`, which actually removes the curve AND its dead
+  legend/style holder (a bare `delete range` does not).
 
 ### Worksheet prep and IO
 

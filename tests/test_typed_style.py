@@ -37,6 +37,10 @@ def test_set_error_bars_y_uses_set_o(fake_origin):
     joined = " ".join(fake_origin.executed)
     assert "plotxy iy:=[Book1]Sheet1!col(3)" in joined
     assert "set __mcp_er -o __mcp_yr" in joined
+    # N1 fix: designate the err column as Y Error (3) and rebuild the legend so
+    # no stray "SD" curve/entry is left behind.
+    assert "wks.col3.type = 3" in joined
+    assert "legend -r" in joined
 
 
 def test_set_error_bars_x_direction(fake_origin):
@@ -59,6 +63,27 @@ def test_set_error_bars_unknown_graph(fake_origin):
     with pytest.raises(ValueError, match="not found"):
         set_error_bars("Ghost", "Book1", "Sheet1", y_col=2, err_col=3)
 
+
+# --- set_plot_style open/solid markers ---------------------------------------
+
+def test_set_plot_style_open_symbol(fake_origin):
+    from fakes import FakeGraph
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B"])]
+    fake_origin.lt_vars["__mcpk"] = 1  # make _plot_has_symbols() report a symbol plot
+    set_plot_style("Graph1", plot_index=1, open_symbol=True)
+    assert any("-kf 1" in s for s in fake_origin.executed)
+
+
+def test_set_plot_style_solid_symbol_default(fake_origin):
+    from fakes import FakeGraph
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B"])]
+    fake_origin.lt_vars["__mcpk"] = 1
+    set_plot_style("Graph1", plot_index=1)
+    assert any("-kf 0" in s for s in fake_origin.executed)
 
 # --- set_graph_font bold -----------------------------------------------------
 

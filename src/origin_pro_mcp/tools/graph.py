@@ -296,7 +296,11 @@ def remove_plot(graph_name: str, plot_index: int = 1) -> str:
     return f"Removed data plot {plot_index} ({pname}) from {safe_graph}."
 
 
+# `set <err> -o <y>` error-bar flag + the LabTalk Yerr/Xerr column designation
+# to stamp on the error column afterwards (so it reads as an error plot, not a
+# second data curve/legend entry).
 _ERROR_BAR_FLAGS = {"y": "-o", "x": "-ox"}
+_ERROR_BAR_DESIG = {"y": 3, "x": 7}  # wks.col.type: 3=Y Error, 7=X Error
 
 
 @mcp.tool()
@@ -311,8 +315,9 @@ def set_error_bars(
     """Attach error bars to an EXISTING plot from an error column, in place.
 
     Uses Origin's documented `set <err> -o <y>` idiom: the error column is
-    plotted into the layer and then reassigned as error bars of the target Y
-    plot, so no duplicate curve is left behind (unlike re-running plotxy with a
+    plotted into the layer, reassigned as error bars of the target Y plot,
+    then designated as an error column and the legend is rebuilt — so no stray
+    curve or extra legend entry is left behind (unlike re-running plotxy with a
     3-column range). The error and Y columns must live in the same sheet, and
     the target Y column must already be plotted on the graph.
 
@@ -339,16 +344,22 @@ def set_error_bars(
     require_graph(safe_graph)
     require_worksheet(safe_book, safe_sheet)
     flag = _ERROR_BAR_FLAGS[safe_dir]
+    desig = _ERROR_BAR_DESIG[safe_dir]
     ref = f"[{safe_book}]{safe_sheet}"
-    # Plot the error column into the layer (so it is a "plotted dataset"), then
-    # reassign that plot as error bars of the Y plot. `set` consumes the temp
-    # plot — it becomes the bars, not a leftover curve.
+    # 1. Plot the error column into the layer (so it is a "plotted dataset").
+    # 2. `set <er> -o/-ox <yr>` reassigns it as error bars of the Y plot.
+    # 3. Designate the error column as Y/X Error so it reads as an error plot
+    #    (not a second data curve) and drops out of data-plot counts.
+    # 4. `legend -r` rebuilds the legend WITHOUT the error-column entry.
     script = (
         f"win -a {safe_graph}; "
         f"plotxy iy:={ref}!col({safe_err}) plot:=200 ogl:=[{safe_graph}]Layer1; "
         f"range __mcp_yr = {ref}!col({safe_y}); "
         f"range __mcp_er = {ref}!col({safe_err}); "
-        f"set __mcp_er {flag} __mcp_yr;"
+        f"set __mcp_er {flag} __mcp_yr; "
+        f'win -a {safe_book}; page.active$ = "{safe_sheet}"; '
+        f"wks.col{safe_err}.type = {desig}; "
+        f"win -a {safe_graph}; legend -r;"
     )
     if not execute_labtalk(script):
         msg = (

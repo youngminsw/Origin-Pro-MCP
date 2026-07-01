@@ -285,7 +285,7 @@ always exposes exactly the tools listed below.
 | Tool | Description |
 |------|-------------|
 | `apply_publication_style` | **One-call publication formatting** (recommended) |
-| `set_plot_style` | Set color, symbol, line width per plot |
+| `set_plot_style` | Set color, line width, symbol shape/size, and open/solid marker |
 | `set_graph_font` | Set font family, size, and optional bold |
 | `set_legend` | Configure legend text and position |
 | `set_tick_style` | Set tick direction and length |

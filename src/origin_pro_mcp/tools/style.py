@@ -132,7 +132,8 @@ def set_plot_style(
     line_width: float = 2.5,
     symbol_size: int = 8,
     symbol_shape: int = 0,
-    color: str = ""
+    color: str = "",
+    open_symbol: bool = False,
 ) -> str:
     """Set line/symbol style for a data plot.
 
@@ -145,6 +146,8 @@ def set_plot_style(
         symbol_shape: 0=auto, 1=square, 2=circle, 3=triangle-up,
                       4=diamond, 5=triangle-down, 6=hexagon
         color: Color name (black, red, blue, green, orange, purple, cyan, magenta)
+        open_symbol: True = open/hollow marker interior (publication standard),
+                     False = solid fill (LabTalk `set -kf 1` vs `0`).
 
     Returns:
         Success message
@@ -177,6 +180,9 @@ def set_plot_style(
         execute_labtalk(f"set {pname} -k {shape};")
         time.sleep(0.2)
         execute_labtalk(f"set {pname} -z {symbol_size};")
+        time.sleep(0.2)
+        # Symbol interior: 1 = Open (hollow), 0 = Solid (verified on Origin 2020).
+        execute_labtalk(f"set {pname} -kf {1 if open_symbol else 0};")
     elif color:
         # bar/column-type plots: color the fill too
         execute_labtalk(f"set {pname} -cf {c};")
