@@ -151,20 +151,59 @@ def get_lt_var(name: str) -> float:
 def get_lt_str(name: str) -> str:
     return get_origin().LTStr(name)
 
+# ASCII record separator — cannot appear in an Origin window/sheet name, so it
+# is a safe delimiter for the LabTalk-built name list.
+_ENUM_DELIM = "\x1e"
+
+
+def safe_page_names(pages) -> list:
+    """Top-level names of a COM page collection, isolating a bad/corrupt entry
+    so one unreadable window can't abort the whole enumeration (which, on a
+    heavy project, is what can wedge/crash the COM bridge)."""
+    names: list = []
+    try:
+        count = pages.Count
+    except Exception:
+        return names
+    for i in range(count):
+        try:
+            names.append(pages.Item(i).Name)
+        except Exception:
+            continue
+    return names
+
+
+def sheet_names(book_name: str) -> list:
+    """Sheet (layer) names of a workbook via LabTalk's internal ``layer$(k)``
+    loop — never the deep ``page.Layers.Item(j).Name`` COM traversal, which
+    instantiates a proxy per sheet and can HARD-CRASH Origin on heavy projects.
+    Crash-safe (verified on Origin 2020). Returns [] on any failure."""
+    o = get_origin()
+    try:
+        o.Execute(
+            f'string _opm_sh$="";win -a {book_name};'
+            f'for(int _opmk=1;_opmk<=page.nlayers;_opmk++)'
+            f'{{_opm_sh$=_opm_sh$+layer$(_opmk).name$+"{_ENUM_DELIM}";}}'
+        )
+        raw = o.LTStr("_opm_sh$") or ""
+        return [s for s in raw.split(_ENUM_DELIM) if s]
+    except Exception:
+        return []
+
+
 def workbook_names() -> list:
-    """Names of all open workbooks."""
-    pages = get_origin().WorksheetPages
-    return [pages.Item(i).Name for i in range(pages.Count)]
+    """Names of all open workbooks (per-item isolated)."""
+    return safe_page_names(get_origin().WorksheetPages)
+
 
 def graph_names() -> list:
-    """Names of all open graph windows."""
-    pages = get_origin().GraphPages
-    return [pages.Item(i).Name for i in range(pages.Count)]
+    """Names of all open graph windows (per-item isolated)."""
+    return safe_page_names(get_origin().GraphPages)
+
 
 def matrix_names() -> list:
-    """Names of all open matrix books."""
-    pages = get_origin().MatrixPages
-    return [pages.Item(i).Name for i in range(pages.Count)]
+    """Names of all open matrix books (per-item isolated)."""
+    return safe_page_names(get_origin().MatrixPages)
 
 def require_matrix(book: str, sheet: str = "MSheet1") -> str:
     """Return the [book]sheet matrix reference, or raise with open matrices."""

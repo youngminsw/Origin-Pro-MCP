@@ -9,6 +9,8 @@ from ..origin_connection import (
     get_origin,
     get_lt_str,
     require_worksheet,
+    safe_page_names,
+    sheet_names,
     workbook_names,
 )
 from ..labtalk_safe import (
@@ -184,50 +186,13 @@ def _import_csv_to_worksheet_impl(
     active_book = o.LTStr("page.name$")
     return f"Imported to workbook: {active_book}"
 
-# ASCII record separator — cannot appear in an Origin window/sheet name, so it
-# is a safe delimiter for the LabTalk-built sheet-name list.
-_SHEET_ENUM_DELIM = "\x1e"
-
-
-def _safe_page_names(pages) -> list:
-    """Top-level names of a COM page collection, isolating a bad/corrupt entry
-    so one unreadable window can't abort the whole enumeration."""
-    names: list = []
-    try:
-        count = pages.Count
-    except Exception:
-        return names
-    for i in range(count):
-        try:
-            names.append(pages.Item(i).Name)
-        except Exception:
-            continue  # skip an entry whose name can't be read
-    return names
-
-
 def _sheet_names(o, book_name: str, page=None) -> list:
-    """Sheet names of a workbook via LabTalk layer enumeration.
-
-    On a heavy project (dozens of windows) the deep ``page.Layers.Item(j).Name``
-    COM traversal instantiates a proxy per sheet and can wedge or HARD-CRASH the
-    COM bridge (taking Origin + the daemon down). LabTalk's internal
-    ``layer$(k).name$`` loop iterates without per-sheet COM proxies and is
-    crash-safe (verified on Origin 2020). We fall back to an isolated per-sheet
-    COM read only when LabTalk yields nothing (test fakes / odd COM builds)."""
-    try:
-        o.Execute(
-            f'string _opm_sh$="";win -a {book_name};'
-            f'for(int _opmk=1;_opmk<=page.nlayers;_opmk++)'
-            f'{{_opm_sh$=_opm_sh$+layer$(_opmk).name$+"{_SHEET_ENUM_DELIM}";}}'
-        )
-        raw = o.LTStr("_opm_sh$") or ""
-        names = [s for s in raw.split(_SHEET_ENUM_DELIM) if s]
-        if names:
-            return names
-    except Exception:
-        pass
-    # Fallback: isolated per-sheet COM read (never reached on a healthy real
-    # Origin, where the LabTalk path returns the names).
+    """Sheet names of a workbook: the shared crash-safe LabTalk enumeration
+    (``origin_connection.sheet_names``), with an isolated per-sheet COM fallback
+    used only when LabTalk yields nothing (test fakes / odd COM builds)."""
+    names = sheet_names(book_name)
+    if names:
+        return names
     if page is None:
         return []
     out: list = []
@@ -276,8 +241,8 @@ def list_worksheets() -> str:
             workbooks.append({"name": name, "sheets": _sheet_names(o, name, page)})
         return json.dumps({
             "workbooks": workbooks,
-            "graphs": _safe_page_names(o.GraphPages),
-            "matrices": _safe_page_names(o.MatrixPages),
+            "graphs": safe_page_names(o.GraphPages),
+            "matrices": safe_page_names(o.MatrixPages),
         })
     finally:
         if saved_active:

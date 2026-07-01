@@ -7,6 +7,7 @@ from ..origin_connection import (
     get_origin,
     require_graph,
     require_worksheet,
+    sheet_names,
 )
 from ..labtalk_safe import labtalk_choice, labtalk_name, positive_column
 
@@ -58,13 +59,9 @@ def _read_tree_value(node: str):
 
 
 def _book_sheet_names(book: str) -> set:
-    pages = get_origin().WorksheetPages
-    for i in range(pages.Count):
-        page = pages.Item(i)
-        if page.Name == book:
-            layers = page.Layers
-            return {layers.Item(j).Name for j in range(layers.Count)}
-    return set()
+    """Sheet names of a workbook via the shared crash-safe LabTalk enumeration
+    (never the deep page.Layers COM traversal that can crash heavy projects)."""
+    return set(sheet_names(book))
 
 
 @mcp.tool()

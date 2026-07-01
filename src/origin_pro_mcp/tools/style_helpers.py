@@ -1,5 +1,7 @@
 from ..labtalk_safe import labtalk_choice, labtalk_name
-from ..origin_connection import execute_labtalk, get_lt_var, get_origin
+from ..origin_connection import (
+    execute_labtalk, get_lt_var, get_origin, sheet_names,
+)
 
 # COM Column.Type designation codes (Origin 2020 type library)
 _COM_COLTYPE_Y_ERROR = 2
@@ -13,7 +15,78 @@ def get_plot_names(graph_name: str) -> list:
     if not gl:
         return []
     dp = gl.DataPlots
-    return [dp.Item(i).Name for i in range(dp.Count)]
+    out = []
+    try:
+        count = dp.Count
+    except Exception:
+        return out
+    for i in range(count):
+        try:
+            out.append(dp.Item(i).Name)
+        except Exception:
+            continue  # isolate a plot whose name can't be read
+    return out
+
+
+def _com_book_sheet_names(o, book: str) -> list:
+    """Isolated COM fallback for sheet names of one book — used only when the
+    LabTalk enumeration yields nothing (test fakes / odd COM builds). Bounded to
+    the matching book and isolates each item, so it cannot abort the caller."""
+    names: list = []
+    try:
+        pages = o.WorksheetPages
+        count = pages.Count
+    except Exception:
+        return names
+    for i in range(count):
+        try:
+            page = pages.Item(i)
+            if page.Name != book:
+                continue
+            layers = page.Layers
+            for j in range(layers.Count):
+                try:
+                    names.append(layers.Item(j).Name)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return names
+
+
+def _find_source_column(o, book: str, short: str):
+    """Locate a plot's source column ``<book>_<short>`` WITHOUT the deep
+    all-pages + page.Layers COM traversal that can crash Origin on heavy
+    projects. Uses the crash-safe shared ``sheet_names`` (LabTalk) + direct
+    ``FindWorksheet``, isolating each column read.
+
+    Returns (sheet_name, y_index, x_index, col_object) or None.
+    """
+    for sheet in (sheet_names(book) or _com_book_sheet_names(o, book)):
+        ws = o.FindWorksheet(f"[{book}]{sheet}")
+        if ws is None:
+            continue
+        try:
+            cols = ws.Columns
+            ncols = cols.Count
+        except Exception:
+            continue
+        y_idx = x_idx = None
+        col_obj = None
+        for k in range(ncols):
+            try:
+                col = cols.Item(k)
+                name = col.Name
+                ctype = col.Type
+            except Exception:
+                continue  # isolate a corrupt/unreadable column
+            if name == short:
+                y_idx, col_obj = k, col
+            if ctype == _COM_COLTYPE_X:
+                x_idx = k
+        if col_obj is not None:
+            return sheet, y_idx, x_idx, col_obj
+    return None
 
 
 def find_plot_column(plot_name: str):
@@ -26,25 +99,8 @@ def find_plot_column(plot_name: str):
     if len(parts) != 2:
         return None
     book, short_name = parts
-    o = get_origin()
-    pages = o.WorksheetPages
-    for i in range(pages.Count):
-        page = pages.Item(i)
-        if page.Name != book:
-            continue
-        layers = page.Layers
-        for j in range(layers.Count):
-            # Layers items are generic Layer objects without Columns —
-            # resolve each sheet through FindWorksheet instead
-            sheet = o.FindWorksheet(f"[{book}]{layers.Item(j).Name}")
-            if sheet is None:
-                continue
-            cols = sheet.Columns
-            for k in range(cols.Count):
-                col = cols.Item(k)
-                if col.Name == short_name:
-                    return col
-    return None
+    found = _find_source_column(get_origin(), book, short_name)
+    return found[3] if found is not None else None
 
 
 def get_plot_info(graph_name: str) -> list:
@@ -154,39 +210,26 @@ def _collect_xy(graph_name: str):
         if len(parts) != 2:
             continue
         book, short = parts
-        pages = o.WorksheetPages
-        for i in range(pages.Count):
-            page = pages.Item(i)
-            if page.Name != book:
+        found = _find_source_column(o, book, short)
+        if found is None:
+            continue
+        sheet_name, y_idx, x_idx, _col = found
+        if y_idx is None:
+            continue
+        data = o.GetWorksheet(f"[{book}]{sheet_name}")
+        if not isinstance(data, (list, tuple)):
+            continue
+        for row in data:
+            try:
+                y = float(row[y_idx])
+            except (TypeError, ValueError, IndexError):
                 continue
-            for j in range(page.Layers.Count):
-                sheet = o.FindWorksheet(f"[{book}]{page.Layers.Item(j).Name}")
-                if sheet is None:
-                    continue
-                cols = sheet.Columns
-                y_idx = x_idx = None
-                for k in range(cols.Count):
-                    col = cols.Item(k)
-                    if col.Name == short:
-                        y_idx = k
-                    if col.Type == _COM_COLTYPE_X:
-                        x_idx = k
-                if y_idx is None:
-                    continue
-                data = o.GetWorksheet(f"[{book}]{sheet.Name}")
-                if not isinstance(data, (list, tuple)):
-                    continue
-                for row in data:
-                    try:
-                        y = float(row[y_idx])
-                    except (TypeError, ValueError, IndexError):
-                        continue
-                    try:
-                        x = float(row[x_idx]) if x_idx is not None else None
-                    except (TypeError, ValueError, IndexError):
-                        x = None
-                    xs.append(x)
-                    ys.append(y)
+            try:
+                x = float(row[x_idx]) if x_idx is not None else None
+            except (TypeError, ValueError, IndexError):
+                x = None
+            xs.append(x)
+            ys.append(y)
     return xs, ys
 
 
