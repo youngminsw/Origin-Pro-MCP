@@ -8,8 +8,6 @@ from ..origin_connection import (
     execute_labtalk,
     get_origin,
     get_lt_str,
-    graph_names,
-    matrix_names,
     require_worksheet,
     workbook_names,
 )
@@ -186,6 +184,65 @@ def _import_csv_to_worksheet_impl(
     active_book = o.LTStr("page.name$")
     return f"Imported to workbook: {active_book}"
 
+# ASCII record separator — cannot appear in an Origin window/sheet name, so it
+# is a safe delimiter for the LabTalk-built sheet-name list.
+_SHEET_ENUM_DELIM = "\x1e"
+
+
+def _safe_page_names(pages) -> list:
+    """Top-level names of a COM page collection, isolating a bad/corrupt entry
+    so one unreadable window can't abort the whole enumeration."""
+    names: list = []
+    try:
+        count = pages.Count
+    except Exception:
+        return names
+    for i in range(count):
+        try:
+            names.append(pages.Item(i).Name)
+        except Exception:
+            continue  # skip an entry whose name can't be read
+    return names
+
+
+def _sheet_names(o, book_name: str, page=None) -> list:
+    """Sheet names of a workbook via LabTalk layer enumeration.
+
+    On a heavy project (dozens of windows) the deep ``page.Layers.Item(j).Name``
+    COM traversal instantiates a proxy per sheet and can wedge or HARD-CRASH the
+    COM bridge (taking Origin + the daemon down). LabTalk's internal
+    ``layer$(k).name$`` loop iterates without per-sheet COM proxies and is
+    crash-safe (verified on Origin 2020). We fall back to an isolated per-sheet
+    COM read only when LabTalk yields nothing (test fakes / odd COM builds)."""
+    try:
+        o.Execute(
+            f'string _opm_sh$="";win -a {book_name};'
+            f'for(int _opmk=1;_opmk<=page.nlayers;_opmk++)'
+            f'{{_opm_sh$=_opm_sh$+layer$(_opmk).name$+"{_SHEET_ENUM_DELIM}";}}'
+        )
+        raw = o.LTStr("_opm_sh$") or ""
+        names = [s for s in raw.split(_SHEET_ENUM_DELIM) if s]
+        if names:
+            return names
+    except Exception:
+        pass
+    # Fallback: isolated per-sheet COM read (never reached on a healthy real
+    # Origin, where the LabTalk path returns the names).
+    if page is None:
+        return []
+    out: list = []
+    try:
+        layers = page.Layers
+        for j in range(layers.Count):
+            try:
+                out.append(layers.Item(j).Name)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
 @mcp.tool()
 def list_worksheets() -> str:
     """List all open workbooks (with their sheets), graphs, and matrices.
@@ -195,17 +252,39 @@ def list_worksheets() -> str:
         "matrices": [names]}
     """
     o = get_origin()
-    workbooks = []
-    pages = o.WorksheetPages
-    for i in range(pages.Count):
-        page = pages.Item(i)
-        layers = page.Layers
-        sheets = [layers.Item(j).Name for j in range(layers.Count)]
-        workbooks.append({"name": page.Name, "sheets": sheets})
-
-    return json.dumps(
-        {"workbooks": workbooks, "graphs": graph_names(), "matrices": matrix_names()}
-    )
+    # Save the active window: enumeration activates each workbook to read its
+    # sheets via LabTalk, so restore the user's active window afterward.
+    saved_active = ""
+    try:
+        o.Execute("string _opm_act$=%H;")
+        saved_active = o.LTStr("_opm_act$") or ""
+    except Exception:
+        saved_active = ""
+    try:
+        workbooks = []
+        pages = o.WorksheetPages
+        try:
+            count = pages.Count
+        except Exception:
+            count = 0
+        for i in range(count):
+            try:
+                page = pages.Item(i)
+                name = page.Name
+            except Exception:
+                continue  # skip a workbook whose name can't be read
+            workbooks.append({"name": name, "sheets": _sheet_names(o, name, page)})
+        return json.dumps({
+            "workbooks": workbooks,
+            "graphs": _safe_page_names(o.GraphPages),
+            "matrices": _safe_page_names(o.MatrixPages),
+        })
+    finally:
+        if saved_active:
+            try:
+                o.Execute(f"win -a {saved_active};")
+            except Exception:
+                pass
 
 
 # LabTalk `wks.col.type` designation codes (verified against OriginLab docs):
