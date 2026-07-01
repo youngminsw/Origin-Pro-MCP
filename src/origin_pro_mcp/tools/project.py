@@ -79,6 +79,22 @@ def load_project(file_path: str) -> str:
     if not o.Load(path):
         msg = f"Origin could not open the project file: {path}"
         raise ValueError(msg)
+    # Verify the load actually took: Origin sometimes returns success while the
+    # attached instance stays empty (the "success but list_worksheets empty"
+    # case). Surface it as a failure so the caller can retry, and don't
+    # remember an empty session as the recovery target.
+    try:
+        pages = (o.WorksheetPages.Count + o.GraphPages.Count
+                 + o.MatrixPages.Count)
+    except Exception:
+        pages = -1  # can't introspect (odd COM build) -> don't false-fail
+    if pages == 0:
+        msg = (
+            f"Origin reported success but the loaded project is empty "
+            f"(no worksheets/graphs/matrices). This is the flaky empty-load; "
+            f"retry load_project('{file_path}')."
+        )
+        raise ValueError(msg)
     remember_project_path(path)
     return f"Loaded project: {path}"
 

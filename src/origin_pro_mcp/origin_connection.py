@@ -1,4 +1,5 @@
 import threading
+import time
 
 from .labtalk_safe import labtalk_name
 
@@ -8,14 +9,36 @@ _state = threading.local()
 _MAINWND_SHOW = 1
 
 def _connection_alive(origin) -> bool:
-    """Ping the cached COM proxy — stale proxies raise after Origin closes."""
-    try:
-        origin.Visible
-    except AttributeError:
-        return True  # non-COM stand-in (tests) without a Visible property
-    except Exception:
-        return False
-    return True
+    """Ping the cached COM proxy — stale proxies raise after Origin closes.
+
+    Retries once on a transient error so a momentarily-busy (but still alive)
+    Origin isn't mistaken for dead — a false negative would spawn a redundant
+    instance and orphan the live one."""
+    for attempt in range(2):
+        try:
+            origin.Visible
+            return True
+        except AttributeError:
+            return True  # non-COM stand-in (tests) without a Visible property
+        except Exception:
+            if attempt == 0:
+                time.sleep(0.25)
+                continue
+            return False
+    return False
+
+
+def _close_instance(inst) -> None:
+    """Best-effort close of an Origin instance (COM). Used before relaunching a
+    dead/stale proxy so a still-alive process isn't left orphaned."""
+    for closer in ("Exit", "Close"):
+        fn = getattr(inst, closer, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
+            break
 
 
 def set_session_origin(origin, factory=None) -> None:
@@ -72,6 +95,10 @@ def _reopen_remembered_project(origin) -> None:
 def get_origin():
     origin = getattr(_state, "origin", None)
     if origin is not None and not _connection_alive(origin):
+        # Close the stale instance first: if the process is alive-but-wedged,
+        # this stops the relaunch below from orphaning it. (A truly-dead proxy
+        # just no-ops here.)
+        _close_instance(origin)
         origin = None  # Origin was closed or restarted; reconnect below
         if hasattr(_state, "origin"):
             del _state.origin  # keep the factory so a daemon session can relaunch

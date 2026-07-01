@@ -544,6 +544,51 @@ def read_lockfile(path: str) -> dict:
         return json.load(fh)
 
 
+# --- Persistent spawned-Origin PID log ------------------------------------- #
+# Every Origin this daemon family launches is recorded here so the NEXT daemon
+# can reclaim any that a crash / spurious relaunch / Exit-that-didn't-take left
+# orphaned — even when the in-memory session table (and thus the lockfile's
+# child_pids) never captured them. PID-authoritative, COM-free.
+_SPAWN_LOG_LOCK = threading.Lock()
+
+
+def default_spawn_log_path() -> str:
+    lf = os.environ.get("ORIGIN_PRO_MCP_LOCKFILE") or default_lockfile_path()
+    return os.path.join(os.path.dirname(lf), "spawned-pids.log")
+
+
+def record_spawned_pid(pid: Optional[int], path: Optional[str] = None) -> None:
+    """Append a freshly-spawned Origin PID to the persistent log (best-effort)."""
+    if not pid:
+        return
+    path = path or default_spawn_log_path()
+    try:
+        with _SPAWN_LOG_LOCK:
+            with open(path, "a") as fh:
+                fh.write(f"{int(pid)}\n")
+    except OSError:
+        pass
+
+
+def read_spawned_pids(path: Optional[str] = None) -> list:
+    path = path or default_spawn_log_path()
+    try:
+        with open(path) as fh:
+            return [int(x) for x in fh.read().split() if x.strip().lstrip("-").isdigit()]
+    except (OSError, ValueError):
+        return []
+
+
+def clear_spawn_log(path: Optional[str] = None) -> None:
+    path = path or default_spawn_log_path()
+    try:
+        with _SPAWN_LOG_LOCK:
+            if os.path.exists(path):
+                os.remove(path)
+    except OSError:
+        pass
+
+
 def _ensure_private_dir(directory: str) -> None:
     """Create ``directory`` mode 0700 and verify it is ours and not group/other
     writable — raise on an insecure pre-existing dir (POSIX only)."""
@@ -669,6 +714,7 @@ class Daemon:
         self._pool: Optional[Pool] = None
         self._watchdog: Optional[Watchdog] = None
         self._lockfile_path: Optional[str] = None
+        self._spawn_log_path: Optional[str] = None
         self.token: Optional[str] = None
         self.port: Optional[int] = None
         self.host: Optional[str] = None
@@ -691,6 +737,10 @@ class Daemon:
         self._reap_lock = threading.Lock()
         # session_id -> the Session whose reap has COMMITTED (stage 1 started).
         self._reaping: dict[str, Session] = {}
+        # session_ids already reflected in the lockfile's child_pids — so a
+        # NEW session triggers a lockfile rewrite (keeping child_pids current
+        # for the startup sweep, not just after a reap).
+        self._lockfile_sessions: set = set()
         # session_id -> monotonic deadline at which a pending reap COMMITS. A
         # reconnect within the grace cancels it (see _mark_live).
         self._reap_pending: dict[str, float] = {}
@@ -738,6 +788,9 @@ class Daemon:
         if lockfile_path is None:
             lockfile_path = default_lockfile_path()
         self._lockfile_path = lockfile_path
+        self._spawn_log_path = os.path.join(
+            os.path.dirname(lockfile_path), "spawned-pids.log"
+        )
         self._clock = clock or time.monotonic
         self._reap_grace = reap_grace
         self._heartbeat_reap_after = heartbeat_reap_after
@@ -788,20 +841,35 @@ class Daemon:
 
     def _startup_sweep(self, lockfile_path: str,
                        is_alive: Callable[[int], bool]) -> None:
+        recorded: set = set()
         try:
             data = read_lockfile(lockfile_path)
-        except (OSError, ValueError):
-            return  # no prior lockfile / unreadable -> nothing to sweep
-        for pid in data.get("child_pids", []) or []:
+            for pid in data.get("child_pids", []) or []:
+                recorded.add(int(pid))
+        except (OSError, ValueError, TypeError):
+            pass  # no prior lockfile / unreadable -> only the spawn-log matters
+        # Persistent spawn-log: every Origin the prior daemon family launched
+        # (incl. relaunches the lockfile never captured). This is what stops
+        # orphans from piling up across daemon deaths/auto-restarts.
+        for pid in read_spawned_pids(self._spawn_log_path):
+            recorded.add(pid)
+        # Only kill PIDs that are actually LIVE Origin processes, so a recycled
+        # PID can never take down an unrelated process. On non-Windows/tests
+        # _origin_process_pids() is empty and we fall back to ``is_alive``.
+        try:
+            live_origins = _origin_process_pids()
+        except Exception:
+            live_origins = set()
+        for pid in recorded:
             try:
-                pid = int(pid)
-                # SAFE-FAIL: never sweep an unknown/zero pid or our own pid.
                 if not pid or pid == os.getpid():
                     continue
-                if is_alive(pid):
+                kill = (pid in live_origins) if live_origins else is_alive(pid)
+                if kill:
                     self._terminate(pid)
             except Exception:
                 pass
+        clear_spawn_log(self._spawn_log_path)
 
     # -- reaping ------------------------------------------------------------- #
 
@@ -863,6 +931,7 @@ class Daemon:
             self._pool.discard(session_id, expected=session)
         with self._seen_lock:
             self._last_seen.pop(session_id, None)
+        self._lockfile_sessions.discard(session_id)
         self._rewrite_lockfile()
 
     def _rewrite_lockfile(self) -> None:
@@ -1035,6 +1104,9 @@ class Daemon:
         try:
             self._mark_live(session_id, conn)  # a request implies liveness
             session = self._pool.acquire(session_id)
+            if session_id not in self._lockfile_sessions:
+                self._lockfile_sessions.add(session_id)
+                self._rewrite_lockfile()
             self._touch(session_id)
             session.submit(
                 request_id, name, frame.get("kwargs") or {},
@@ -1318,6 +1390,9 @@ def _real_origin_factory():
     # is set to show it) so it can't block automation.
     _spawn_dialog_dismisser(pid)
     _real_pid_tls.pid = pid
+    # Persist the PID so a later daemon can reclaim this Origin if it is ever
+    # orphaned (crash / spurious relaunch / Exit that didn't take).
+    record_spawned_pid(pid)
     return instance
 
 
