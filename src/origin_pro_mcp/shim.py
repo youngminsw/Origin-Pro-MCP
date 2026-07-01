@@ -141,6 +141,13 @@ def ensure_daemon(lockfile_path: Optional[str] = None, *,
     if lockfile_path is None:
         lockfile_path = default_lockfile_path()
 
+    # Global kill-switch: ORIGIN_PRO_MCP_NO_SPAWN lets an operator stop the
+    # daemon from the process manager and keep it stopped — no tool call will
+    # auto-respawn it (a clear error is returned instead).
+    _ns = os.environ.get("ORIGIN_PRO_MCP_NO_SPAWN")
+    if _ns is not None and _ns.strip().lower() in ("1", "on", "true", "yes"):
+        spawn = False
+
     info = _try_existing(lockfile_path, connect_timeout)
     if info is not None:
         return info

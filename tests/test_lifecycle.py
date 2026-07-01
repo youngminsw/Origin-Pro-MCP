@@ -218,6 +218,59 @@ def test_graceful_reap_saves_recovery_file_and_frees_slot(lifecycle, tmp_path):
     assert _wait_until(lambda: daemon.pool.session_ids() == [])
     assert killed == []
 
+class ClosableOrigin(FakeOrigin):
+    """Tracks whether the daemon closed the Origin instance on reap."""
+
+    def __init__(self):
+        super().__init__()
+        self.exited = False
+
+    def Exit(self):
+        self.exited = True
+
+
+def test_graceful_reap_detaches_by_default_keeps_origin(lifecycle, tmp_path):
+    """DEFAULT: a graceful reap saves a recovery copy and frees the slot but
+    DETACHES — it must NOT close the Origin (the user keeps their project),
+    while the session's worker still stops."""
+    start, client = lifecycle
+    clock = FakeClock()
+    factory = FakeFactory(make=ClosableOrigin)
+    rec_dir = str(tmp_path / "recovery")
+    proj = str(tmp_path / "keep.opju")
+    daemon, killed = start(
+        factory, clock=clock, reap_grace=5.0, get_pid=FakeFactory.get_pid,
+        recovery_dir=rec_dir, project_path_getter=lambda inst: proj,
+        lockfile_path=str(tmp_path / "daemon.json"),
+    )
+    conn = client(daemon, "keepsess")
+    assert _request(conn, "r0", "run_labtalk", {"script": "g=1;"})["ok"] is True
+    inst = factory.created[0]
+    conn.close()  # schedule + commit the graceful reap
+    expected = os.path.join(rec_dir, "keep.keepsess.recover.opju")
+    assert _wait_until(lambda: expected in inst.saved_paths)  # recovery saved
+    assert _wait_until(lambda: daemon.pool.session_ids() == [])  # slot freed
+    assert killed == []                       # not force-killed
+    assert inst.exited is False               # Origin KEPT OPEN (detached)
+
+
+def test_graceful_reap_closes_when_opted_in(lifecycle, tmp_path, monkeypatch):
+    """ORIGIN_PRO_MCP_REAP_CLOSE=1 restores the save-and-close behavior."""
+    monkeypatch.setenv("ORIGIN_PRO_MCP_REAP_CLOSE", "1")
+    start, client = lifecycle
+    factory = FakeFactory(make=ClosableOrigin)
+    daemon, killed = start(
+        factory, clock=FakeClock(), reap_grace=5.0, get_pid=FakeFactory.get_pid,
+        recovery_dir=str(tmp_path / "recovery"),
+        project_path_getter=lambda inst: str(tmp_path / "c.opju"),
+        lockfile_path=str(tmp_path / "daemon.json"),
+    )
+    conn = client(daemon, "closesess")
+    assert _request(conn, "r0", "run_labtalk", {"script": "g=1;"})["ok"] is True
+    inst = factory.created[0]
+    conn.close()
+    assert _wait_until(lambda: inst.exited is True)  # closed on opt-in
+
 
 # --------------------------------------------------------------------------- #
 # WATCHDOG REAP (C1, the headline) — wedged worker, slot reclaimed out-of-band #
@@ -355,7 +408,8 @@ def test_idle_self_exit_shuts_down_and_removes_lockfile(lifecycle, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_startup_sweep_kills_surviving_child_pids(lifecycle, tmp_path):
+def test_startup_sweep_kills_surviving_child_pids(lifecycle, tmp_path, monkeypatch):
+    monkeypatch.setenv("ORIGIN_PRO_MCP_SWEEP_ORPHANS", "1")
     start, _client = lifecycle
     lockfile = str(tmp_path / "daemon.json")
     # A stale lockfile left by a crashed daemon, recording a still-alive child.

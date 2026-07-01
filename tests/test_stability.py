@@ -27,7 +27,8 @@ def test_spawn_log_roundtrip(tmp_path):
 
 # --- startup sweep reclaims spawn-logged orphans ------------------------------
 
-def test_startup_sweep_kills_spawnlog_orphans(tmp_path):
+def test_startup_sweep_kills_spawnlog_orphans(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORIGIN_PRO_MCP_SWEEP_ORPHANS", "1")
     log = str(tmp_path / "spawned-pids.log")
     record_spawned_pid(4242, log)
     record_spawned_pid(4243, log)
@@ -45,7 +46,8 @@ def test_startup_sweep_kills_spawnlog_orphans(tmp_path):
     assert read_spawned_pids(log) == []  # log cleared after sweep
 
 
-def test_startup_sweep_skips_dead_pids(tmp_path):
+def test_startup_sweep_skips_dead_pids(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORIGIN_PRO_MCP_SWEEP_ORPHANS", "1")
     log = str(tmp_path / "spawned-pids.log")
     record_spawned_pid(500, log)
     record_spawned_pid(501, log)
@@ -58,6 +60,19 @@ def test_startup_sweep_skips_dead_pids(tmp_path):
 
     assert killed == [500]  # only the alive one
 
+
+def test_startup_sweep_preserves_by_default(tmp_path):
+    """DEFAULT (env unset): the sweep must NOT kill leftover Origins — a
+    restart never auto-destroys a user's project. The spawn log is reset."""
+    log = str(tmp_path / "spawned-pids.log")
+    record_spawned_pid(700, log)
+    d = Daemon()
+    d._spawn_log_path = log
+    killed = []
+    d._terminate = lambda pid: killed.append(pid)
+    d._startup_sweep(str(tmp_path / "none.json"), is_alive=lambda p: True)
+    assert killed == []                       # nothing force-killed
+    assert read_spawned_pids(log) == []       # log reset for the new daemon
 
 # --- get_origin closes a stale instance before relaunch (no orphan) ----------
 

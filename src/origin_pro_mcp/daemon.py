@@ -43,6 +43,23 @@ ReplyFn = Callable[[dict], None]
 POOL_MAX_DEFAULT = 3
 DEFAULT_RECONNECT_GRACE: float = 3.0  # seconds; env: ORIGIN_PRO_MCP_RECONNECT_GRACE
 
+def _env_flag_on(name: str) -> bool:
+    """True when env var ``name`` is explicitly set to a truthy on-value."""
+    raw = os.environ.get(name)
+    return raw is not None and raw.strip().lower() in ("1", "on", "true", "yes")
+
+
+def _reap_close_enabled() -> bool:
+    """Graceful reap CLOSES the Origin only when explicitly opted in. Default
+    (unset) = DETACH: keep the user's project window open, just stop the worker."""
+    return _env_flag_on("ORIGIN_PRO_MCP_REAP_CLOSE")
+
+
+def _sweep_orphans_enabled() -> bool:
+    """Startup-sweep force-kills leftover Origins only when explicitly opted in.
+    Default (unset) = keep them: never auto-destroy a user's project on restart."""
+    return _env_flag_on("ORIGIN_PRO_MCP_SWEEP_ORPHANS")
+
 
 # --------------------------------------------------------------------------- #
 # OS-level process termination (default watchdog hook)                         #
@@ -218,14 +235,22 @@ class Session:
             self.saved_recovery_path = path
         except Exception:
             pass
-        for closer in ("Exit", "Close"):
-            fn = getattr(self.instance, closer, None)
-            if callable(fn):
-                try:
-                    fn()
-                except Exception:
-                    pass
-                break
+        # DETACH by default: save a recovery copy above, then leave the Origin
+        # window OPEN so the user keeps their project. The worker thread still
+        # exits (below), so the session's COM worker dies while the project
+        # survives. Set ORIGIN_PRO_MCP_REAP_CLOSE=1 to restore the old
+        # save-and-close behavior. NOTE: a WEDGED worker can only be freed by
+        # killing its Origin PID (the watchdog does that on the reap deadline);
+        # detach applies to graceful, non-wedged reaps.
+        if _reap_close_enabled():
+            for closer in ("Exit", "Close"):
+                fn = getattr(self.instance, closer, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+                    break
 
     def submit_reap(self, recovery_dir: str, getter,
                     on_done: Optional[Callable[[], None]] = None) -> None:
@@ -931,6 +956,12 @@ class Daemon:
 
     def _startup_sweep(self, lockfile_path: str,
                        is_alive: Callable[[int], bool]) -> None:
+        # DEFAULT: preserve leftover Origins so a restart never auto-destroys a
+        # user's project (they detach on graceful reap and survive a daemon
+        # kill). Only force-kill leftovers when ORIGIN_PRO_MCP_SWEEP_ORPHANS=1.
+        if not _sweep_orphans_enabled():
+            clear_spawn_log(self._spawn_log_path)  # reset the log; keep the procs
+            return
         recorded: set = set()
         try:
             data = read_lockfile(lockfile_path)

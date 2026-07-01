@@ -208,6 +208,17 @@ def test_ensure_daemon_auto_spawns_and_reuses(tmp_path, monkeypatch):
         _kill_lockfile_daemon(lockfile)
 
 
+def test_no_spawn_env_suppresses_autospawn(tmp_path, monkeypatch):
+    """ORIGIN_PRO_MCP_NO_SPAWN keeps a killed daemon stopped: ensure_daemon
+    refuses to auto-respawn and returns an actionable error instead."""
+    lockfile = str(tmp_path / "daemon.json")
+    monkeypatch.setenv("ORIGIN_PRO_MCP_NO_SPAWN", "1")
+    assert not os.path.exists(lockfile)
+    with pytest.raises(RuntimeError, match="auto-spawn is disabled"):
+        shim.ensure_daemon(lockfile)  # spawn defaults True, but env forces off
+    assert not os.path.exists(lockfile)  # nothing was spawned
+
+
 # --------------------------------------------------------------------------- #
 # RECONNECT / NO-HANG                                                          #
 # --------------------------------------------------------------------------- #

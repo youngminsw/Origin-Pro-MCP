@@ -157,6 +157,9 @@ All default **off** — behavior is unchanged unless you set them.
 | `ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED` | `1` | When autosave is on and a required snapshot fails, the destructive op is **not** run and an error is returned. Set `0` to proceed without a backup. |
 | `ORIGIN_PRO_MCP_AUTOSAVE_RETENTION` | `3` | How many autosave copies to keep per project (oldest pruned). |
 | `ORIGIN_PRO_MCP_AUTOSAVE_DIR` | project dir | Directory for autosave copies (defaults alongside the saved project, or the daemon's working dir for an unsaved project). Files are named `<project>.autosave-<timestamp>.opju`. |
+| `ORIGIN_PRO_MCP_REAP_CLOSE` | `off` | Session lifecycle: by **default** a session ending gracefully (idle / client disconnect) is **detached** — a recovery copy is saved and the session's worker stops, but *your Origin window stays open so you keep the project*. Set `1` to restore the old save-and-close behavior. (A *wedged* session's Origin is still force-killed — the only way to free a worker stuck in a synchronous COM call.) |
+| `ORIGIN_PRO_MCP_SWEEP_ORPHANS` | `off` | By **default** a restarting daemon does **not** kill leftover Origin windows (so a restart never destroys a project you kept open). Set `1` to have startup reclaim leftover Origins (orphan cleanup, at the cost of closing kept windows). |
+| `ORIGIN_PRO_MCP_NO_SPAWN` | `off` | Set `1` to stop the shim from auto-respawning the daemon. Use it to shut the daemon down from the process manager and keep it stopped — tool calls then return a clear "daemon not running" error instead of relaunching it. |
 
 Per-call override: `run_labtalk(script, confirm=True, timeout=120)` bounds that
 one call even when `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` is off.
