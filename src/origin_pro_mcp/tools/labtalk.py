@@ -5,7 +5,8 @@ from ..origin_connection import execute_labtalk, get_lt_var, get_lt_str
 from ..labtalk_safe import labtalk_variable, classify_labtalk_script
 
 @mcp.tool()
-def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = None) -> str:
+def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = None,
+                timeout: float = 0.0) -> str:
     """Execute a LabTalk script in Origin Pro — the universal escape hatch.
 
     Use this for any Origin operation not covered by other tools. LabTalk is
@@ -33,6 +34,11 @@ def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = 
         capture: Optional list of LabTalk variable names to read back after
                  the script runs. When given, the result is a JSON object
                  {"status", "script", "values"}.
+        timeout: Optional per-call dispatch budget in seconds for this one
+                 script. 0 (default) uses the daemon's configured dispatch
+                 timeout. A positive value bounds this call even when the
+                 global dispatch timeout is off; on overrun the daemon force-
+                 resets the wedged session and returns an actionable error.
 
     Returns:
         Success/failure message, or an actionable not-executed message when a

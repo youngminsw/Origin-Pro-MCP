@@ -143,6 +143,27 @@ You do not need to start Python or Origin manually. The MCP client starts `origi
 } } }
 ```
 
+#### Reliability & recovery (advanced env vars)
+
+The background daemon runs one isolated Origin instance per session. A few
+opt-in environment variables harden it against a wedged Origin COM call (a
+synchronous operation that never returns) and against destructive mistakes.
+All default **off** — behavior is unchanged unless you set them.
+
+| Variable | Default | Effect |
+| :--- | :--- | :--- |
+| `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` | `off` | Seconds to bound each tool dispatch. If an Origin operation wedges past this budget, the daemon force-terminates *that session's* Origin process, frees the pool slot, and returns an actionable error — the daemon itself keeps serving other sessions. Set e.g. `120`. `off`/`0` disables. |
+| `ORIGIN_PRO_MCP_AUTOSAVE` | `off` | Set `on` to snapshot a recoverable project copy **before** a destructive op (delete graph/plot, column deletion, project load/new, overwriting a populated sheet, or a `confirm`ed destructive `run_labtalk`). Origin's `Save(path)` rebinds the project identity, so autosave writes a timestamped backup and then re-saves your project to restore its original path — meaning autosave also re-persists your open project. Opt-in for that reason. |
+| `ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED` | `1` | When autosave is on and a required snapshot fails, the destructive op is **not** run and an error is returned. Set `0` to proceed without a backup. |
+| `ORIGIN_PRO_MCP_AUTOSAVE_RETENTION` | `3` | How many autosave copies to keep per project (oldest pruned). |
+| `ORIGIN_PRO_MCP_AUTOSAVE_DIR` | project dir | Directory for autosave copies (defaults alongside the saved project, or the daemon's working dir for an unsaved project). Files are named `<project>.autosave-<timestamp>.opju`. |
+
+Per-call override: `run_labtalk(script, confirm=True, timeout=120)` bounds that
+one call even when `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` is off.
+
+**Rollback:** unset any of these (or set the timeout to `off`) to return to the
+prior behavior — no code change or redeploy required.
+
 ### 4. Use It
 
 Just ask Claude to work with Origin:

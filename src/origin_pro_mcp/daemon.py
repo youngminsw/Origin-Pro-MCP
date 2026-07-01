@@ -27,7 +27,12 @@ import threading
 import time
 from typing import Callable, Optional
 
-from .origin_connection import clear_session_origin, set_session_origin
+from . import autosave as _autosave
+from .autosave import AutosavePolicy
+from .origin_connection import (
+    clear_session_origin, get_origin, get_remembered_project_path,
+    set_session_origin,
+)
 from .transport import Connection, FrameError, TcpServer
 
 OriginFactory = Callable[[], object]
@@ -94,11 +99,14 @@ class Session:
     _REAP = object()
 
     def __init__(self, session_id: str, origin_factory: OriginFactory,
-                 registry: dict, get_pid: Optional[GetPid] = None):
+                 registry: dict, get_pid: Optional[GetPid] = None,
+                 autosave_policy: Optional[AutosavePolicy] = None):
         self.session_id = session_id
         self._factory = origin_factory
         self._registry = registry
         self._get_pid = get_pid or _default_get_pid
+        self._autosave_policy = autosave_policy
+        self._has_work = _autosave.HasWorkTracker()
         self._queue: "queue.Queue" = queue.Queue()
         self._ready = threading.Event()
         self.pid: Optional[int] = None
@@ -229,7 +237,16 @@ class Session:
             fn = self._registry.get(name)
             if fn is None:
                 raise KeyError(f"unknown tool: {name!r}")
-            result = fn(**(kwargs or {}))
+            kwargs = kwargs or {}
+            # Autosave preflight (runs in THIS worker thread, so the snapshot
+            # hits this session's own Origin instance). A required-snapshot
+            # failure aborts the destructive op instead of risking silent loss.
+            err = self._autosave_preflight(name, kwargs)
+            if err is not None:
+                return {"type": "response", "request_id": request_id, "ok": False,
+                        "result": None, "error": err}
+            result = fn(**kwargs)
+            self._has_work.record_success(name)
             if result is not None and not isinstance(result, str):
                 result = json.dumps(result)
             return {"type": "response", "request_id": request_id, "ok": True,
@@ -237,6 +254,44 @@ class Session:
         except Exception as exc:
             return {"type": "response", "request_id": request_id, "ok": False,
                     "result": None, "error": f"{type(exc).__name__}: {exc}"}
+
+    def _autosave_preflight(self, name: str, kwargs: dict) -> Optional[str]:
+        """Snapshot a recoverable copy BEFORE a destructive op. Returns None to
+        proceed, or an error string when a REQUIRED snapshot could not be taken.
+        No-op when autosave is not configured (default) or there is no work."""
+        policy = self._autosave_policy
+        if policy is None or not policy.enabled:
+            return None
+        try:
+            origin = get_origin()
+        except Exception:
+            origin = None
+        if not _autosave.should_snapshot(name, kwargs, origin):
+            return None
+        if not self._has_work.has_work:
+            return None  # nothing worth protecting yet
+        remembered = None
+        try:
+            remembered = get_remembered_project_path()
+        except Exception:
+            pass
+        dest = _autosave.backup_path(policy, remembered)
+        ok = False
+        try:
+            ok = _autosave.save_copy(origin, dest, remembered)
+        except Exception:
+            ok = False
+        if ok:
+            try:
+                _autosave.prune_backups(policy, remembered)
+            except Exception:
+                pass
+            return None
+        if policy.required:
+            return (f"Autosave before '{name}' failed, so the destructive "
+                    "operation was NOT run (set ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED=0 "
+                    "to proceed without a backup). Save your project and retry.")
+        return None  # best-effort mode: proceed even though the backup failed
 
     def submit(self, request_id: str, name: str, kwargs: dict,
                reply_fn: ReplyFn) -> None:
@@ -282,12 +337,14 @@ class Pool:
     def __init__(self, origin_factory: OriginFactory, registry: dict,
                  max_size: int = POOL_MAX_DEFAULT,
                  get_pid: Optional[GetPid] = None,
-                 start_timeout: float = 10.0):
+                 start_timeout: float = 10.0,
+                 autosave_policy: Optional[AutosavePolicy] = None):
         self._factory = origin_factory
         self._registry = registry
         self._max_size = max_size
         self._get_pid = get_pid
         self._start_timeout = start_timeout
+        self._autosave_policy = autosave_policy
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
 
@@ -316,7 +373,8 @@ class Pool:
             if len(self._sessions) >= self._max_size:
                 raise PoolFull(self._full_message())
             session = Session(
-                session_id, self._factory, self._registry, self._get_pid
+                session_id, self._factory, self._registry, self._get_pid,
+                autosave_policy=self._autosave_policy,
             )
             self._sessions[session_id] = session  # reserve the slot
         # Phase 2 (OUTSIDE the lock): start the worker; commit on ready, roll
@@ -394,7 +452,8 @@ class Watchdog:
         self._on_reap = on_reap
         self._tick = tick
         self._clock = clock or time.monotonic
-        self._deadlines: dict[str, tuple[float, int]] = {}
+        # key: (session_id, reason) -> (deadline, pid, callback|None)
+        self._deadlines: dict[tuple[str, str], tuple[float, Optional[int], Optional[Callable[[str, Optional[int]], None]]]] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(
@@ -404,29 +463,47 @@ class Watchdog:
     def start(self) -> None:
         self._thread.start()
 
-    def arm(self, session_id: str, pid: Optional[int], deadline: float) -> None:
-        """Arm a reap for ``session_id`` at monotonic time ``deadline``.
+    def arm(self, session_id: str, pid: Optional[int], deadline: float,
+            reason: str = "reap",
+            callback: Optional[Callable[[str, Optional[int]], None]] = None) -> None:
+        """Arm a deadline for ``(session_id, reason)`` at monotonic ``deadline``.
 
-        ``pid`` may be ``None`` (unknown child PID); on expiry the kill is then
-        skipped but the slot is still freed.
+        ``reason`` defaults to ``"reap"``, which preserves the legacy
+        single-deadline behavior. A distinct reason (e.g. ``"dispatch"``)
+        coexists with a reap deadline for the SAME session, and on expiry
+        routes to ``callback`` when given instead of the constructor
+        ``on_reap`` — so a per-dispatch timeout fires its own handler without
+        disturbing the reap deadline. ``pid`` may be ``None`` (unknown child
+        PID); the kill is then skipped but the handler still frees the slot.
         """
         with self._lock:
-            self._deadlines[session_id] = (deadline, pid)
+            self._deadlines[(session_id, reason)] = (deadline, pid, callback)
 
-    def disarm(self, session_id: str) -> None:
+    def disarm(self, session_id: str, reason: str = "reap") -> None:
+        """Cancel the deadline for ``(session_id, reason)``. Default
+        ``reason="reap"`` preserves the legacy ``disarm(session_id)``
+        semantics; disarming one reason never cancels another (disarming a
+        dispatch deadline leaves a concurrent reap armed)."""
         with self._lock:
-            self._deadlines.pop(session_id, None)
+            self._deadlines.pop((session_id, reason), None)
+
+    def disarm_all(self, session_id: str) -> None:
+        """Cancel ALL deadlines (every reason) for ``session_id`` — used on
+        full session teardown so neither a reap nor a dispatch deadline leaks."""
+        with self._lock:
+            for key in [k for k in self._deadlines if k[0] == session_id]:
+                self._deadlines.pop(key, None)
 
     def _run(self) -> None:
         while not self._stop.is_set():
             now = self._clock()
-            fired: list[tuple[str, Optional[int]]] = []
+            fired: list[tuple[str, Optional[int], Optional[Callable[[str, Optional[int]], None]]]] = []
             with self._lock:
-                for sid, (deadline, pid) in list(self._deadlines.items()):
+                for key, (deadline, pid, callback) in list(self._deadlines.items()):
                     if now >= deadline:
-                        fired.append((sid, pid))
-                        del self._deadlines[sid]
-            for sid, pid in fired:
+                        fired.append((key[0], pid, callback))
+                        del self._deadlines[key]
+            for sid, pid, callback in fired:
                 # SAFE-FAIL: never force-kill an unknown (None) pid or the
                 # daemon's OWN pid. In that case skip the kill but still free
                 # the slot (idle-exit reclaims the process). Guard the kill so a
@@ -436,9 +513,12 @@ class Watchdog:
                         self._terminate(pid)
                     except Exception:
                         pass  # already-dead / unkillable PID: log-and-continue
-                if self._on_reap is not None:
+                # Route to the per-deadline callback when set (e.g. a dispatch
+                # timeout), else the constructor's on_reap (legacy reap path).
+                handler = callback if callback is not None else self._on_reap
+                if handler is not None:
                     try:
-                        self._on_reap(sid, pid)
+                        handler(sid, pid)
                     except Exception:
                         pass
             self._stop.wait(self._tick)
@@ -741,6 +821,12 @@ class Daemon:
         # NEW session triggers a lockfile rewrite (keeping child_pids current
         # for the startup sweep, not just after a reap).
         self._lockfile_sessions: set = set()
+        # Per-dispatch timeout (D2): bound each tool dispatch; on expiry the
+        # watchdog force-kills the wedged session's Origin PID and this ticket
+        # replies the client + discards the session. 0/off = disabled (default).
+        self._dispatch_timeout: float = 0.0
+        self._dispatch_tickets: dict[str, dict] = {}
+        self._dispatch_lock = threading.Lock()
         # session_id -> monotonic deadline at which a pending reap COMMITS. A
         # reconnect within the grace cancels it (see _mark_live).
         self._reap_pending: dict[str, float] = {}
@@ -777,6 +863,8 @@ class Daemon:
               project_path_getter=None,
               is_alive: Optional[Callable[[int], bool]] = None,
               start_timeout: float = 10.0,
+              dispatch_timeout: float = 0.0,
+              autosave_policy: Optional[AutosavePolicy] = None,
               monitor_tick: float = 0.01) -> bool:
         """Acquire the singleton, sweep any orphans left by a crashed prior
         daemon, start the server/pool/watchdog/monitor, write the lockfile, and
@@ -792,6 +880,7 @@ class Daemon:
             os.path.dirname(lockfile_path), "spawned-pids.log"
         )
         self._clock = clock or time.monotonic
+        self._dispatch_timeout = dispatch_timeout if dispatch_timeout and dispatch_timeout > 0 else 0.0
         self._reap_grace = reap_grace
         self._heartbeat_reap_after = heartbeat_reap_after
         self._idle_exit_after = idle_exit_after
@@ -814,7 +903,8 @@ class Daemon:
         self._server = TcpServer(self.token, host=host, port=port)
         self.host, self.port = self._server.host, self._server.port
         self._pool = Pool(origin_factory, registry, max_size=max_size,
-                          get_pid=get_pid, start_timeout=start_timeout)
+                          get_pid=get_pid, start_timeout=start_timeout,
+                          autosave_policy=autosave_policy)
         self._watchdog = Watchdog(terminate_process=self._terminate,
                                   on_reap=self._on_watchdog_reap,
                                   tick=monitor_tick, clock=self._clock)
@@ -1108,10 +1198,8 @@ class Daemon:
                 self._lockfile_sessions.add(session_id)
                 self._rewrite_lockfile()
             self._touch(session_id)
-            session.submit(
-                request_id, name, frame.get("kwargs") or {},
-                lambda response: self._safe_send(conn, response),
-            )
+            self._submit_with_dispatch_timeout(session, session_id, request_id,
+                                                name, frame.get("kwargs") or {}, conn)
         except PoolFull as exc:
             self._safe_send(conn, {"type": "response", "request_id": request_id,
                                    "ok": False, "result": None,
@@ -1121,6 +1209,81 @@ class Daemon:
                                    "ok": False, "result": None,
                                    "error": f"{type(exc).__name__}: {exc}"})
         return True
+
+    def _submit_with_dispatch_timeout(self, session, session_id, request_id,
+                                      name, kwargs, conn) -> None:
+        """Submit a tool dispatch. When a dispatch timeout is configured, arm a
+        watchdog 'dispatch' deadline BEFORE submitting and register a one-shot
+        ticket; the reply disarms it. If the worker wedges past the deadline the
+        watchdog force-kills the session's Origin (freeing the wedged thread via
+        com_error) and :meth:`_on_dispatch_timeout` replies the client + discards
+        the session. Timeout disabled (0) preserves the original submit path."""
+        timeout = self._dispatch_timeout
+        # Per-call override: run_labtalk(timeout=N) bounds this one dispatch and
+        # arms even when the global dispatch timeout is off (opt-in per call).
+        if name == "run_labtalk":
+            override = kwargs.get("timeout")
+            if (isinstance(override, (int, float)) and not isinstance(override, bool)
+                    and override > 0):
+                timeout = float(override)
+        if not timeout or timeout <= 0 or self._watchdog is None:
+            session.submit(request_id, name, kwargs,
+                           lambda response: self._safe_send(conn, response))
+            return
+        ticket = {"conn": conn, "request_id": request_id, "done": False,
+                  "timeout": timeout}
+        with self._dispatch_lock:
+            self._dispatch_tickets[session_id] = ticket
+
+        def _reply(response, sid=session_id, tk=ticket):
+            with self._dispatch_lock:
+                if tk["done"]:
+                    return
+                tk["done"] = True
+                if self._dispatch_tickets.get(sid) is tk:
+                    self._dispatch_tickets.pop(sid, None)
+            if self._watchdog is not None:
+                self._watchdog.disarm(sid, reason="dispatch")
+            self._safe_send(conn, response)
+
+        # Arm BEFORE submit so a fast reply always disarms an already-armed
+        # deadline (never a stale one armed after completion).
+        self._watchdog.arm(session_id, session.pid, self._clock() + timeout,
+                            reason="dispatch", callback=self._on_dispatch_timeout)
+        session.submit(request_id, name, kwargs, _reply)
+
+    def _on_dispatch_timeout(self, session_id: str, pid: Optional[int]) -> None:
+        """Watchdog dispatch-deadline handler (runs on the watchdog thread; the
+        Origin PID was already force-killed before this call). Reply the wedged
+        client once and discard the session so a reconnect mints a fresh one."""
+        with self._dispatch_lock:
+            ticket = self._dispatch_tickets.pop(session_id, None)
+            if ticket is None or ticket["done"]:
+                return
+            ticket["done"] = True
+            conn = ticket["conn"]
+            request_id = ticket["request_id"]
+            budget = ticket.get("timeout", self._dispatch_timeout)
+        # Discard the wedged session so its slot frees and a fresh one is minted.
+        if self._pool is not None:
+            existing = self._pool.get(session_id)
+            if existing is not None:
+                existing.reaping = True
+            self._pool.discard(session_id)
+        with self._seen_lock:
+            self._last_seen.pop(session_id, None)
+        self._lockfile_sessions.discard(session_id)
+        self._rewrite_lockfile()
+        killed = " and its Origin was terminated" if pid is not None else (
+            " but its Origin PID was unknown, so the wedged instance may persist "
+            "until the next daemon restart")
+        self._safe_send(conn, {
+            "type": "response", "request_id": request_id, "ok": False,
+            "result": None,
+            "error": (f"Origin operation exceeded the {budget:.0f}s "
+                      f"dispatch timeout and was force-reset{killed}. Retry; unsaved "
+                      "changes in that session may be lost."),
+        })
 
     @staticmethod
     def _safe_send(conn: Connection, frame: dict) -> None:
@@ -1456,6 +1619,25 @@ def main(argv: Optional[list] = None) -> int:
     # well above the test default of 10s. Overridable via env.
     _start_env = os.environ.get("ORIGIN_PRO_MCP_START_TIMEOUT")
     start_timeout = float(_start_env) if _start_env is not None else 45.0
+    # Per-dispatch hang timeout (D2). DEFAULT-OFF (0): no behavior change until
+    # an operator opts in. When set (seconds), a tool dispatch that wedges past
+    # this budget force-kills the session's Origin and returns a reset error.
+    _dt_env = os.environ.get("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT")
+    try:
+        dispatch_timeout = (float(_dt_env) if _dt_env is not None
+                            and _dt_env.strip().lower() not in ("", "off", "false", "no")
+                            else 0.0)
+    except ValueError:
+        dispatch_timeout = 0.0
+    # Autosave-before-destructive (Feature 2). OPT-IN at the daemon (default-OFF):
+    # the save-copy primitive is spike-verified (o.Save rebinds identity, so
+    # save_copy restores the original binding), but autosave also RE-PERSISTS the
+    # user's original project before a destructive op, which is a behavior change
+    # the user should opt into. Set ORIGIN_PRO_MCP_AUTOSAVE=on to activate.
+    _as_env = os.environ.get("ORIGIN_PRO_MCP_AUTOSAVE")
+    autosave_policy = None
+    if _as_env is not None and _as_env.strip().lower() in ("1", "on", "true", "yes"):
+        autosave_policy = AutosavePolicy.from_env()
     factory = resolve_origin_factory()
     # Wire the real child-PID resolver so production force-kills the spawned
     # Origin.exe (never the daemon's own pid); falls back to the safe default
@@ -1465,7 +1647,9 @@ def main(argv: Optional[list] = None) -> int:
     if not daemon.start(origin_factory=factory, get_pid=get_pid,
                         lockfile_path=lockfile_path,
                         reconnect_grace=reconnect_grace,
-                        start_timeout=start_timeout):
+                        start_timeout=start_timeout,
+                        dispatch_timeout=dispatch_timeout,
+                        autosave_policy=autosave_policy):
         return 0  # another daemon owns the singleton; the loser exits cleanly
 
     stop = threading.Event()

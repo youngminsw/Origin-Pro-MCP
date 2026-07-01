@@ -170,6 +170,29 @@ def ensure_daemon(lockfile_path: Optional[str] = None, *,
     )
 
 
+def _reconcile_call_timeout(call_timeout: float) -> float:
+    """Ensure the client socket outlives the daemon's per-dispatch deadline.
+
+    When the daemon runs with ``ORIGIN_PRO_MCP_DISPATCH_TIMEOUT`` enabled, a
+    wedged Origin op is force-reset by the daemon after that many seconds and an
+    actionable error is sent back. The client must keep its socket recv open
+    long enough to RECEIVE that error rather than tripping its own socket
+    timeout first (which would surface a raw timeout instead of the daemon's
+    self-heal message). We size the call timeout to the dispatch budget plus a
+    margin for the kill + reply round-trip. Default-off leaves it unchanged.
+    """
+    raw = os.environ.get("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT")
+    if not raw or raw.strip().lower() in ("off", "false", "no", "0", ""):
+        return call_timeout
+    try:
+        dispatch = float(raw)
+    except (TypeError, ValueError):
+        return call_timeout
+    if dispatch <= 0:
+        return call_timeout
+    return max(call_timeout, dispatch + 15.0)
+
+
 # --------------------------------------------------------------------------- #
 # Shim client: cached connection, reconnect, heartbeat                         #
 # --------------------------------------------------------------------------- #
@@ -197,7 +220,7 @@ class ShimClient:
         self._lockfile_path = lockfile_path
         self._session_id = session_id or uuid.uuid4().hex
         self._heartbeat_interval = heartbeat_interval
-        self._call_timeout = call_timeout
+        self._call_timeout = _reconcile_call_timeout(call_timeout)
         self._allow_spawn = allow_spawn
         self._ensure_kwargs = dict(ensure_kwargs or {})
         self._conn = None
