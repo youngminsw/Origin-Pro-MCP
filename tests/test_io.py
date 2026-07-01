@@ -42,6 +42,15 @@ def test_export_graph_sized_unknown_graph(fake_origin, tmp_path):
     with pytest.raises(ValueError, match="not found"):
         export_graph("Ghost", str(tmp_path / "g.png"), sized=True)
 
+def test_export_graph_reports_uncreated_file_with_wsl_hint(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.graph import export_graph
+
+    # FakeOrigin's Execute "succeeds" but no file is written: the guard must
+    # turn that into a loud failure (not a stale/silent success), and since the
+    # test path is POSIX it must also hint that Origin (Windows) can't reach it.
+    with pytest.raises(ValueError, match="was not created.*WSL/Linux path"):
+        export_graph("Graph1", str(tmp_path / "fig.png"))
+
 
 def test_save_graph_template_unknown_graph(fake_origin, tmp_path):
     from origin_pro_mcp.tools.project import save_graph_template

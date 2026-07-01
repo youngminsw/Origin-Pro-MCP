@@ -1,9 +1,11 @@
+import json
+
 from ..app import mcp
 from ..origin_connection import execute_labtalk, get_lt_var, get_lt_str
 from ..labtalk_safe import labtalk_variable, classify_labtalk_script
 
 @mcp.tool()
-def run_labtalk(script: str, confirm: bool = False) -> str:
+def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = None) -> str:
     """Execute a LabTalk script in Origin Pro — the universal escape hatch.
 
     Use this for any Origin operation not covered by other tools. LabTalk is
@@ -18,13 +20,24 @@ def run_labtalk(script: str, confirm: bool = False) -> str:
     and `confirm` is False, the script is NOT executed and a message naming the
     token is returned; re-call with `confirm=True` to run it anyway.
 
+    Observability: LabTalk's `type`/`print` output cannot be read back over
+    COM, so to inspect a computed value assign it to an (untyped) LabTalk
+    variable inside `script` and name it in `capture` — e.g.
+    `run_labtalk("stats col(1); mean = stats.mean;", capture=["mean"])`.
+    The variables' values are read back after the script runs and returned as
+    JSON. Use a `$` suffix for string variables (e.g. `capture=["name$"]`).
+
     Args:
         script: LabTalk script to execute
         confirm: Set True to run a script that uses a gated command token
+        capture: Optional list of LabTalk variable names to read back after
+                 the script runs. When given, the result is a JSON object
+                 {"status", "script", "values"}.
 
     Returns:
         Success/failure message, or an actionable not-executed message when a
-        gated token is present and confirm is False
+        gated token is present and confirm is False. When `capture` is given,
+        a JSON object with the executed status and the captured variable values.
     """
     _ok, requires_confirm, reason = classify_labtalk_script(script)
     if requires_confirm and not confirm:
@@ -35,7 +48,16 @@ def run_labtalk(script: str, confirm: bool = False) -> str:
             f"Script: {script}"
         )
     success = execute_labtalk(script)
-    return f"Executed {'successfully' if success else 'with errors'}: {script}"
+    status = "ok" if success else "error"
+    if not capture:
+        return f"Executed {'successfully' if success else 'with errors'}: {script}"
+    values: dict = {}
+    for raw_name in capture:
+        safe_name = labtalk_variable(raw_name, "capture")
+        values[safe_name] = (
+            get_lt_str(safe_name) if safe_name.endswith("$") else get_lt_var(safe_name)
+        )
+    return json.dumps({"status": status, "script": script, "values": values})
 
 @mcp.tool()
 def get_labtalk_variable(name: str) -> str:

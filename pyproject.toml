@@ -38,7 +38,7 @@ Issues = "https://github.com/youngminsw/Origin-Pro-MCP/issues"
 packages = ["src/origin_pro_mcp"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/origin_pro_mcp", "skills", "README.md", "pyproject.toml"]
+include = ["src/origin_pro_mcp", "README.md", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -208,8 +208,14 @@ def list_worksheets() -> str:
     )
 
 
-# LabTalk column designation codes for set_column_properties.
-_DESIGNATIONS = {"none": 0, "x": 4, "y": 1, "z": 6, "yerr": 3, "xerr": 5, "label": 5}
+# LabTalk `wks.col.type` designation codes (verified against OriginLab docs):
+# 1=Y, 2=Disregard, 3=Y Error, 4=X, 5=Label, 6=Z, 7=X Error. (0 clears the
+# designation to "none".) Earlier `xerr` was wrongly 5 — the same code as
+# `label` — so an X-error column was silently designated as a label.
+_DESIGNATIONS = {
+    "none": 0, "disregard": 2, "y": 1, "yerr": 3, "x": 4, "label": 5,
+    "z": 6, "xerr": 7,
+}
 
 
 def _set_column_formula_impl(book_name: str, sheet_name: str, col: int, formula: str) -> str:
@@ -367,6 +373,32 @@ def _set_column_properties_impl(
         raise ValueError(msg)
     return f"Updated column {safe_col} of [{safe_book}]{safe_sheet}: {', '.join(changed)}"
 
+
+@mcp.tool()
+def set_column_designation(book_name: str, sheet_name: str, col: int, role: str) -> str:
+    """Set a worksheet column's plot designation by role name (no magic codes).
+
+    This controls how a column plots: X supplies abscissas, Y the data, Yerr/
+    Xerr become error bars, Label becomes tick/point text, Z feeds contour/3D.
+    Designate the SD/SE column as `yerr` BEFORE plotting (or before calling
+    set_error_bars) so Origin attaches it as error bars instead of a curve.
+
+    Args:
+        book_name: Workbook name
+        sheet_name: Sheet name
+        col: Column (1-based)
+        role: One of x, y, z, yerr, xerr, label, disregard, none
+
+    Returns:
+        Success message
+    """
+    safe_role = labtalk_choice(role.lower(), _DESIGNATIONS, "role")
+    _set_column_properties_impl(book_name, sheet_name, col, designation=safe_role)
+    return (
+        f"Set column {positive_column(col, 'col')} of "
+        f"[{labtalk_name(book_name, 'book_name')}]"
+        f"{labtalk_name(sheet_name, 'sheet_name')} designation to {safe_role}."
+    )
 
 @mcp.tool()
 def transpose_worksheet(book_name: str, sheet_name: str, output_book: str = "") -> str:

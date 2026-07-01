@@ -89,3 +89,35 @@ def test_run_labtalk_default_confirm_is_false():
 
     sig = inspect.signature(run_labtalk)
     assert sig.parameters["confirm"].default is False
+
+def test_run_labtalk_capture_returns_json_values(fake_origin):
+    import json
+    fake_origin.lt_vars["mean"] = 3.5
+    result = run_labtalk("stats col(1); mean = stats.mean;", capture=["mean"])
+    payload = json.loads(result)
+    assert payload["status"] == "ok"
+    assert payload["values"] == {"mean": 3.5}
+    assert fake_origin.executed == ["stats col(1); mean = stats.mean;"]
+
+
+def test_run_labtalk_capture_reports_error_status(fake_origin):
+    import json
+    fake_origin.execute_results["boom"] = False
+    payload = json.loads(run_labtalk("boom;", capture=["x"]))
+    assert payload["status"] == "error"
+
+
+def test_run_labtalk_without_capture_keeps_plain_string(fake_origin):
+    result = run_labtalk("col(1) = 1;")
+    assert result == "Executed successfully: col(1) = 1;"
+
+
+def test_run_labtalk_capture_still_gated(fake_origin):
+    result = run_labtalk("del scratch;", capture=["x"])
+    assert fake_origin.executed == []
+    assert "NOT EXECUTED" in result
+
+
+def test_run_labtalk_capture_rejects_bad_variable_name(fake_origin):
+    with pytest.raises(ValueError):
+        run_labtalk("x = 1;", capture=["bad name; del all"])

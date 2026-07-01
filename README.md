@@ -241,6 +241,7 @@ always exposes exactly the tools listed below.
 | `list_worksheets` | List open workbooks, graphs, and matrices |
 | `set_column_formula` | Fill a column from a formula of other columns |
 | `set_column_properties` | Set long name, units, comment, designation |
+| `set_column_designation` | Set a column's plot role (x/y/z/yerr/xerr/label) by name |
 | `sort_worksheet` | Sort rows by a column (asc/desc) |
 | `add_columns` / `delete_columns` | Add or remove columns |
 | `transpose_worksheet` | Transpose rows and columns |
@@ -258,11 +259,15 @@ always exposes exactly the tools listed below.
 |------|-------------|
 | `create_graph` | Create graph (scatter, line, line+symbol, column, bar, area, pie, histogram, box, contour, 3d_scatter) |
 | `add_plot_to_graph` | Add another dataset to an existing graph |
+| `delete_graph` | Delete a graph window |
+| `remove_plot` | Remove one data plot from a graph (uses `layer -d`, actually deletes) |
+| `set_error_bars` | Attach Y/X error bars to an existing plot from an error column (no duplicate) |
+| `set_layer_geometry` | Set a layer's panel position/size (left/top/width/height) |
 | `add_second_y_axis` | Add a right-Y layer and plot on it |
 | `add_layer` | Add a panel/axis layer (right-y, top-x, inset) |
 | `set_axis_labels` | Set X/Y axis labels and title |
 | `set_axis_range` | Set axis min/max values |
-| `set_axis_scale` | Linear / log10 / ln / log2 scale |
+| `set_axis_scale` | Linear / log10 / ln / log2 scale (auto-rescales range to data) |
 | `add_reference_line` | Horizontal/vertical line at a value |
 | `add_line` | Straight line between two data points |
 | `add_arrow` | Single/double-headed arrow between two points |
@@ -281,9 +286,10 @@ always exposes exactly the tools listed below.
 |------|-------------|
 | `apply_publication_style` | **One-call publication formatting** (recommended) |
 | `set_plot_style` | Set color, symbol, line width per plot |
-| `set_graph_font` | Set font family and size |
+| `set_graph_font` | Set font family, size, and optional bold |
 | `set_legend` | Configure legend text and position |
 | `set_tick_style` | Set tick direction and length |
+| `set_tick_labels` | Tick-label numeric format (decimal/scientific/engineering), bold, decimal places |
 
 ### Analysis
 | Tool | Description |
@@ -307,7 +313,7 @@ always exposes exactly the tools listed below.
 ### Advanced
 | Tool | Description |
 |------|-------------|
-| `run_labtalk` | Execute LabTalk with destructive/file-writing commands blocked |
+| `run_labtalk` | Execute LabTalk with destructive/file-writing commands blocked; optional `capture` reads variables back |
 | `get_labtalk_variable` | Read a LabTalk variable value |
 
 ## Example: Publication-Quality Figure

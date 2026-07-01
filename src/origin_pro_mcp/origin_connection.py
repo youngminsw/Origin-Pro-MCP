@@ -35,9 +35,38 @@ def set_session_origin(origin, factory=None) -> None:
 
 def clear_session_origin() -> None:
     """Drop the current thread's proxy and factory (full session teardown)."""
-    for attr in ("origin", "factory"):
+    for attr in ("origin", "factory", "project_path"):
         if hasattr(_state, attr):
             delattr(_state, attr)
+
+
+def remember_project_path(path) -> None:
+    """Record the last project this thread loaded/saved, so a relaunch after a
+    crash (dead COM proxy) can auto-reopen it. Falsy value forgets it (e.g.
+    after ``new_project``)."""
+    if path:
+        _state.project_path = path
+    elif hasattr(_state, "project_path"):
+        del _state.project_path
+
+
+def get_remembered_project_path():
+    return getattr(_state, "project_path", None)
+
+
+def _reopen_remembered_project(origin) -> None:
+    """Best-effort: reopen the remembered on-disk project into a freshly
+    relaunched instance. A crash/close still drops unsaved edits, but the last
+    saved project comes back instead of an empty session. Fully guarded."""
+    import os
+
+    path = getattr(_state, "project_path", None)
+    if not path or not os.path.isfile(path):
+        return
+    try:
+        origin.Load(path)
+    except Exception:
+        pass
 
 
 def get_origin():
@@ -54,6 +83,10 @@ def get_origin():
             # open Origin or another session's instance.
             origin = factory()
             _state.origin = origin
+            # Recovery: if this thread had a project loaded before the proxy
+            # died, reopen it into the fresh instance (best-effort). On the
+            # first launch nothing is remembered yet, so this is a no-op.
+            _reopen_remembered_project(origin)
             return origin
         try:
             import win32com.client

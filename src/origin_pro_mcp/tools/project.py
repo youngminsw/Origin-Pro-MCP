@@ -6,6 +6,7 @@ from ..origin_connection import (
     execute_labtalk,
     get_origin,
     graph_names,
+    remember_project_path,
     require_graph,
 )
 from ..labtalk_safe import labtalk_choice, labtalk_name, windows_path
@@ -18,6 +19,7 @@ def new_project() -> str:
     """Create a new empty Origin project (closes current without saving)."""
     o = get_origin()
     o.NewProject()
+    remember_project_path(None)  # a fresh project has no on-disk path to recover
     return "New project created"
 
 @mcp.tool()
@@ -47,6 +49,7 @@ def save_project(file_path: str = "") -> str:
         if not o.Save(path):
             msg = f"Origin could not save the project to {path}."
             raise ValueError(msg)
+        remember_project_path(path)
         return f"Project saved to: {path}"
     if not o.Save(""):
         msg = (
@@ -76,6 +79,7 @@ def load_project(file_path: str) -> str:
     if not o.Load(path):
         msg = f"Origin could not open the project file: {path}"
         raise ValueError(msg)
+    remember_project_path(path)
     return f"Loaded project: {path}"
 
 @mcp.tool()

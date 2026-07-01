@@ -1,5 +1,5 @@
 from ..app import mcp
-from ..origin_connection import activate_window, execute_labtalk, get_lt_var, require_graph
+from ..origin_connection import activate_window, execute_labtalk, get_lt_str, get_lt_var, require_graph
 from ..labtalk_safe import labtalk_choice, labtalk_name, labtalk_string, positive_int
 from .style_helpers import (
     _collect_xy,
@@ -336,12 +336,24 @@ def apply_publication_style(
     )
 
 
+def _bold_text_object(obj: str) -> None:
+    """Bold an axis-title / graph-title text object by wrapping its current
+    text in `\\b(...)`. Origin 2020 exposes no `.bold` on these objects, so
+    this rich-text markup is the only reliable route. Idempotent (won't
+    double-wrap); a no-op when the text can't be read."""
+    current = get_lt_str(f"{obj}.text$")
+    if not current or current.startswith("\\b(") or '"' in current:
+        return
+    execute_labtalk(f'{obj}.text$ = {labtalk_string(chr(92) + "b(" + current + ")", obj)};')
+
+
 @mcp.tool()
 def set_graph_font(
     graph_name: str,
     font_name: str = "Arial",
     font_size: int = 24,
-    target: str = "all"
+    target: str = "all",
+    bold: bool = False,
 ) -> str:
     """Set font for graph elements.
 
@@ -350,6 +362,9 @@ def set_graph_font(
         font_name: Font family (e.g., Arial)
         font_size: Font size in points (default 24)
         target: "all", "axes", "title", "legend", "tick"
+        bold: When True, also bold the targeted element(s). Tick labels are
+              always bold (Origin publication default); this bolds axis titles
+              and the graph title via `\\b(...)` markup for the chosen target.
 
     Returns:
         Success message
@@ -361,9 +376,15 @@ def set_graph_font(
     require_graph(safe_graph_name)
     activate_window(safe_graph_name, "graph_name")
 
+    # Bold: Origin 2020 has NO `.bold` property on the axis-title/title text
+    # objects (only tick labels expose `layer.x.label.bold`). Bolding a title
+    # is done by wrapping its text in the `\b(...)` rich-text markup.
     if safe_target in ("all", "axes"):
         execute_labtalk(f"xb.font$ = {safe_font_name}; xb.fsize = {safe_font_size};")
         execute_labtalk(f"yl.font$ = {safe_font_name}; yl.fsize = {safe_font_size};")
+        if bold:
+            _bold_text_object("xb")
+            _bold_text_object("yl")
 
     if safe_target in ("all", "tick"):
         tick_size = max(safe_font_size - 4, 16)
@@ -375,6 +396,8 @@ def set_graph_font(
 
     if safe_target == "title":
         execute_labtalk(f"title.font$ = {safe_font_name}; title.fsize = {safe_font_size};")
+        if bold:
+            _bold_text_object("title")
 
     return f"Set font {font_name} {safe_font_size}pt on {safe_target} for {safe_graph_name}"
 
@@ -455,3 +478,60 @@ def _set_tick_style_impl(
     )
 
     return f"Updated tick style for {safe_graph_name}"
+
+
+# layer.axis.label.numFormat codes (verified against OriginLab docs).
+_TICK_LABEL_FORMATS = {"decimal": 1, "scientific": 2, "engineering": 3}
+
+
+@mcp.tool()
+def set_tick_labels(
+    graph_name: str,
+    axis: str = "both",
+    format: str | None = None,
+    bold: bool | None = None,
+    decimal_places: int | None = None,
+) -> str:
+    """Format an axis's tick labels: numeric format, bold, decimal places.
+
+    For a log axis Origin already renders ticks as powers of ten (10^n) by
+    default — set the scale with axis(op="scale", scale="log10"); there is no
+    separate "powers10" tick format on this build. On a linear axis, use
+    format="scientific" for the 1E3 style or "decimal" for plain numbers.
+
+    Args:
+        graph_name: Graph name
+        axis: "x", "y", or "both" (default)
+        format: "decimal", "scientific", or "engineering" (None = leave)
+        bold: True/False to bold/unbold tick labels (None = leave)
+        decimal_places: Number of decimals to show, or -1 for auto (None = leave)
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_axis = labtalk_choice(axis.lower(), {"x", "y", "both"}, "axis")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    if format is None and bold is None and decimal_places is None:
+        msg = "Provide at least one of format, bold, or decimal_places."
+        raise ValueError(msg)
+    axes = ["x", "y"] if safe_axis == "both" else [safe_axis]
+    changed = []
+    cmds = []
+    for a in axes:
+        if format is not None:
+            safe_fmt = labtalk_choice(format.lower(), _TICK_LABEL_FORMATS, "format")
+            cmds.append(f"layer.{a}.label.numFormat = {_TICK_LABEL_FORMATS[safe_fmt]};")
+        if bold is not None:
+            cmds.append(f"layer.{a}.label.bold = {1 if bold else 0};")
+        if decimal_places is not None:
+            cmds.append(f"layer.{a}.label.decPlaces = {int(decimal_places)};")
+    if format is not None:
+        changed.append("format")
+    if bold is not None:
+        changed.append("bold")
+    if decimal_places is not None:
+        changed.append("decimal_places")
+    graph_layer_execute(safe_graph, " ".join(cmds))
+    return f"Updated {safe_axis} tick labels for {safe_graph}: {', '.join(changed)}"

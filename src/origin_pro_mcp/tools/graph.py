@@ -257,6 +257,153 @@ def delete_graph(graph_name: str) -> str:
     return f"Deleted graph '{safe_graph_name}'."
 
 
+@mcp.tool()
+def remove_plot(graph_name: str, plot_index: int = 1) -> str:
+    """Remove a single data plot from a graph's first layer.
+
+    Use this to delete a stray/duplicate/dead-guide curve without touching the
+    others. Unlike `range r; delete r;` (which reports success but leaves the
+    plot on the layer), this uses `layer -d`, which actually removes it.
+
+    Args:
+        graph_name: Graph name
+        plot_index: 1-based index over the graph's DATA plots (same numbering
+                    as set_plot_style; error-bar plots are not counted)
+
+    Returns:
+        Confirmation message
+    """
+    from .style_helpers import get_plot_info
+
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    infos = get_plot_info(safe_graph)
+    data_names = [p["name"] for p in infos if not p["is_error"]]
+    idx = plot_index - 1
+    if idx < 0 or idx >= len(data_names):
+        return (
+            f"Plot index {plot_index} not found. "
+            f"{safe_graph} has {len(data_names)} data plot(s)."
+        )
+    pname = data_names[idx]
+    # `layer -e <dataset>` removes the dataset from the layer; `layer -ie`
+    # then purges the now-unused style holder (which is what leaves a "dead
+    # guide" legend entry behind). `layer -d` would delete the whole LAYER.
+    if not execute_labtalk(f"win -a {safe_graph}; layer -e {pname}; layer -ie;"):
+        msg = f"Origin could not remove plot {plot_index} ({pname}) from {safe_graph}."
+        raise ValueError(msg)
+    return f"Removed data plot {plot_index} ({pname}) from {safe_graph}."
+
+
+_ERROR_BAR_FLAGS = {"y": "-o", "x": "-ox"}
+
+
+@mcp.tool()
+def set_error_bars(
+    graph_name: str,
+    data_book: str,
+    data_sheet: str,
+    y_col: int,
+    err_col: int,
+    direction: str = "y",
+) -> str:
+    """Attach error bars to an EXISTING plot from an error column, in place.
+
+    Uses Origin's documented `set <err> -o <y>` idiom: the error column is
+    plotted into the layer and then reassigned as error bars of the target Y
+    plot, so no duplicate curve is left behind (unlike re-running plotxy with a
+    3-column range). The error and Y columns must live in the same sheet, and
+    the target Y column must already be plotted on the graph.
+
+    Args:
+        graph_name: Graph that already shows the Y plot
+        data_book: Workbook holding both the Y and error columns
+        data_sheet: Sheet holding both columns
+        y_col: 1-based column of the plotted Y data to decorate
+        err_col: 1-based column holding the error values (SD/SE)
+        direction: "y" for Y error bars (default) or "x" for X error bars
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_book = labtalk_name(data_book, "data_book")
+    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_y = positive_column(y_col, "y_col")
+    safe_err = positive_column(err_col, "err_col")
+    safe_dir = labtalk_choice(direction.lower(), _ERROR_BAR_FLAGS, "direction")
+    if safe_y == safe_err:
+        msg = "y_col and err_col must be different columns."
+        raise ValueError(msg)
+    require_graph(safe_graph)
+    require_worksheet(safe_book, safe_sheet)
+    flag = _ERROR_BAR_FLAGS[safe_dir]
+    ref = f"[{safe_book}]{safe_sheet}"
+    # Plot the error column into the layer (so it is a "plotted dataset"), then
+    # reassign that plot as error bars of the Y plot. `set` consumes the temp
+    # plot — it becomes the bars, not a leftover curve.
+    script = (
+        f"win -a {safe_graph}; "
+        f"plotxy iy:={ref}!col({safe_err}) plot:=200 ogl:=[{safe_graph}]Layer1; "
+        f"range __mcp_yr = {ref}!col({safe_y}); "
+        f"range __mcp_er = {ref}!col({safe_err}); "
+        f"set __mcp_er {flag} __mcp_yr;"
+    )
+    if not execute_labtalk(script):
+        msg = (
+            f"Origin could not attach {safe_dir}-error bars from column {safe_err} "
+            f"to the column {safe_y} plot on {safe_graph}. Check that column "
+            f"{safe_y} is actually plotted on this graph."
+        )
+        raise ValueError(msg)
+    return (
+        f"Attached {safe_dir}-error bars (column {safe_err}) to the column "
+        f"{safe_y} plot on {safe_graph}."
+    )
+
+
+@mcp.tool()
+def set_layer_geometry(
+    graph_name: str,
+    left: float | None = None,
+    top: float | None = None,
+    width: float | None = None,
+    height: float | None = None,
+) -> str:
+    """Set a graph layer's panel geometry (position and size).
+
+    Values are in the layer's current units — Origin's default is percent of
+    the page, so left=15, top=12, width=75, height=75 places a single panel
+    with even margins. Use this to stop axis titles from being clipped outside
+    the frame or to line up multi-panel figures. Only the provided fields are
+    changed. Operates on the graph's first layer.
+
+    Args:
+        graph_name: Graph name
+        left: Panel left edge (None = leave)
+        top: Panel top edge (None = leave)
+        width: Panel width (None = leave)
+        height: Panel height (None = leave)
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    fields = {"left": left, "top": top, "width": width, "height": height}
+    provided = {k: v for k, v in fields.items() if v is not None}
+    if not provided:
+        msg = "Provide at least one of left, top, width, or height."
+        raise ValueError(msg)
+    cmds = " ".join(f"layer.{k} = {float(v)};" for k, v in provided.items())
+    if not execute_labtalk(cmds):
+        msg = f"Origin could not set the layer geometry of {safe_graph}."
+        raise ValueError(msg)
+    return f"Set layer geometry of {safe_graph}: {', '.join(provided)}."
+
+
 def _set_axis_labels_impl(
     graph_name: str,
     x_label: str = "",
@@ -356,15 +503,44 @@ def _export_graph_impl(
 
 # Origin axis scale type codes (layer.x/y.type).
 _AXIS_SCALES = {"linear": 1, "log10": 2, "ln": 8, "log2": 9}
+_LOG_SCALES = {"log10", "ln", "log2"}
 
 
-def _set_axis_scale_impl(graph_name: str, axis: str = "y", scale: str = "log10") -> str:
+def _rescale_axis_to_data(graph_name: str, axis: str, is_log: bool) -> bool:
+    """Reset an axis's from/to to the plotted data extent (ACTUAL values, not
+    exponents). For a log axis, non-positive points are dropped so the range
+    can't collapse to a garbage decade like 1E-9. Best-effort: returns False
+    (leaving Origin's auto range) when the data can't be read."""
+    from .style_helpers import _collect_xy
+
+    try:
+        xs, ys = _collect_xy(graph_name)
+    except Exception:
+        return False
+    vals = [v for v in (xs if axis == "x" else ys) if v is not None]
+    if is_log:
+        vals = [v for v in vals if v > 0]
+    if len(vals) < 2:
+        return False
+    lo, hi = min(vals), max(vals)
+    if lo == hi:
+        return False
+    return bool(execute_labtalk(f"layer.{axis}.from = {lo}; layer.{axis}.to = {hi};"))
+
+
+def _set_axis_scale_impl(
+    graph_name: str, axis: str = "y", scale: str = "log10", rescale: bool = True
+) -> str:
     """Set an axis to linear or a logarithmic scale.
 
     Args:
         graph_name: Graph name
         axis: "x" or "y"
         scale: linear, log10, ln, or log2
+        rescale: When True (default), reset the axis range to the data extent
+                 after the scale change so a log switch doesn't leave garbage
+                 ticks (e.g. 1E-9 … 100). Range bounds are ACTUAL data values,
+                 not exponents.
 
     Returns:
         Success message
@@ -377,8 +553,33 @@ def _set_axis_scale_impl(graph_name: str, axis: str = "y", scale: str = "log10")
     if not execute_labtalk(f"layer.{safe_axis}.type = {_AXIS_SCALES[safe_scale]};"):
         msg = f"Could not set {safe_axis} axis of {safe_graph} to {safe_scale}."
         raise ValueError(msg)
-    return f"Set {safe_axis} axis of {safe_graph} to {safe_scale} scale"
+    rescaled = ""
+    if rescale and _rescale_axis_to_data(safe_graph, safe_axis, safe_scale in _LOG_SCALES):
+        rescaled = " (auto-rescaled to data)"
+    return f"Set {safe_axis} axis of {safe_graph} to {safe_scale} scale{rescaled}"
 
+
+_FRAME_MODES = {"closed", "open"}
+
+
+def _set_axis_frame_impl(graph_name: str, frame: str = "closed") -> str:
+    """Close or open a graph's frame — the top (opposite X) and right
+    (opposite Y) border axes.
+
+    Args:
+        graph_name: Graph name
+        frame: "closed" (draw top+right border axes) or "open" (hide them)
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    safe_frame = labtalk_choice(frame.lower(), _FRAME_MODES, "frame")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    opposite = 1 if safe_frame == "closed" else 0
+    execute_labtalk(f"layer.x.opposite = {opposite}; layer.y.opposite = {opposite};")
+    return f"Set frame of {safe_graph} to {safe_frame}"
 
 @mcp.tool()
 def add_second_y_axis(
@@ -552,7 +753,13 @@ def _export_via_expgraph(
         msg = f"Origin could not export {safe_graph} to {path}."
         raise ValueError(msg)
     if not os.path.exists(path):
-        msg = f"Export failed: {path} was not created."
+        hint = ""
+        if path.startswith("/"):
+            hint = (
+                " This looks like a WSL/Linux path Origin (Windows) cannot write "
+                "to — use a Windows path (C:\\...) or /mnt/<drive>/... instead."
+            )
+        msg = f"Export failed: {path} was not created.{hint}"
         raise ValueError(msg)
     return path
 
@@ -764,7 +971,7 @@ def _add_arrow_impl(
 
 # --- Consolidated dispatchers (Phase 2) ---------------------------------------
 
-_AXIS_OPS = {"labels", "range", "scale", "tick"}
+_AXIS_OPS = {"labels", "range", "scale", "tick", "frame"}
 
 
 @mcp.tool()
@@ -780,6 +987,8 @@ def axis(
     major_length: int | None = None,
     minor_count: int | None = None,
     show_minor: bool | None = None,
+    rescale: bool = True,
+    frame: str | None = None,
 ) -> str:
     """Configure a graph's axes.
 
@@ -792,16 +1001,22 @@ def axis(
               `range_max` (None = auto). With axis="both" the same range is
               applied to X and Y.
             - "scale": set an axis scale. Uses `axis` ("x" or "y") and `scale`
-              (linear, log10, ln, log2).
+              (linear, log10, ln, log2). By default the axis range is reset to
+              the data extent after the change (pass rescale=False to keep the
+              current range); range bounds are ACTUAL values, not exponents.
             - "tick": set tick-mark style. Uses `tick_direction` (in/out/both,
               default in), `major_length` (default 8), `minor_count`
               (default 4), `show_minor` (default True).
+            - "frame": close/open the frame (top+right border axes). Uses
+              `frame` ("closed" or "open", default "closed").
         axis: Target axis ("x", "y", or "both"; default "both").
         label: Axis label text (op="labels").
         range_min, range_max: Axis range bounds (op="range").
         scale: Axis scale type (op="scale").
         tick_direction, major_length, minor_count, show_minor: Tick style
             (op="tick").
+        rescale: For op="scale", auto-rescale to the data extent (default True).
+        frame: For op="frame", "closed" or "open" (default "closed").
 
     Returns:
         Success message for the selected operation.
@@ -833,7 +1048,13 @@ def axis(
         # Treat the dispatcher's "both" default (or unset) as "y" so a
         # default call succeeds instead of hitting the impl's x/y guard.
         scale_axis = "y" if axis in (None, "both") else axis
-        return _set_axis_scale_impl(graph_name, axis=scale_axis, scale=scale)
+        return _set_axis_scale_impl(
+            graph_name, axis=scale_axis, scale=scale, rescale=rescale
+        )
+    if safe_op == "frame":
+        return _set_axis_frame_impl(
+            graph_name, frame=frame if frame is not None else "closed"
+        )
     # tick
     from .style import _set_tick_style_impl
     return _set_tick_style_impl(

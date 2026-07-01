@@ -163,3 +163,92 @@ def test_add_arrow_unknown_graph(fake_origin):
 
     with pytest.raises(ValueError, match="not found"):
         annotate("Ghost", kind="arrow", x1=1, y1=2, x2=3, y2=4)
+
+
+def _graph_with_xy(fake_origin, ys, plot_names=("Book1_B",)):
+    """Rig the fake so _collect_xy sees an X column (type 3) and Y column."""
+    from fakes import FakeBook, FakeSheet, FakeColumn, FakeGraph
+
+    sheet = FakeSheet("Sheet1", columns=[
+        FakeColumn("A", col_type=3),   # X designation
+        FakeColumn("B", col_type=0),   # Y
+    ])
+    fake_origin.books = [FakeBook("Book1", sheets=[sheet])]
+    fake_origin.graphs = [FakeGraph("Graph1", plot_names=list(plot_names))]
+    fake_origin.worksheet_data = [(4.0, y) for y in ys]
+
+
+def test_axis_scale_auto_rescales_to_data(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    _graph_with_xy(fake_origin, [10.0, 50.0, 700.0])
+    msg = axis("Graph1", op="scale", axis="y", scale="log10")
+    assert "auto-rescaled" in msg
+    assert any("layer.y.from = 10.0" in s and "layer.y.to = 700.0" in s
+               for s in fake_origin.executed)
+
+
+def test_axis_scale_log_drops_nonpositive(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    _graph_with_xy(fake_origin, [-5.0, 0.0, 20.0, 80.0])
+    axis("Graph1", op="scale", axis="y", scale="log10")
+    # min must be the smallest POSITIVE value, not -5 or 0.
+    assert any("layer.y.from = 20.0" in s for s in fake_origin.executed)
+
+
+def test_axis_scale_rescale_false_keeps_range(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    _graph_with_xy(fake_origin, [10.0, 50.0])
+    axis("Graph1", op="scale", axis="y", scale="log10", rescale=False)
+    assert not any(".from =" in s for s in fake_origin.executed)
+
+
+def test_axis_frame_closed(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    msg = axis("Graph1", op="frame")
+    assert "closed" in msg
+    assert any("layer.x.opposite = 1" in s and "layer.y.opposite = 1" in s
+               for s in fake_origin.executed)
+
+
+def test_axis_frame_open(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    axis("Graph1", op="frame", frame="open")
+    assert any("layer.x.opposite = 0" in s for s in fake_origin.executed)
+
+
+def test_axis_frame_bad_mode(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    with pytest.raises(ValueError, match="frame must be one of"):
+        axis("Graph1", op="frame", frame="halfopen")
+
+
+def test_remove_plot_uses_layer_erase(fake_origin):
+    from fakes import FakeGraph
+    from origin_pro_mcp.tools.graph import remove_plot
+
+    fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B", "Book1_C"])]
+    msg = remove_plot("Graph1", plot_index=2)
+    assert "Removed data plot 2 (Book1_C)" in msg
+    # layer -e removes the dataset by name; layer -ie purges the dead style holder.
+    assert any("layer -e Book1_C" in s and "layer -ie" in s for s in fake_origin.executed)
+
+
+def test_remove_plot_out_of_range(fake_origin):
+    from origin_pro_mcp.tools.graph import remove_plot
+
+    msg = remove_plot("Graph1", plot_index=1)  # default Graph1 has no plots
+    assert "not found" in msg
+    assert not any("layer -e" in s for s in fake_origin.executed)
+
+
+def test_remove_plot_unknown_graph(fake_origin):
+    from origin_pro_mcp.tools.graph import remove_plot
+
+    with pytest.raises(ValueError, match="not found"):
+        remove_plot("Ghost", plot_index=1)

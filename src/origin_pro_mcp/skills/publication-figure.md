@@ -351,10 +351,30 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
 
 ### Multi-panel and axis control
 
-- `set_axis_scale(graph, axis, "log10")` for decades-spanning data.
+- `set_axis_scale(graph, axis, "log10")` for decades-spanning data. It now
+  auto-rescales the axis to the data (range bounds are ACTUAL values, not
+  exponents) so a log switch no longer leaves garbage ticks.
+- `axis(graph, op="frame", frame="closed")` draws the top+right border axes.
+- `set_tick_labels(graph, axis, format="scientific"|"decimal", bold=, decimal_places=)`
+  for tick-label number format. Log axes already render 10^n by default.
+- `set_layer_geometry(graph, left=, top=, width=, height=)` (percent of page)
+  when an axis title is clipped or panels must line up.
+- `set_graph_font(graph, target="axes", bold=True)` bolds axis titles via
+  `\b(...)` markup (there is no `xb.bold` on Origin 2020).
 - `add_second_y_axis` / `add_layer` for dual-axis or stacked panels.
 - `add_reference_line` (threshold/baseline), `add_line`, `add_arrow` (callouts),
   `add_text_annotation` (labels at data coordinates).
+
+### Error bars and plot cleanup
+
+- **n=3 mean±SD error bars.** Put the SD/SE in its own column and either
+  create the plot with them, `create_graph(..., y_error_col=N)`, or attach
+  them afterward with `set_error_bars(graph, book, sheet, y_col, err_col)` —
+  which reuses Origin's `set <err> -o <y>` idiom so no duplicate curve is left.
+  Designate an error column explicitly with
+  `set_column_designation(book, sheet, col, "yerr")` (or `"xerr"`).
+- **Remove a stray/dead plot** with `remove_plot(graph, plot_index)` — it uses
+  `layer -d`, which actually deletes the curve (a bare `delete range` does not).
 
 ### Worksheet prep and IO
 
