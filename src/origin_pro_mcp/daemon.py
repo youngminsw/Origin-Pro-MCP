@@ -214,11 +214,20 @@ class Session:
     def _graceful_reap(self, recovery_dir: str, getter) -> None:
         """Stage 1 of a reap, ON THIS WORKER THREAD (so COM affinity holds).
 
-        Best-effort: resolve the session's open-project path (via the injected
-        ``getter``, on this thread), pick a collision-safe recovery path, save
-        the project to it, then close the instance. Every step is wrapped — a
-        failure here just means the watchdog's force-kill reclaims the slot.
+        DEFAULT (detach): leave the Origin window exactly as the user had it —
+        correct project binding, unsaved edits intact — and just let the worker
+        thread exit (the caller breaks the loop after this returns). The user
+        keeps their project; only the session's COM worker dies.
+
+        ORIGIN_PRO_MCP_REAP_CLOSE=1 restores the legacy save-and-close: resolve
+        the open-project path, save a collision-safe recovery copy, then close
+        the instance. NOTE: ``o.Save(path)`` REBINDS the project identity to that
+        path, which is exactly why we must NOT save in detach mode (it would
+        repoint the kept-open window's save target at the recovery file). A
+        WEDGED worker is freed instead by the watchdog force-killing its PID.
         """
+        if not _reap_close_enabled():
+            return  # detach: leave the window untouched; the worker exits below
         project_path = None
         if getter is not None:
             try:
@@ -235,22 +244,14 @@ class Session:
             self.saved_recovery_path = path
         except Exception:
             pass
-        # DETACH by default: save a recovery copy above, then leave the Origin
-        # window OPEN so the user keeps their project. The worker thread still
-        # exits (below), so the session's COM worker dies while the project
-        # survives. Set ORIGIN_PRO_MCP_REAP_CLOSE=1 to restore the old
-        # save-and-close behavior. NOTE: a WEDGED worker can only be freed by
-        # killing its Origin PID (the watchdog does that on the reap deadline);
-        # detach applies to graceful, non-wedged reaps.
-        if _reap_close_enabled():
-            for closer in ("Exit", "Close"):
-                fn = getattr(self.instance, closer, None)
-                if callable(fn):
-                    try:
-                        fn()
-                    except Exception:
-                        pass
-                    break
+        for closer in ("Exit", "Close"):
+            fn = getattr(self.instance, closer, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+                break
 
     def submit_reap(self, recovery_dir: str, getter,
                     on_done: Optional[Callable[[], None]] = None) -> None:

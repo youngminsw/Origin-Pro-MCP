@@ -191,7 +191,8 @@ def test_recovery_path_never_overwrites_increments_counter(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_graceful_reap_saves_recovery_file_and_frees_slot(lifecycle, tmp_path):
+def test_graceful_reap_saves_recovery_file_and_frees_slot(lifecycle, tmp_path, monkeypatch):
+    monkeypatch.setenv("ORIGIN_PRO_MCP_REAP_CLOSE", "1")
     start, client = lifecycle
     clock = FakeClock()
     factory = FakeFactory()
@@ -230,9 +231,10 @@ class ClosableOrigin(FakeOrigin):
 
 
 def test_graceful_reap_detaches_by_default_keeps_origin(lifecycle, tmp_path):
-    """DEFAULT: a graceful reap saves a recovery copy and frees the slot but
-    DETACHES — it must NOT close the Origin (the user keeps their project),
-    while the session's worker still stops."""
+    """DEFAULT: a graceful reap frees the slot and stops the worker but DETACHES
+    — it must NOT close the Origin AND must NOT Save (o.Save rebinds the project
+    identity), leaving the user's window exactly as it was so they keep their
+    project with its original save target intact."""
     start, client = lifecycle
     clock = FakeClock()
     factory = FakeFactory(make=ClosableOrigin)
@@ -247,11 +249,10 @@ def test_graceful_reap_detaches_by_default_keeps_origin(lifecycle, tmp_path):
     assert _request(conn, "r0", "run_labtalk", {"script": "g=1;"})["ok"] is True
     inst = factory.created[0]
     conn.close()  # schedule + commit the graceful reap
-    expected = os.path.join(rec_dir, "keep.keepsess.recover.opju")
-    assert _wait_until(lambda: expected in inst.saved_paths)  # recovery saved
     assert _wait_until(lambda: daemon.pool.session_ids() == [])  # slot freed
     assert killed == []                       # not force-killed
     assert inst.exited is False               # Origin KEPT OPEN (detached)
+    assert inst.saved_paths == []             # NOT saved -> no project rebind
 
 
 def test_graceful_reap_closes_when_opted_in(lifecycle, tmp_path, monkeypatch):
@@ -277,7 +278,8 @@ def test_graceful_reap_closes_when_opted_in(lifecycle, tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_watchdog_force_kills_wedged_session_without_waiting(lifecycle, tmp_path):
+def test_watchdog_force_kills_wedged_session_without_waiting(lifecycle, tmp_path, monkeypatch):
+    monkeypatch.setenv("ORIGIN_PRO_MCP_REAP_CLOSE", "1")
     start, client = lifecycle
     clock = FakeClock()
     factory = FakeFactory(make=BlockingSaveOrigin)
@@ -321,7 +323,8 @@ def test_watchdog_force_kills_wedged_session_without_waiting(lifecycle, tmp_path
 # --------------------------------------------------------------------------- #
 
 
-def test_reap_never_overwrites_existing_recovery_file(lifecycle, tmp_path):
+def test_reap_never_overwrites_existing_recovery_file(lifecycle, tmp_path, monkeypatch):
+    monkeypatch.setenv("ORIGIN_PRO_MCP_REAP_CLOSE", "1")
     start, client = lifecycle
     clock = FakeClock()
     factory = FakeFactory()
@@ -357,7 +360,8 @@ def test_reap_never_overwrites_existing_recovery_file(lifecycle, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_heartbeat_gap_triggers_reap(lifecycle, tmp_path):
+def test_heartbeat_gap_triggers_reap(lifecycle, tmp_path, monkeypatch):
+    monkeypatch.setenv("ORIGIN_PRO_MCP_REAP_CLOSE", "1")
     start, client = lifecycle
     clock = FakeClock()
     factory = FakeFactory()
@@ -491,7 +495,8 @@ def test_monitors_never_touch_com_proxy(lifecycle, tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-def test_reap_with_unknown_pid_skips_force_kill_but_frees_slot(lifecycle, tmp_path):
+def test_reap_with_unknown_pid_skips_force_kill_but_frees_slot(lifecycle, tmp_path, monkeypatch):
+    monkeypatch.setenv("ORIGIN_PRO_MCP_REAP_CLOSE", "1")
     start, client = lifecycle
     clock = FakeClock()
     factory = FakeFactory(make=BlockingSaveOrigin)
