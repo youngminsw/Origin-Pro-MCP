@@ -49,6 +49,38 @@ def labtalk_string(value: str, field: str) -> str:
     return f'"{value}"'
 
 
+# Origin text-object markup escapes that render safely. Anything else — most
+# importantly ``\q()``, which invokes LaTeX and pops a blocking "Get MiKTeX
+# Path" modal that WEDGES Origin (and the daemon) — must never reach a text
+# object. Confirmed safe on Origin 2020: b, i, u, +, -, g, f (\f:Font).
+_SUPPORTED_TEXT_ESCAPES = frozenset("biu+-gf")
+_TEXT_ESCAPE_RE = re.compile(r"\\([^\s(])")
+
+
+def validate_text_escapes(value: str, field: str) -> None:
+    """Reject unsupported Origin text-markup escapes in label/title/annotation
+    text. ``\\q()`` in particular triggers a blocking LaTeX/MiKTeX modal that
+    wedges Origin, so it is refused BEFORE it ever reaches the COM layer."""
+    for match in _TEXT_ESCAPE_RE.finditer(value):
+        ch = match.group(1)
+        if ch not in _SUPPORTED_TEXT_ESCAPES:
+            raise ValueError(
+                f"{field} contains an unsupported Origin text escape '\\{ch}'. "
+                "Supported: \\b (bold), \\i (italic), \\u (underline), "
+                "\\+ (superscript), \\- (subscript), \\g (Greek/symbol), "
+                "\\f:Font (font). ('\\q' invokes LaTeX and hangs Origin.) "
+                "Remove or replace it."
+            )
+
+
+def labtalk_text(value: str, field: str) -> str:
+    """``labtalk_string`` for TEXT-OBJECT content (axis labels, titles,
+    annotations): additionally rejects unsupported markup escapes that can
+    wedge Origin via a modal dialog."""
+    validate_text_escapes(value, field)
+    return labtalk_string(value, field)
+
+
 def labtalk_formula(value: str, field: str) -> str:
     """Validate a column-formula expression (e.g. 'col(1)^2 + col(2)').
 

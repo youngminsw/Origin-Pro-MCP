@@ -15,7 +15,8 @@ from ..origin_connection import (
 from ..labtalk_safe import (
     labtalk_choice,
     labtalk_name,
-    labtalk_string,
+    labtalk_text,
+    validate_text_escapes,
     positive_column,
     positive_int,
     windows_path,
@@ -115,7 +116,7 @@ def create_graph(
     def _set_title():
         if title:
             execute_labtalk(
-                f"label -n title -s {labtalk_string(title, 'title')}; "
+                f"label -n title -s {labtalk_text(title, 'title')}; "
                 "title.x = 50; title.y = 95;"
             )
 
@@ -435,11 +436,11 @@ def _set_axis_labels_impl(
     safe_graph_name = labtalk_name(graph_name, "graph_name")
     activate_window(safe_graph_name, "graph_name")
     if x_label:
-        execute_labtalk(f"xb.text$ = {labtalk_string(x_label, 'x_label')};")
+        execute_labtalk(f"xb.text$ = {labtalk_text(x_label, 'x_label')};")
     if y_label:
-        execute_labtalk(f"yl.text$ = {labtalk_string(y_label, 'y_label')};")
+        execute_labtalk(f"yl.text$ = {labtalk_text(y_label, 'y_label')};")
     if title:
-        execute_labtalk(f"label -n title -s {labtalk_string(title, 'title')}; title.x = 50; title.y = 95;")
+        execute_labtalk(f"label -n title -s {labtalk_text(title, 'title')}; title.x = 50; title.y = 95;")
     return f"Updated labels for {safe_graph_name}"
 
 def _set_axis_range_impl(
@@ -717,6 +718,7 @@ def _add_text_annotation_impl(
     if any(ch in text for ch in ('"', "\r", "\n", ";")) or not text.strip():
         msg = "text cannot be empty or contain quotes, line breaks, or ';'."
         raise ValueError(msg)
+    validate_text_escapes(text, "text")  # reject \q() etc. (LaTeX modal wedge)
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
     execute_labtalk("layer1;")

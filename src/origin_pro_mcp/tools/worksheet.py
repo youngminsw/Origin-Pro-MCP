@@ -21,6 +21,7 @@ from ..labtalk_safe import (
     positive_int,
     labtalk_path,
     labtalk_string,
+    labtalk_text,
     windows_path,
 )
 
@@ -104,7 +105,7 @@ def set_worksheet_data(
         activate_window(safe_book_name, "book_name")
         execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet_name, "sheet_name")};')
         for i, name in enumerate(names):
-            execute_labtalk(f"wks.col{i+1}.lname$ = {labtalk_string(name, 'column_names')};")
+            execute_labtalk(f"wks.col{i+1}.lname$ = {labtalk_text(name, 'column_names')};")
 
     n_rows = max(len(c) for c in cols)
     return f"Set {len(cols)} columns x {n_rows} rows in {target}"
@@ -400,13 +401,13 @@ def _set_column_properties_impl(
     execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
     changed = []
     if long_name:
-        execute_labtalk(f'wks.col{safe_col}.lname$ = {labtalk_string(long_name, "long_name")};')
+        execute_labtalk(f'wks.col{safe_col}.lname$ = {labtalk_text(long_name, "long_name")};')
         changed.append("long_name")
     if units:
-        execute_labtalk(f'wks.col{safe_col}.unit$ = {labtalk_string(units, "units")};')
+        execute_labtalk(f'wks.col{safe_col}.unit$ = {labtalk_text(units, "units")};')
         changed.append("units")
     if comment:
-        execute_labtalk(f'wks.col{safe_col}.comment$ = {labtalk_string(comment, "comment")};')
+        execute_labtalk(f'wks.col{safe_col}.comment$ = {labtalk_text(comment, "comment")};')
         changed.append("comment")
     if designation:
         safe_des = labtalk_choice(designation.lower(), _DESIGNATIONS, "designation")

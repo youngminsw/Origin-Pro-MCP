@@ -167,14 +167,33 @@ def test_save_copy_writes_and_reports(tmp_path):
     assert save_copy(fake, dest, None) is True
     assert fake.saved_paths == [dest]
 
-def test_save_copy_restores_original_binding(tmp_path):
-    """Save(path) rebinds project identity (spike-verified), so save_copy must
-    Save(dest) then Save(remembered) to restore the user's project binding."""
+def test_save_copy_never_resaves_the_original(tmp_path):
+    """N5 fix: save_copy backs up to the backup path ONLY — it must NEVER
+    re-save the user's original (remembered) file, which is how an empty
+    in-memory project once destroyed a real .opju."""
     fake = FakeOrigin()
     dest = str(tmp_path / "study.autosave-0.opju")
     original = str(tmp_path / "study.opju")
     assert save_copy(fake, dest, original) is True
-    assert fake.saved_paths == [dest, original]  # backup, then restore binding
+    assert fake.saved_paths == [dest]          # ONLY the backup; original untouched
+    assert original not in fake.saved_paths
+
+
+class _EmptyOrigin(FakeOrigin):
+    def __init__(self):
+        super().__init__()
+        self.books = []
+        self.graphs = []
+        self.matrices = []
+
+
+def test_save_copy_skips_empty_project(tmp_path):
+    """N5 fix: an EMPTY project (0 windows, e.g. after a flaky empty-load) is
+    never backed up and triggers NO file write at all."""
+    fake = _EmptyOrigin()
+    original = str(tmp_path / "study.opju")
+    assert save_copy(fake, str(tmp_path / "b.opju"), original) is False
+    assert fake.saved_paths == []              # nothing written anywhere
 
 
 def test_save_copy_reports_failure(tmp_path):

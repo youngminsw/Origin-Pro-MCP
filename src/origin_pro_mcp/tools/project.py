@@ -1,4 +1,5 @@
 import os
+import shutil
 
 from ..app import mcp
 from ..origin_connection import (
@@ -13,6 +14,32 @@ from ..labtalk_safe import labtalk_choice, labtalk_name, windows_path
 from .graph import EXPORT_IMAGE_FORMATS, export_graph_to_file
 
 PROJECT_EXTENSIONS = {".opj", ".opju"}
+
+# A real .opju is kilobytes; a blank/empty project is tiny. Used to guard
+# against N5: an empty project silently overwriting a real one.
+_MIN_REAL_PROJECT_BYTES = 2048
+
+
+def _project_page_count(o) -> int:
+    """Total open windows (workbooks + graphs + matrices), or -1 if it can't be
+    read (unknown -> never used to justify a destructive action)."""
+    try:
+        return (o.WorksheetPages.Count + o.GraphPages.Count + o.MatrixPages.Count)
+    except Exception:
+        return -1
+
+
+def _backup_existing(path: str):
+    """Copy an existing non-empty project file to ``<path>.bak`` before it may be
+    overwritten (N5 safety net). Returns the backup path, or None."""
+    try:
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            bak = path + ".bak"
+            shutil.copy2(path, bak)
+            return bak
+    except OSError:
+        pass
+    return None
 
 @mcp.tool()
 def new_project() -> str:
@@ -43,14 +70,36 @@ def save_project(file_path: str = "") -> str:
         elif ext not in PROJECT_EXTENSIONS:
             msg = f"file_path must end in .opj or .opju, got '{ext}'."
             raise ValueError(msg)
+        # N5 guard: NEVER let an empty project silently overwrite a real one.
+        pages = _project_page_count(o)
+        if (pages == 0 and os.path.isfile(path)
+                and os.path.getsize(path) > _MIN_REAL_PROJECT_BYTES):
+            msg = (
+                f"Refusing to save: the current Origin project is EMPTY (no "
+                f"worksheets/graphs/matrices) but '{path}' already holds a real "
+                f"project ({os.path.getsize(path)} bytes). Saving would destroy "
+                f"it. Load the project first, or save to a different path."
+            )
+            raise ValueError(msg)
         out_dir = os.path.dirname(path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
+        bak = _backup_existing(path)  # safety net before overwriting
         if not o.Save(path):
             msg = f"Origin could not save the project to {path}."
+            if bak:
+                msg += f" A pre-save backup was kept at {bak}."
             raise ValueError(msg)
         remember_project_path(path)
-        return f"Project saved to: {path}"
+        return f"Project saved to: {path}" + (f" (backup: {bak})" if bak else "")
+    # No path -> save to the project's current location.
+    if _project_page_count(o) == 0:
+        msg = (
+            "Refusing to save: the current Origin project is empty; saving to its "
+            "existing location could overwrite real data. Pass an explicit "
+            "file_path if you really mean to save an empty project elsewhere."
+        )
+        raise ValueError(msg)
     if not o.Save(""):
         msg = (
             "Origin could not save: the project has no file location yet. "
@@ -76,6 +125,10 @@ def load_project(file_path: str) -> str:
     if not os.path.isfile(path):
         msg = f"Project file not found: {path}"
         raise ValueError(msg)
+    # Keep one pre-load backup of the target (N5 safety net). o.Load is
+    # read-only, but a backup guarantees the file is recoverable no matter what
+    # a later save/autosave does in a crash-recovery sequence.
+    _backup_existing(path)
     if not o.Load(path):
         msg = f"Origin could not open the project file: {path}"
         raise ValueError(msg)

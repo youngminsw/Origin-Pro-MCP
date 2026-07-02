@@ -14,6 +14,7 @@ from ..labtalk_safe import (
     labtalk_choice,
     labtalk_name,
     labtalk_string,
+    labtalk_text,
     positive_column,
     positive_int,
 )
@@ -227,7 +228,7 @@ def create_matrix_plot(
     # The matrix long name flows into %(?Z) → Z-axis title + color scale.
     if z_label:
         execute_labtalk(
-            f'win -a {safe_book}; wks.col1.lname$ = {labtalk_string(z_label, "z_label")};'
+            f'win -a {safe_book}; wks.col1.lname$ = {labtalk_text(z_label, "z_label")};'
         )
 
     tmpl = _MATRIX_TEMPLATES[safe_type]

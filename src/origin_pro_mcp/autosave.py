@@ -230,33 +230,35 @@ def prune_backups(policy: AutosavePolicy, remembered_path: Optional[str],
 
 
 def save_copy(origin, dest_path: str, remembered_path: Optional[str]) -> bool:
-    """Save a recoverable backup of the current project to ``dest_path``.
+    """Save a recoverable backup of the current project to ``dest_path`` (inside
+    the backup directory) — and NOTHING ELSE.
 
-    SPIKE-VERIFIED (Origin 2020, isolated DispatchEx("Origin.Application")):
-    ``o.Save(path)`` REBINDS the active project identity to ``path`` (the LabTalk
-    ``%G`` project name changed proj_A -> proj_B after Save(A) then Save(B)). A
-    naive ``Save(dest)`` would therefore hijack the user's project so their next
-    "save" overwrites the timestamped backup instead of their real file.
+    N5 (data destruction) root cause: this function used to also
+    ``Save(remembered_path)`` to "restore the original binding" after the backup
+    Save rebinds project identity. But when a flaky empty-load had blanked the
+    in-memory project, that second Save wrote the EMPTY project over the user's
+    real 579 KB .opju, destroying it (450 bytes). The fix:
 
-    To keep the user's project identity intact we:
-      1. ``Save(dest_path)``       -> writes the pre-destructive-op backup;
-      2. ``Save(remembered_path)`` -> re-binds identity back to the original file
-         (and re-persists the current good state, which is exactly the state we
-         want protected before the destructive op runs).
+      * NEVER re-save the user's original file — the backup lives in the backup
+        directory only (``remembered_path`` is accepted for signature/naming
+        compat but is deliberately never written).
+      * NEVER back up an EMPTY project (0 windows): a flaky empty-load must not
+        cause any file write at all.
 
-    When the project is unsaved (``remembered_path`` is None) there is no original
-    to restore to, so the project keeps the backup name — acceptable for an
-    untitled project. Fully guarded; returns True only when the backup was written.
+    ``o.Save(dest_path)`` rebinds the active project's identity to the backup
+    path; that is harmless — the user's original file is never touched by
+    autosave, so it can never be destroyed by a snapshot. Returns True only when
+    a backup was actually written.
     """
+    del remembered_path  # intentionally never written (see N5 above)
     try:
-        wrote = bool(origin.Save(dest_path))
+        pages = (origin.WorksheetPages.Count + origin.GraphPages.Count
+                 + origin.MatrixPages.Count)
+    except Exception:
+        pages = -1
+    if pages == 0:
+        return False  # empty project -> nothing worth backing up; write NOTHING
+    try:
+        return bool(origin.Save(dest_path))
     except Exception:
         return False
-    if not wrote:
-        return False
-    if remembered_path:
-        try:
-            origin.Save(remembered_path)  # restore the original binding
-        except Exception:
-            pass  # best-effort; the backup at dest_path still exists
-    return True

@@ -1,6 +1,9 @@
 from ..app import mcp
 from ..origin_connection import activate_window, execute_labtalk, get_lt_str, get_lt_var, require_graph
-from ..labtalk_safe import labtalk_choice, labtalk_name, labtalk_string, positive_int
+from ..labtalk_safe import (
+    labtalk_choice, labtalk_name, labtalk_string, positive_int,
+    validate_text_escapes,
+)
 from .style_helpers import (
     _collect_xy,
     find_plot_column,
@@ -235,9 +238,11 @@ def apply_publication_style(
 
     # 1. Axis titles — bold, Arial 28pt
     if x_label:
+        validate_text_escapes(x_label, "x_label")
         x_title = labtalk_string("\\b(" + x_label + ")", "x_label")
         execute_labtalk(f'xb.text$ = {x_title}; xb.fsize = 28; xb.font$ = "Arial";')
     if y_label:
+        validate_text_escapes(y_label, "y_label")
         y_title = labtalk_string("\\b(" + y_label + ")", "y_label")
         execute_labtalk(f'yl.text$ = {y_title}; yl.fsize = 28; yl.font$ = "Arial";')
 
