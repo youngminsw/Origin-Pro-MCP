@@ -229,6 +229,11 @@ class ShimClient:
         self._heartbeat_interval = heartbeat_interval
         self._call_timeout = _reconcile_call_timeout(call_timeout)
         self._allow_spawn = allow_spawn
+        # Opt in to attaching this session to the user's already-open Origin
+        # (Origin.ApplicationSI) instead of a fresh isolated instance.
+        _at = os.environ.get("ORIGIN_PRO_MCP_ATTACH")
+        self._attach = _at is not None and _at.strip().lower() in (
+            "1", "on", "true", "yes")
         self._ensure_kwargs = dict(ensure_kwargs or {})
         self._conn = None
         self._conn_lock = threading.Lock()   # guards connection lifecycle
@@ -320,6 +325,7 @@ class ShimClient:
                 "session_id": self._session_id,
                 "name": name,
                 "kwargs": kwargs or {},
+                "attach": self._attach,
             })
             while True:
                 frame = conn.recv_frame()

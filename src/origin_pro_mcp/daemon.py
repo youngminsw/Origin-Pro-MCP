@@ -364,13 +364,22 @@ class Pool:
                  max_size: int = POOL_MAX_DEFAULT,
                  get_pid: Optional[GetPid] = None,
                  start_timeout: float = 10.0,
-                 autosave_policy: Optional[AutosavePolicy] = None):
+                 autosave_policy: Optional[AutosavePolicy] = None,
+                 attach_factory: Optional[OriginFactory] = None,
+                 attach_get_pid: Optional[GetPid] = None):
         self._factory = origin_factory
         self._registry = registry
         self._max_size = max_size
         self._get_pid = get_pid
         self._start_timeout = start_timeout
         self._autosave_policy = autosave_policy
+        # ATTACH mode: at most ONE session may attach to the user's already-open
+        # Origin (the shared ApplicationSI instance). A second SI attach would
+        # share that one instance and collide, so only the first is honored;
+        # later attach requests fall back to an isolated instance.
+        self._attach_factory = attach_factory
+        self._attach_get_pid = attach_get_pid
+        self._attach_session_id: Optional[str] = None
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
 
@@ -385,7 +394,7 @@ class Pool:
             "Close another Origin MCP session and retry."
         )
 
-    def acquire(self, session_id: str) -> Session:
+    def acquire(self, session_id: str, attach: bool = False) -> Session:
         # Phase 1 (under lock): reuse a live session, refuse a reaping one, and
         # RESERVE a slot for a new session — but do NOT call Session.start()
         # here (it can block up to ready_timeout; holding the lock would stall
@@ -398,10 +407,18 @@ class Pool:
                 self._sessions.pop(session_id, None)
             if len(self._sessions) >= self._max_size:
                 raise PoolFull(self._full_message())
+            use_attach = (
+                attach and self._attach_factory is not None
+                and self._attach_session_id in (None, session_id)
+            )
+            factory = self._attach_factory if use_attach else self._factory
+            get_pid = self._attach_get_pid if use_attach else self._get_pid
             session = Session(
-                session_id, self._factory, self._registry, self._get_pid,
+                session_id, factory, self._registry, get_pid,
                 autosave_policy=self._autosave_policy,
             )
+            if use_attach:
+                self._attach_session_id = session_id
             self._sessions[session_id] = session  # reserve the slot
         # Phase 2 (OUTSIDE the lock): start the worker; commit on ready, roll
         # back on timeout/failure (and tear down the half-started instance).
@@ -411,6 +428,8 @@ class Pool:
             with self._lock:
                 if self._sessions.get(session_id) is session:
                     self._sessions.pop(session_id, None)
+                if self._attach_session_id == session_id:
+                    self._attach_session_id = None  # rollback frees the attach slot
             session.force_close()
             raise
         return session
@@ -441,6 +460,8 @@ class Pool:
                 return None
             if expected is not None and current is not expected:
                 return None  # a fresh session took the slot; leave it alone
+            if self._attach_session_id == session_id:
+                self._attach_session_id = None  # free the single attach slot
             return self._sessions.pop(session_id, None)
 
     def session_ids(self) -> list[str]:
@@ -891,6 +912,8 @@ class Daemon:
               start_timeout: float = 10.0,
               dispatch_timeout: float = 0.0,
               autosave_policy: Optional[AutosavePolicy] = None,
+              attach_factory: Optional[OriginFactory] = None,
+              attach_get_pid: Optional[GetPid] = None,
               monitor_tick: float = 0.01) -> bool:
         """Acquire the singleton, sweep any orphans left by a crashed prior
         daemon, start the server/pool/watchdog/monitor, write the lockfile, and
@@ -930,7 +953,9 @@ class Daemon:
         self.host, self.port = self._server.host, self._server.port
         self._pool = Pool(origin_factory, registry, max_size=max_size,
                           get_pid=get_pid, start_timeout=start_timeout,
-                          autosave_policy=autosave_policy)
+                          autosave_policy=autosave_policy,
+                          attach_factory=attach_factory,
+                          attach_get_pid=attach_get_pid)
         self._watchdog = Watchdog(terminate_process=self._terminate,
                                   on_reap=self._on_watchdog_reap,
                                   tick=monitor_tick, clock=self._clock)
@@ -1225,7 +1250,7 @@ class Daemon:
         # response — the shim must never wait out its call_timeout on a hang.
         try:
             self._mark_live(session_id, conn)  # a request implies liveness
-            session = self._pool.acquire(session_id)
+            session = self._pool.acquire(session_id, attach=bool(frame.get("attach")))
             if session_id not in self._lockfile_sessions:
                 self._lockfile_sessions.add(session_id)
                 self._rewrite_lockfile()
@@ -1635,6 +1660,47 @@ def resolve_get_pid(factory: OriginFactory) -> Optional[GetPid]:
     return None
 
 
+def _attach_origin_factory():
+    """ATTACH factory: connect to the user's already-open Origin via the shared
+    single-instance automation server (``Origin.ApplicationSI``) — verified to
+    attach to a running instance and see its project, not spawn a fresh one.
+    On non-Windows this raises when invoked."""
+    import win32com.client  # Windows-only; imported lazily on the worker thread
+
+    inst = win32com.client.Dispatch("Origin.ApplicationSI")
+    try:
+        inst.Visible = _origin_visible()
+    except Exception:
+        pass
+    return inst
+
+
+def _attach_get_pid(_instance: object) -> Optional[int]:
+    """Attach sessions must NEVER force-kill their Origin — it's the user's
+    shared instance. Returning None makes the watchdog skip the kill (a wedged
+    attach worker leaks until daemon restart rather than killing the user's
+    project)."""
+    return None
+
+
+def resolve_attach_factory() -> Optional[OriginFactory]:
+    """The attach-mode factory, or None to disable attach mode.
+
+    ``ORIGIN_PRO_MCP_ATTACH_FACTORY`` (dotted path) overrides for tests; when the
+    real DispatchEx factory is in use, attach maps to ``Origin.ApplicationSI``.
+    Fakes/custom factories get no attach factory (attach requests fall back to
+    the normal isolated factory)."""
+    dotted = os.environ.get("ORIGIN_PRO_MCP_ATTACH_FACTORY")
+    if dotted:
+        import importlib
+
+        module_name, _, attr = dotted.rpartition(".")
+        return getattr(importlib.import_module(module_name), attr)
+    if resolve_origin_factory() is _real_origin_factory:
+        return _attach_origin_factory
+    return None
+
+
 def main(argv: Optional[list] = None) -> int:
     """Daemon entry point (``python -m origin_pro_mcp.daemon``).
 
@@ -1675,13 +1741,19 @@ def main(argv: Optional[list] = None) -> int:
     # Origin.exe (never the daemon's own pid); falls back to the safe default
     # when the PID can't be resolved.
     get_pid = resolve_get_pid(factory)
+    # Attach mode: one session may attach to the user's already-open Origin
+    # (Origin.ApplicationSI). Always available; a client opts in per session via
+    # the request frame's `attach` flag (ORIGIN_PRO_MCP_ATTACH on the shim side).
+    attach_factory = resolve_attach_factory()
     daemon = Daemon()
     if not daemon.start(origin_factory=factory, get_pid=get_pid,
                         lockfile_path=lockfile_path,
                         reconnect_grace=reconnect_grace,
                         start_timeout=start_timeout,
                         dispatch_timeout=dispatch_timeout,
-                        autosave_policy=autosave_policy):
+                        autosave_policy=autosave_policy,
+                        attach_factory=attach_factory,
+                        attach_get_pid=_attach_get_pid):
         return 0  # another daemon owns the singleton; the loser exits cleanly
 
     stop = threading.Event()
