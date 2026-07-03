@@ -60,8 +60,10 @@ class FakePlot:
 class FakeLayer:
     def __init__(self, plot_names):
         self.DataPlots = FakePages([FakePlot(n) for n in plot_names])
+        self.executed = []
 
     def Execute(self, script):
+        self.executed.append(script)
         return True
 
 

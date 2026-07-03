@@ -1,5 +1,7 @@
 """N7: per-plot RGB color is set through set_plot_style(rgb="r,g,b"), targeting
-the exact plot via COM Activate + %C (no layer -s N scramble); plus ungroup_plots."""
+the exact plot with LabTalk `layer -s <index>; set %C ...` in ONE script (a COM
+Activate is invisible to a separate execute_labtalk's %C); plus ungroup_plots,
+which runs `layer -g` on Layer1's GraphLayer object directly."""
 import pytest
 
 from fakes import FakeGraph
@@ -14,10 +16,9 @@ def test_set_plot_style_rgb_targets_plot_via_percentC(fake_origin):
     from origin_pro_mcp.tools.style import set_plot_style
     _graph3(fake_origin)
     set_plot_style("G", plot_index=2, rgb="128,0,200")
-    # color goes to the activated plot via %C (not the dataset-name form)
-    assert any("set %C -c color(128,0,200)" in s for s in fake_origin.executed)
-    layer = origin_connection.get_origin()._graph_layers["[G]Layer1"]
-    assert layer.DataPlots.Item(1).activated is True   # plot 2 (G_B)
+    # selection + color in ONE script: `layer -s 2; set %C -c color(...)`
+    assert any("layer -s 2; set %C -c color(128,0,200)" in s
+               for s in fake_origin.executed)
 
 
 def test_set_plot_style_rgb_overrides_named_color(fake_origin):
@@ -41,4 +42,6 @@ def test_ungroup_plots(fake_origin):
     _graph3(fake_origin)
     out = ungroup_plots("G")
     assert "Ungrouped" in out
-    assert any("layer -g" in s for s in fake_origin.executed)
+    # `layer -g` runs on Layer1's GraphLayer object, not the global context.
+    layer = origin_connection.get_origin()._graph_layers["[G]Layer1"]
+    assert any("layer -g" in s for s in layer.executed)

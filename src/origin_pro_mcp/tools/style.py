@@ -1,6 +1,6 @@
 from ..app import mcp
 from ..origin_connection import (
-    activate_window, execute_labtalk, get_lt_str, get_lt_var, get_origin,
+    activate_window, execute_labtalk, get_lt_str, get_lt_var,
     require_graph,
 )
 from ..labtalk_safe import (
@@ -166,7 +166,8 @@ def set_plot_style(
     safe_graph_name = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph_name)
     activate_window(safe_graph_name, "graph_name")
-    data_plots = [p["name"] for p in get_plot_info(safe_graph_name) if not p["is_error"]]
+    infos = get_plot_info(safe_graph_name)  # all plots (incl. error bars), in order
+    data_plots = [p["name"] for p in infos if not p["is_error"]]
 
     idx = plot_index - 1
     if idx >= len(data_plots):
@@ -174,11 +175,17 @@ def set_plot_style(
 
     pname = data_plots[idx]
     shape = symbol_shape if symbol_shape > 0 else SYMBOL_SHAPES.get(plot_index, 2)
-    # Target the EXACT plot via COM Activate + %C (reliable) instead of the
-    # dataset name — `set <name> -c` is silently overridden on grouped plots
-    # (N7). Fall back to the name if activation is unavailable.
-    activated = _activate_plot_by_name(get_origin(), safe_graph_name, pname)
-    target = "%C" if activated else pname
+    # Target the EXACT plot with LabTalk `layer -s <index>` in the SAME script as
+    # `set %C ...`. A COM DataPlot.Activate() is NOT visible to a separate
+    # execute_labtalk's %C (execution-context split), which is why per-plot color
+    # never landed (N7). `layer -s` counts the plot's position among ALL layer
+    # dataplots (error bars included), so map pname back to the full-list index.
+    li = next((i + 1 for i, p in enumerate(infos) if p["name"] == pname), None)
+    sel = f"layer -s {li}; " if li else ""
+    target = "%C" if li else pname
+
+    def _set(spec: str) -> None:
+        execute_labtalk(f"{sel}set {target} {spec};")
 
     # Resolve the color expression: explicit rgb overrides a named color.
     c = None
@@ -187,45 +194,29 @@ def set_plot_style(
         c = f"color({r},{g},{b})"
     elif color:
         c = COLOR_MAP[labtalk_choice(color.lower(), COLOR_MAP, "color")]
-    # Each set command needs a small delay to avoid Origin COM rendering races
+    # Each set command needs a small delay to avoid Origin COM rendering races.
     if c is not None:
-        execute_labtalk(f"set {target} -c {c};")
+        _set(f"-c {c}")
         time.sleep(0.2)
 
     lw = int(line_width * _WIDTH_UNITS_PER_POINT)
-    execute_labtalk(f"set {target} -w {lw};")
+    _set(f"-w {lw}")
     time.sleep(0.2)
 
     if _plot_has_symbols(pname):
-        execute_labtalk(f"set {target} -k {shape};")
+        _set(f"-k {shape}")
         time.sleep(0.2)
-        execute_labtalk(f"set {target} -z {symbol_size};")
+        _set(f"-z {symbol_size}")
         time.sleep(0.2)
         # Symbol interior: 1 = Open (hollow), 0 = Solid (verified on Origin 2020).
-        execute_labtalk(f"set {target} -kf {1 if open_symbol else 0};")
+        _set(f"-kf {1 if open_symbol else 0}")
     elif c is not None:
         # bar/column-type plots: color the fill too
-        execute_labtalk(f"set {target} -cf {c};")
+        _set(f"-cf {c}")
 
     return f"Updated style for plot {plot_index} ({pname}) in {safe_graph_name}"
 
 
-def _activate_plot_by_name(o, graph_name: str, name: str) -> bool:
-    """Activate the data plot whose dataset name matches ``name`` so ``%C``
-    targets it. Best-effort (isolated); returns True on success."""
-    try:
-        gl = o.FindGraphLayer(f"[{graph_name}]Layer1")
-        if gl is None:
-            return False
-        dp = gl.DataPlots
-        for i in range(dp.Count):
-            plot = dp.Item(i)
-            if plot.Name == name:
-                plot.Activate()
-                return True
-    except Exception:
-        return False
-    return False
 
 
 def _rgb_component(value: int, field: str) -> int:
@@ -252,10 +243,9 @@ def ungroup_plots(graph_name: str) -> str:
     """Break the plot group on a graph's Layer1.
 
     Multiple Y columns plotted at once form a GROUP that shares an auto
-    color/style increment list; that increment can override per-plot styling.
-    Ungrouping lets each plot keep its own color/width/symbol. (set_plot_style
-    with an explicit `rgb` already targets an individual grouped curve, but
-    ungroup when you want the group to stop re-applying its increment.)
+    color/style increment list; that increment overrides per-plot styling, so
+    `set_plot_style(rgb=...)` can't stick until the group is broken. Ungrouping
+    lets each plot keep its own color/width/symbol.
 
     Args:
         graph_name: Graph name.
@@ -266,7 +256,13 @@ def ungroup_plots(graph_name: str) -> str:
     safe_graph = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
-    execute_labtalk("layer -g;")  # toggle the layer's plot group off
+    # Run `layer -g` on Layer1's GraphLayer object directly (gl.Execute) rather
+    # than as a global execute_labtalk: the global form toggles whatever layer
+    # happens to be active and did NOT reliably ungroup Layer1's plots. Scoping
+    # to the layer object targets exactly Layer1's plot group.
+    ok = graph_layer_execute(safe_graph, "layer -g;")
+    if not ok:
+        return f"Could not reach Layer1 of {safe_graph} to ungroup its plots."
     return f"Ungrouped the plots on Layer1 of {safe_graph}."
 
 
