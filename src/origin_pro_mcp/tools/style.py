@@ -174,20 +174,16 @@ def set_plot_style(
 
     pname = data_plots[idx]
     shape = symbol_shape if symbol_shape > 0 else SYMBOL_SHAPES.get(plot_index, 2)
-    # Target the EXACT plot with LabTalk `layer -s <index>; set %C ...` run on the
-    # graph's Layer1 COM object (graph_layer_execute -> gl.Execute), NOT global
-    # execute_labtalk. gl.Execute styles the layer directly without needing the
-    # graph to be the active LabTalk window — `win -a` fails on projects loaded
-    # from .opju (short/long-name mismatch), which froze all styling on loaded
-    # graphs; the layer object is spike-verified to style loaded graphs too.
-    # `layer -s` counts the plot's position among ALL layer dataplots (error bars
-    # included), so map pname back to the full-list index.
-    li = next((i + 1 for i, p in enumerate(infos) if p["name"] == pname), None)
-    sel = f"layer -s {li}; " if li else ""
-    target = "%C" if li else pname
-
+    # Target the EXACT plot by its DATASET NAME (`set <name> ...`) run on the
+    # graph's Layer1 COM object (graph_layer_execute -> gl.Execute). Verified on
+    # Origin 2020 (isolated instance, export pixel-checked) to color each plot of
+    # an ungrouped multi-curve graph independently. This deliberately avoids two
+    # dead ends: `layer -s <N>; set %C` only ever selects plot 1 (N>=2 no-ops),
+    # and global execute_labtalk needs `win -a`, which fails on .opju-loaded
+    # graphs and froze all styling there. gl.Execute + the dataset name needs
+    # neither an active window nor plot selection.
     def _set(spec: str) -> None:
-        graph_layer_execute(safe_graph_name, f"{sel}set {target} {spec};")
+        graph_layer_execute(safe_graph_name, f"set {pname} {spec};")
 
     # Resolve the color expression: explicit rgb overrides a named color.
     c = None

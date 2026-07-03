@@ -1,7 +1,9 @@
-"""N7: per-plot RGB color is set through set_plot_style(rgb="r,g,b"), targeting
-the exact plot with LabTalk `layer -s <index>; set %C ...` in ONE script (a COM
-Activate is invisible to a separate execute_labtalk's %C); plus ungroup_plots,
-which runs `layer -g` on Layer1's GraphLayer object directly."""
+"""N7: per-plot RGB color via set_plot_style(rgb="r,g,b"). Each plot is targeted
+by its DATASET NAME (`set <name> ...`) run on the Layer1 COM object (gl.Execute),
+verified on Origin 2020 to color each curve of an ungrouped multi-plot graph
+independently; needs no active window (works on .opju-loaded graphs) and no
+`layer -s` (which only ever selects plot 1). Plus ungroup_plots, which runs
+`layer -g` on Layer1's GraphLayer object directly."""
 import pytest
 
 from fakes import FakeGraph
@@ -12,15 +14,13 @@ def _graph3(fake):
     fake.graphs = [FakeGraph("G", plot_names=["G_A", "G_B", "G_C"])]
 
 
-def test_set_plot_style_rgb_targets_plot_via_percentC(fake_origin):
+def test_set_plot_style_rgb_targets_plot_by_name(fake_origin):
     from origin_pro_mcp.tools.style import set_plot_style
     _graph3(fake_origin)
     set_plot_style("G", plot_index=2, rgb="128,0,200")
-    # styling runs on the Layer1 COM object (gl.Execute), not global execute:
-    # `layer -s 2; set %C -c color(...)` in ONE script.
+    # plot 2 == dataset "G_B"; styling runs on the Layer1 COM object (gl.Execute).
     layer = origin_connection.get_origin()._graph_layers["[G]Layer1"]
-    assert any("layer -s 2; set %C -c color(128,0,200)" in s
-               for s in layer.executed)
+    assert any("set G_B -c color(128,0,200)" in s for s in layer.executed)
 
 
 def test_set_plot_style_rgb_overrides_named_color(fake_origin):
@@ -28,7 +28,7 @@ def test_set_plot_style_rgb_overrides_named_color(fake_origin):
     _graph3(fake_origin)
     set_plot_style("G", plot_index=1, color="red", rgb="10,20,30")
     layer = origin_connection.get_origin()._graph_layers["[G]Layer1"]
-    assert any("set %C -c color(10,20,30)" in s for s in layer.executed)
+    assert any("set G_A -c color(10,20,30)" in s for s in layer.executed)
     assert not any("-c red" in s or "-c color(255" in s for s in layer.executed)
 
 
