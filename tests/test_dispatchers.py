@@ -62,12 +62,11 @@ def _registry():
     return mcp._tool_manager._tools
 
 
-def test_registry_has_exactly_37_tools():
-    # 43 Origin tools + list_skills + get_skill = 45. Recent additions:
-    # delete_graph, remove_plot, set_error_bars, set_layer_geometry,
-    # set_column_designation, set_tick_labels. (Skills are exposed as
-    # first-class MCP tools via origin_pro_mcp.skills.register_skills.)
-    assert len(_registry()) == 45
+def test_registry_has_exactly_48_tools():
+    # 43 Origin tools + list_skills + get_skill = 45, plus the N7 additions
+    # set_plot_color, set_plot_line_width, ungroup_plots = 48. (Skills are
+    # exposed as first-class MCP tools via origin_pro_mcp.skills.register_skills.)
+    assert len(_registry()) == 48
 
 
 def test_eight_new_dispatchers_registered():

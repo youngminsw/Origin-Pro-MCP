@@ -51,6 +51,10 @@ class FakeBook:
 class FakePlot:
     def __init__(self, name):
         self.Name = name
+        self.activated = False
+
+    def Activate(self):
+        self.activated = True
 
 
 class FakeLayer:
@@ -117,9 +121,13 @@ class FakeOrigin:
         return None
 
     def FindGraphLayer(self, target):
+        cache = self.__dict__.setdefault("_graph_layers", {})
+        if target in cache:
+            return cache[target]
         for graph in self.graphs:
             if target == f"[{graph.Name}]Layer1":
-                return FakeLayer(graph.plot_names)
+                cache[target] = FakeLayer(graph.plot_names)
+                return cache[target]
         return None
 
     def FindMatrixSheet(self, target):

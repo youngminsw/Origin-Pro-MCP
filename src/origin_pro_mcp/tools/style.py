@@ -1,5 +1,8 @@
 from ..app import mcp
-from ..origin_connection import activate_window, execute_labtalk, get_lt_str, get_lt_var, require_graph
+from ..origin_connection import (
+    activate_window, execute_labtalk, get_lt_str, get_lt_var, get_origin,
+    require_graph,
+)
 from ..labtalk_safe import (
     labtalk_choice, labtalk_name, labtalk_string, positive_int,
     validate_text_escapes,
@@ -167,30 +170,176 @@ def set_plot_style(
 
     pname = data_plots[idx]
     shape = symbol_shape if symbol_shape > 0 else SYMBOL_SHAPES.get(plot_index, 2)
+    # Target the EXACT plot via COM Activate + %C (reliable) instead of the
+    # dataset name — `set <name> -c` is silently overridden on grouped plots
+    # (N7). Fall back to the name if activation is unavailable.
+    activated = _activate_plot_by_name(get_origin(), safe_graph_name, pname)
+    target = "%C" if activated else pname
 
     # Each set command needs a small delay to avoid Origin COM rendering races
     if color:
         safe_color = labtalk_choice(color.lower(), COLOR_MAP, "color")
         c = COLOR_MAP[safe_color]
-        execute_labtalk(f"set {pname} -c {c};")
+        execute_labtalk(f"set {target} -c {c};")
         time.sleep(0.2)
 
     lw = int(line_width * _WIDTH_UNITS_PER_POINT)
-    execute_labtalk(f"set {pname} -w {lw};")
+    execute_labtalk(f"set {target} -w {lw};")
     time.sleep(0.2)
 
     if _plot_has_symbols(pname):
-        execute_labtalk(f"set {pname} -k {shape};")
+        execute_labtalk(f"set {target} -k {shape};")
         time.sleep(0.2)
-        execute_labtalk(f"set {pname} -z {symbol_size};")
+        execute_labtalk(f"set {target} -z {symbol_size};")
         time.sleep(0.2)
         # Symbol interior: 1 = Open (hollow), 0 = Solid (verified on Origin 2020).
-        execute_labtalk(f"set {pname} -kf {1 if open_symbol else 0};")
+        execute_labtalk(f"set {target} -kf {1 if open_symbol else 0};")
     elif color:
         # bar/column-type plots: color the fill too
-        execute_labtalk(f"set {pname} -cf {c};")
+        execute_labtalk(f"set {target} -cf {c};")
 
     return f"Updated style for plot {plot_index} ({pname}) in {safe_graph_name}"
+
+
+def _activate_plot_by_name(o, graph_name: str, name: str) -> bool:
+    """Activate the data plot whose dataset name matches ``name`` so ``%C``
+    targets it. Best-effort (isolated); returns True on success."""
+    try:
+        gl = o.FindGraphLayer(f"[{graph_name}]Layer1")
+        if gl is None:
+            return False
+        dp = gl.DataPlots
+        for i in range(dp.Count):
+            plot = dp.Item(i)
+            if plot.Name == name:
+                plot.Activate()
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _rgb_component(value: int, field: str) -> int:
+    v = int(value)
+    if v < 0 or v > 255:
+        raise ValueError(f"{field} must be 0-255, got {value}.")
+    return v
+
+
+def _activate_plot(o, graph_name: str, plot_index: int) -> str:
+    """Activate the COM data plot at 1-based ``plot_index`` in FindGraphLayer's
+    DataPlots order (reliable — this is the order set_plot_style/get_plot_info
+    already trust) and return its dataset name. After Activate, LabTalk ``%C``
+    resolves to THIS exact plot, so ``set %C -c/-w`` targets it without the
+    ``layer -s N`` index scramble reported in N7. Raises on a bad index."""
+    gl = o.FindGraphLayer(f"[{graph_name}]Layer1")
+    if gl is None:
+        raise ValueError(f"Graph '{graph_name}' has no Layer1 to style.")
+    dp = gl.DataPlots
+    try:
+        count = dp.Count
+    except Exception:
+        count = 0
+    if plot_index < 1 or plot_index > count:
+        raise ValueError(
+            f"plot_index {plot_index} is out of range; graph '{graph_name}' has "
+            f"{count} plot(s) on Layer1 (1-based, COM DataPlots order)."
+        )
+    plot = dp.Item(plot_index - 1)
+    try:
+        plot.Activate()
+    except Exception as exc:
+        raise ValueError(
+            f"Could not activate plot {plot_index} in '{graph_name}': {exc}"
+        )
+    return plot.Name
+
+
+@mcp.tool()
+def set_plot_color(graph_name: str, plot_index: int, r: int, g: int, b: int) -> str:
+    """Set ONE plot's color by RGB (0-255 each) — for per-curve rainbow/gradient
+    coloring that named colors can't express.
+
+    Targets the exact plot via its COM DataPlots index (``plot_index``, 1-based,
+    the reliable order), then sets the color on that activated plot. Works on
+    grouped multi-curve plots (overrides the group's color increment for that
+    curve). For line+symbol plots it colors both.
+
+    Args:
+        graph_name: Graph name.
+        plot_index: 1-based plot index in COM DataPlots order (see list via
+                    get_plot_names / set_plot_style ordering).
+        r, g, b: Red/Green/Blue components, 0-255.
+
+    Returns:
+        Confirmation with the resolved dataset name and RGB.
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    rr = _rgb_component(r, "r")
+    gg = _rgb_component(g, "g")
+    bb = _rgb_component(b, "b")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    name = _activate_plot(get_origin(), safe_graph, plot_index)
+    if not execute_labtalk(f"set %C -c color({rr},{gg},{bb});"):
+        raise ValueError(
+            f"Origin could not set the color of plot {plot_index} in {safe_graph}."
+        )
+    # For symbol plots also set the fill color so open/solid markers match.
+    if _plot_has_symbols(name):
+        execute_labtalk(f"set %C -cf color({rr},{gg},{bb});")
+    return (f"Set plot {plot_index} ({name}) color to RGB({rr},{gg},{bb}) "
+            f"in {safe_graph}")
+
+
+@mcp.tool()
+def set_plot_line_width(graph_name: str, plot_index: int, width: float) -> str:
+    """Set ONE plot's line width in points, targeting the exact plot by its COM
+    DataPlots index (1-based).
+
+    Args:
+        graph_name: Graph name.
+        plot_index: 1-based plot index (COM DataPlots order).
+        width: Line width in points (e.g. 2.5).
+
+    Returns:
+        Confirmation with the resolved dataset name and width.
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    if width <= 0:
+        raise ValueError(f"width must be positive, got {width}.")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    name = _activate_plot(get_origin(), safe_graph, plot_index)
+    lw = int(float(width) * _WIDTH_UNITS_PER_POINT)
+    if not execute_labtalk(f"set %C -w {lw};"):
+        raise ValueError(
+            f"Origin could not set the width of plot {plot_index} in {safe_graph}."
+        )
+    return f"Set plot {plot_index} ({name}) line width to {width} pt in {safe_graph}"
+
+
+@mcp.tool()
+def ungroup_plots(graph_name: str) -> str:
+    """Break the plot group on a graph's Layer1.
+
+    Multiple Y columns plotted at once form a GROUP that shares an auto
+    color/style increment list; that increment can override per-plot styling.
+    Ungrouping lets each plot keep its own color/width/symbol. (set_plot_color
+    already targets an individual grouped curve, but ungroup when you want the
+    group to stop re-applying its increment.)
+
+    Args:
+        graph_name: Graph name.
+
+    Returns:
+        Confirmation.
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    execute_labtalk("layer -g;")  # toggle the layer's plot group off
+    return f"Ungrouped the plots on Layer1 of {safe_graph}."
 
 
 @mcp.tool()
