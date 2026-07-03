@@ -40,11 +40,14 @@ def test_set_plot_style_rejects_bad_rgb(fake_origin, bad):
         set_plot_style("G", plot_index=1, rgb=bad)
 
 
-def test_ungroup_plots(fake_origin):
+def test_ungroup_plots_rebuilds_independent_plots(fake_origin):
     from origin_pro_mcp.tools.style import ungroup_plots
     _graph3(fake_origin)
     out = ungroup_plots("G")
-    assert "Ungrouped" in out
-    # `layer -g` runs on Layer1's GraphLayer object, not the global context.
+    assert "Ungrouped" in out and "rebuilt 3" in out
+    # rebuild = remove every plot, then re-plot each dataset on its own (ungrouped),
+    # all on the Layer1 COM object (gl.Execute).
     layer = origin_connection.get_origin()._graph_layers["[G]Layer1"]
-    assert any("layer -g" in s for s in layer.executed)
+    assert any("layer -e G_A" in s for s in layer.executed)
+    assert any("plotxy iy:=G_A plot:=200 ogl:=[G]Layer1" in s for s in layer.executed)
+    assert any("plotxy iy:=G_C plot:=200 ogl:=[G]Layer1" in s for s in layer.executed)

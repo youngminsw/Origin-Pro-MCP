@@ -237,31 +237,50 @@ def _parse_rgb(rgb: str):
 
 
 @mcp.tool()
-def ungroup_plots(graph_name: str) -> str:
-    """Break the plot group on a graph's Layer1.
+def ungroup_plots(graph_name: str, plot_type: str = "line") -> str:
+    """Break a plot group so each curve can be colored independently.
 
-    Multiple Y columns plotted at once form a GROUP that shares an auto
-    color/style increment list; that increment overrides per-plot styling, so
-    `set_plot_style(rgb=...)` can't stick until the group is broken. Ungrouping
-    lets each plot keep its own color/width/symbol.
+    Origin 2020 has NO working ungroup command: `layer -g` only GROUPS (there is
+    no ungroup toggle), verified exhaustively. While plots are grouped, the
+    group's color increment overrides per-curve `set_plot_style` color. The only
+    reliable fix (spike-verified on Origin 2020) is to remove the grouped plots
+    and re-plot each source dataset on its own — separate plots are NOT grouped.
+    This preserves the data and the X axis but RESETS each curve to `plot_type`
+    (re-style afterward with set_plot_style). Best used before styling.
 
     Args:
         graph_name: Graph name.
+        plot_type: Plot type for the rebuilt curves: line, scatter, line+symbol.
 
     Returns:
-        Confirmation.
+        Confirmation with the rebuilt plot count.
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph)
-    activate_window(safe_graph, "graph_name")
-    # Run `layer -g` on Layer1's GraphLayer object directly (gl.Execute) rather
-    # than as a global execute_labtalk: the global form toggles whatever layer
-    # happens to be active and did NOT reliably ungroup Layer1's plots. Scoping
-    # to the layer object targets exactly Layer1's plot group.
-    ok = graph_layer_execute(safe_graph, "layer -g;")
-    if not ok:
-        return f"Could not reach Layer1 of {safe_graph} to ungroup its plots."
-    return f"Ungrouped the plots on Layer1 of {safe_graph}."
+    codes = {"line": 200, "scatter": 201, "line+symbol": 202}
+    ptype = codes[labtalk_choice(plot_type, codes, "plot_type")]
+    infos = get_plot_info(safe_graph)
+    data_names = [p["name"] for p in infos if not p["is_error"]]
+    if not data_names:
+        return f"No data plots to ungroup on Layer1 of {safe_graph}."
+    has_error = any(p["is_error"] for p in infos)
+    # Remove every plot, then re-plot each DATA dataset on its own. Run on the
+    # Layer1 COM object (gl.Execute) so it works without an active window (win -a
+    # fails on .opju-loaded graphs). `plotxy iy:=<dataset>` reuses the sheet's X
+    # designation, preserving the original X.
+    for p in infos:
+        graph_layer_execute(safe_graph, f"layer -e {p['name']};")
+    rebuilt = 0
+    for name in data_names:
+        if graph_layer_execute(
+            safe_graph,
+            f"plotxy iy:={name} plot:={ptype} ogl:=[{safe_graph}]Layer1;",
+        ):
+            rebuilt += 1
+    note = (" Error-bar plots were dropped — re-add them with set_error_bars."
+            if has_error else "")
+    return (f"Ungrouped {safe_graph}: rebuilt {rebuilt} independent {plot_type} "
+            f"plot(s) on Layer1. Color each with set_plot_style.{note}")
 
 
 @mcp.tool()
