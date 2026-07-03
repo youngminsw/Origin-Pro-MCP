@@ -16,17 +16,20 @@ def test_set_plot_style_rgb_targets_plot_via_percentC(fake_origin):
     from origin_pro_mcp.tools.style import set_plot_style
     _graph3(fake_origin)
     set_plot_style("G", plot_index=2, rgb="128,0,200")
-    # selection + color in ONE script: `layer -s 2; set %C -c color(...)`
+    # styling runs on the Layer1 COM object (gl.Execute), not global execute:
+    # `layer -s 2; set %C -c color(...)` in ONE script.
+    layer = origin_connection.get_origin()._graph_layers["[G]Layer1"]
     assert any("layer -s 2; set %C -c color(128,0,200)" in s
-               for s in fake_origin.executed)
+               for s in layer.executed)
 
 
 def test_set_plot_style_rgb_overrides_named_color(fake_origin):
     from origin_pro_mcp.tools.style import set_plot_style
     _graph3(fake_origin)
     set_plot_style("G", plot_index=1, color="red", rgb="10,20,30")
-    assert any("set %C -c color(10,20,30)" in s for s in fake_origin.executed)
-    assert not any("-c red" in s or "-c color(255" in s for s in fake_origin.executed)
+    layer = origin_connection.get_origin()._graph_layers["[G]Layer1"]
+    assert any("set %C -c color(10,20,30)" in s for s in layer.executed)
+    assert not any("-c red" in s or "-c color(255" in s for s in layer.executed)
 
 
 @pytest.mark.parametrize("bad", ["300,0,0", "0,-1,0", "1,2", "a,b,c"])

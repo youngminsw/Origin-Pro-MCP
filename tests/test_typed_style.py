@@ -68,22 +68,26 @@ def test_set_error_bars_unknown_graph(fake_origin):
 
 def test_set_plot_style_open_symbol(fake_origin):
     from fakes import FakeGraph
+    from origin_pro_mcp import origin_connection
     from origin_pro_mcp.tools.style import set_plot_style
 
     fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B"])]
     fake_origin.lt_vars["__mcpk"] = 1  # make _plot_has_symbols() report a symbol plot
     set_plot_style("Graph1", plot_index=1, open_symbol=True)
-    assert any("-kf 1" in s for s in fake_origin.executed)
+    layer = origin_connection.get_origin()._graph_layers["[Graph1]Layer1"]
+    assert any("-kf 1" in s for s in layer.executed)
 
 
 def test_set_plot_style_solid_symbol_default(fake_origin):
     from fakes import FakeGraph
+    from origin_pro_mcp import origin_connection
     from origin_pro_mcp.tools.style import set_plot_style
 
     fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B"])]
     fake_origin.lt_vars["__mcpk"] = 1
     set_plot_style("Graph1", plot_index=1)
-    assert any("-kf 0" in s for s in fake_origin.executed)
+    layer = origin_connection.get_origin()._graph_layers["[Graph1]Layer1"]
+    assert any("-kf 0" in s for s in layer.executed)
 
 # --- set_graph_font bold -----------------------------------------------------
 
