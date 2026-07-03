@@ -145,18 +145,19 @@ You do not need to start Python or Origin manually. The MCP client starts `origi
 
 #### Reliability & recovery (advanced env vars)
 
-The background daemon runs one isolated Origin instance per session. A few
-opt-in environment variables harden it against a wedged Origin COM call (a
-synchronous operation that never returns) and against destructive mistakes.
-Most default **off** — behavior is unchanged unless you set them. The one
-exception is `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT`, which defaults **on** (180s) as a
-general wedge-containment backstop; set it to `off` to opt out.
+The background daemon runs one isolated Origin instance per session. These
+environment variables harden it against a wedged Origin COM call (a synchronous
+operation that never returns) and against destructive mistakes.
+Some default **off**; the wedge/data-safety ones now default **on** because they
+are safe (see each row). Set any to `off` to opt out.
 
 | Variable | Default | Effect |
 | :--- | :--- | :--- |
-| `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` | `180` | Seconds to bound each tool dispatch. If an Origin operation wedges past this budget, the daemon force-terminates *that session's* Origin process, frees the pool slot, and returns an actionable error — the daemon itself keeps serving other sessions. Defaults ON at 180s (generous enough never to trip a legitimate op) so an unforeseen COM wedge can't take down the daemon. Set `off`/`0` to disable. |
-| `ORIGIN_PRO_MCP_AUTOSAVE` | `off` | Set `on` to snapshot a recoverable project copy **before** a destructive op (delete graph/plot, column deletion, project load/new, overwriting a populated sheet, or a `confirm`ed destructive `run_labtalk`). Origin's `Save(path)` rebinds the project identity, so autosave writes a timestamped backup and then re-saves your project to restore its original path — meaning autosave also re-persists your open project. Opt-in for that reason. |
-| `ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED` | `1` | When autosave is on and a required snapshot fails, the destructive op is **not** run and an error is returned. Set `0` to proceed without a backup. |
+| `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` | `90` | Soft budget (seconds) for each tool dispatch. If Origin doesn't respond within it, the client is told **Origin looks wedged — most likely a modal dialog (e.g. "Get MiKTeX Path") — go dismiss it**; NOTHING is killed. Dismiss the dialog and the operation finishes on its own and the session keeps working. Set `off`/`0` to disable. |
+| `ORIGIN_PRO_MCP_DISPATCH_KILL_GRACE` | `90` | Grace (seconds) AFTER the soft warning before Origin is **force-killed** as a last resort (so a wedged session can never permanently hold a pool slot). Total time to a hard reset = timeout + grace (default 180s). Set `off`/`0` for no warning phase (legacy: force-kill straight at the soft budget). |
+| `ORIGIN_PRO_MCP_AUTOSAVE` | `on` | Snapshot a recoverable, timestamped project copy **before** a destructive op (delete graph/plot, column deletion, project load/new, overwriting a populated sheet, or a `confirm`ed destructive `run_labtalk`). The snapshot is written to the backup dir **only** and never touches your original file (safe by design). Set `off` to disable autosave entirely. |
+| `ORIGIN_PRO_MCP_AUTOSAVE_INTERVAL` | `300` | Also snapshot healthy sessions **periodically** every N seconds (proactive autosave), not just before destructive ops. Only agent-isolated Origins are auto-saved; the Origin you `ATTACH` to is never touched. `off`/`0` disables periodic autosave (preflight still runs). Note: a snapshot rebinds that agent-isolated project's save path to the latest backup (recover by opening the newest `*.autosave-*.opju`). |
+| `ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED` | `1` | When autosave is on and a required *preflight* snapshot fails, the destructive op is **not** run and an error is returned. Set `0` to proceed without a backup. |
 | `ORIGIN_PRO_MCP_AUTOSAVE_RETENTION` | `3` | How many autosave copies to keep per project (oldest pruned). |
 | `ORIGIN_PRO_MCP_AUTOSAVE_DIR` | project dir | Directory for autosave copies (defaults alongside the saved project, or the daemon's working dir for an unsaved project). Files are named `<project>.autosave-<timestamp>.opju`. |
 | `ORIGIN_PRO_MCP_REAP_CLOSE` | `off` | Session lifecycle: by **default** a session ending gracefully (idle / client disconnect) is **detached** — the session's worker thread stops but *your Origin window is left exactly as it was (original save path and unsaved edits intact) so you keep the project*. Set `1` to restore the old save-a-recovery-copy-and-close behavior. (A *wedged* session's Origin is still force-killed — the only way to free a worker stuck in a synchronous COM call.) |

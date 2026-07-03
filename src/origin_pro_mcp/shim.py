@@ -38,7 +38,12 @@ from typing import Optional, Tuple
 from mcp.server.fastmcp import FastMCP
 
 from . import transport
-from .daemon import DISPATCH_TIMEOUT_DEFAULT, default_lockfile_path, read_lockfile
+from .daemon import (
+    DISPATCH_KILL_GRACE_DEFAULT,
+    DISPATCH_TIMEOUT_DEFAULT,
+    default_lockfile_path,
+    read_lockfile,
+)
 from .transport import FrameError
 
 HOST = "127.0.0.1"
@@ -177,32 +182,38 @@ def ensure_daemon(lockfile_path: Optional[str] = None, *,
     )
 
 
+def _env_float(name: str, default: float) -> Optional[float]:
+    """Parse a seconds env var mirroring the daemon: unset/unparseable -> default,
+    an explicit off value -> None (disabled)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    if raw.strip().lower() in ("off", "false", "no", "0", ""):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _reconcile_call_timeout(call_timeout: float) -> float:
     """Ensure the client socket outlives the daemon's per-dispatch deadline.
 
-    When the daemon runs with ``ORIGIN_PRO_MCP_DISPATCH_TIMEOUT`` enabled, a
-    wedged Origin op is force-reset by the daemon after that many seconds and an
-    actionable error is sent back. The client must keep its socket recv open
-    long enough to RECEIVE that error rather than tripping its own socket
-    timeout first (which would surface a raw timeout instead of the daemon's
-    self-heal message). We size the call timeout to the dispatch budget plus a
-    margin for the kill + reply round-trip. Env unset uses the daemon default;
-    ``off``/``0`` leaves the caller's timeout unchanged.
+    The daemon's two-phase timeout warns the client at the SOFT budget
+    (``ORIGIN_PRO_MCP_DISPATCH_TIMEOUT``) and, if Origin stays wedged, force-kills
+    it after the kill grace (``ORIGIN_PRO_MCP_DISPATCH_KILL_GRACE``) and replies.
+    The client must keep its socket recv open long enough to RECEIVE that reply
+    rather than tripping its own socket timeout first (which would surface a raw
+    timeout instead of the daemon's actionable message). We size the call timeout
+    to soft + grace plus a margin for the kill + reply round-trip. A soft budget
+    of ``off``/``0`` disables the timeout and leaves the caller's value unchanged.
     """
-    raw = os.environ.get("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT")
-    if raw is None:
-        # Env unset => daemon runs with the default budget; size the socket to it.
-        return max(call_timeout, DISPATCH_TIMEOUT_DEFAULT + 15.0)
-    if raw.strip().lower() in ("off", "false", "no", "0", ""):
-        return call_timeout
-    try:
-        dispatch = float(raw)
-    except (TypeError, ValueError):
-        # Unparseable mirrors the daemon, which falls back to the default budget.
-        return max(call_timeout, DISPATCH_TIMEOUT_DEFAULT + 15.0)
-    if dispatch <= 0:
-        return call_timeout
-    return max(call_timeout, dispatch + 15.0)
+    soft = _env_float("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT", DISPATCH_TIMEOUT_DEFAULT)
+    if soft is None or soft <= 0:
+        return call_timeout  # dispatch timeout disabled
+    grace = _env_float("ORIGIN_PRO_MCP_DISPATCH_KILL_GRACE", DISPATCH_KILL_GRACE_DEFAULT)
+    total = soft + (grace if grace and grace > 0 else 0.0)
+    return max(call_timeout, total + 15.0)
 
 
 # --------------------------------------------------------------------------- #

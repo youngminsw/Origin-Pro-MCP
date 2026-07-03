@@ -42,10 +42,17 @@ ReplyFn = Callable[[dict], None]
 
 POOL_MAX_DEFAULT = 3
 DEFAULT_RECONNECT_GRACE: float = 3.0  # seconds; env: ORIGIN_PRO_MCP_RECONNECT_GRACE
-# Per-dispatch hang timeout default (D2). ON at 180s unless the env var
-# ORIGIN_PRO_MCP_DISPATCH_TIMEOUT is set to off/0/false/no. Shared with the shim
+# Per-dispatch hang timeout default (D2). Soft ON at 90s (notify) unless the env
+# var ORIGIN_PRO_MCP_DISPATCH_TIMEOUT is off/0/false/no. Shared with the shim
 # (shim.py imports this) so the client socket budget stays in sync.
-DISPATCH_TIMEOUT_DEFAULT: float = 180.0  # seconds; env: ORIGIN_PRO_MCP_DISPATCH_TIMEOUT
+DISPATCH_TIMEOUT_DEFAULT: float = 90.0   # seconds; env: ORIGIN_PRO_MCP_DISPATCH_TIMEOUT
+# Grace AFTER the soft dispatch timeout before a wedged session is force-killed.
+# During this window the client has already been told "Origin looks stuck — go
+# dismiss the dialog"; if the user frees it the call recovers and no kill happens.
+DISPATCH_KILL_GRACE_DEFAULT: float = 90.0  # seconds; env: ORIGIN_PRO_MCP_DISPATCH_KILL_GRACE
+# Proactive periodic autosave interval (seconds) for healthy, agent-isolated
+# sessions. 0 disables. env: ORIGIN_PRO_MCP_AUTOSAVE_INTERVAL
+AUTOSAVE_INTERVAL_DEFAULT: float = 300.0
 
 def _env_flag_on(name: str) -> bool:
     """True when env var ``name`` is explicitly set to a truthy on-value."""
@@ -118,6 +125,7 @@ class Session:
 
     _STOP = object()
     _REAP = object()
+    _SNAPSHOT = object()
 
     def __init__(self, session_id: str, origin_factory: OriginFactory,
                  registry: dict, get_pid: Optional[GetPid] = None,
@@ -199,6 +207,9 @@ class Session:
                     item = self._queue.get()
                     if item is self._STOP:
                         break
+                    if item is self._SNAPSHOT:
+                        self._snapshot()
+                        continue
                     if item[0] is self._REAP:
                         _, recovery_dir, getter, on_done = item
                         try:
@@ -322,6 +333,36 @@ class Session:
                     "operation was NOT run (set ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED=0 "
                     "to proceed without a backup). Save your project and retry.")
         return None  # best-effort mode: proceed even though the backup failed
+
+    def _snapshot(self) -> None:
+        """Proactive periodic autosave (runs on THIS worker thread for COM
+        affinity). Writes a timestamped backup of the current project when
+        autosave is enabled and there is recoverable work; best-effort, never
+        raises, never touches the user's original file (save_copy is N5-safe)."""
+        policy = self._autosave_policy
+        if policy is None or not policy.enabled:
+            return
+        if not self._has_work.has_work:
+            return  # nothing worth protecting yet
+        try:
+            origin = get_origin()
+        except Exception:
+            return
+        remembered = None
+        try:
+            remembered = get_remembered_project_path()
+        except Exception:
+            pass
+        dest = _autosave.backup_path(policy, remembered)
+        try:
+            if _autosave.save_copy(origin, dest, remembered):
+                _autosave.prune_backups(policy, remembered)
+        except Exception:
+            pass
+
+    def submit_snapshot(self) -> None:
+        """Enqueue a proactive autosave onto this session's worker thread."""
+        self._queue.put(self._SNAPSHOT)
 
     def submit(self, request_id: str, name: str, kwargs: dict,
                reply_fn: ReplyFn) -> None:
@@ -876,8 +917,15 @@ class Daemon:
         # watchdog force-kills the wedged session's Origin PID and this ticket
         # replies the client + discards the session. 0/off = disabled (default).
         self._dispatch_timeout: float = 0.0
+        # Grace after the soft dispatch timeout before the wedged session's
+        # Origin is force-killed; during it the client is told to intervene.
+        self._dispatch_kill_grace: float = 0.0
         self._dispatch_tickets: dict[str, dict] = {}
         self._dispatch_lock = threading.Lock()
+        # Proactive periodic autosave: interval (0=off) + per-session last-snapshot.
+        self._autosave_policy: Optional[AutosavePolicy] = None
+        self._autosave_interval: float = 0.0
+        self._last_snapshot: dict[str, float] = {}
         # session_id -> monotonic deadline at which a pending reap COMMITS. A
         # reconnect within the grace cancels it (see _mark_live).
         self._reap_pending: dict[str, float] = {}
@@ -915,6 +963,8 @@ class Daemon:
               is_alive: Optional[Callable[[int], bool]] = None,
               start_timeout: float = 10.0,
               dispatch_timeout: float = 0.0,
+              dispatch_kill_grace: float = 0.0,
+              autosave_interval: float = 0.0,
               autosave_policy: Optional[AutosavePolicy] = None,
               attach_factory: Optional[OriginFactory] = None,
               attach_get_pid: Optional[GetPid] = None,
@@ -934,6 +984,12 @@ class Daemon:
         )
         self._clock = clock or time.monotonic
         self._dispatch_timeout = dispatch_timeout if dispatch_timeout and dispatch_timeout > 0 else 0.0
+        self._dispatch_kill_grace = (dispatch_kill_grace
+                                     if dispatch_kill_grace and dispatch_kill_grace > 0 else 0.0)
+        self._autosave_policy = autosave_policy
+        self._autosave_interval = (autosave_interval
+                                   if autosave_interval and autosave_interval > 0 else 0.0)
+        self._last_snapshot: dict[str, float] = {}
         self._reap_grace = reap_grace
         self._heartbeat_reap_after = heartbeat_reap_after
         self._idle_exit_after = idle_exit_after
@@ -1185,6 +1241,9 @@ class Daemon:
                 last = self._last_seen.get(sid)
             if last is not None and now - last > self._heartbeat_reap_after:
                 self.reap_session(sid, reason="heartbeat-gap")
+        # Proactive periodic autosave: snapshot healthy, agent-isolated sessions.
+        if self._autosave_interval > 0 and self._autosave_policy is not None:
+            self._schedule_snapshots(now)
         # Idle self-exit: 0 active sessions for ``idle_exit_after`` -> shut down.
         if not self._pool.session_ids():
             if self._idle_since is None:
@@ -1193,6 +1252,32 @@ class Daemon:
                 self._idle_shutdown()
         else:
             self._idle_since = None
+
+    def _schedule_snapshots(self, now: float) -> None:
+        """Enqueue a proactive autosave onto each healthy, agent-isolated session
+        whose interval has elapsed. Skips: sessions being reaped, sessions with a
+        dispatch in flight (busy — a snapshot would queue behind it), and any
+        session with an unknown/None PID (the attached USER Origin is pid=None and
+        must never be auto-saved). A busy or attached session is retried next tick
+        (its last-snapshot clock is not advanced)."""
+        if self._pool is None:
+            return
+        with self._dispatch_lock:
+            busy = set(self._dispatch_tickets.keys())
+        for sid in self._pool.session_ids():
+            if sid in self._reaping or sid in busy:
+                continue
+            session = self._pool.get(sid)
+            if session is None or session.pid is None:
+                continue  # unknown PID / attached user Origin -> never auto-save
+            last = self._last_snapshot.get(sid)
+            if last is not None and now - last < self._autosave_interval:
+                continue
+            self._last_snapshot[sid] = now
+            try:
+                session.submit_snapshot()
+            except Exception:
+                pass
 
     def _idle_shutdown(self) -> None:
         # Runs ON the monitor thread; stop() must not self-join that thread.
@@ -1273,12 +1358,22 @@ class Daemon:
 
     def _submit_with_dispatch_timeout(self, session, session_id, request_id,
                                       name, kwargs, conn) -> None:
-        """Submit a tool dispatch. When a dispatch timeout is configured, arm a
-        watchdog 'dispatch' deadline BEFORE submitting and register a one-shot
-        ticket; the reply disarms it. If the worker wedges past the deadline the
-        watchdog force-kills the session's Origin (freeing the wedged thread via
-        com_error) and :meth:`_on_dispatch_timeout` replies the client + discards
-        the session. Timeout disabled (0) preserves the original submit path."""
+        """Submit a tool dispatch under a TWO-PHASE hang timeout.
+
+        Phase 1 (soft, at ``dispatch_timeout``): a ``dispatch-warn`` deadline
+        armed with ``pid=None`` (so the watchdog does NOT kill) fires
+        :meth:`_on_dispatch_warn`, which tells the client Origin looks wedged
+        (most likely a modal dialog) and to go dismiss it — the session is left
+        ALIVE so the call recovers on its own once the user frees Origin.
+
+        Phase 2 (hard, at ``dispatch_timeout + dispatch_kill_grace``): a
+        ``dispatch`` deadline armed with the real PID force-kills Origin as a
+        last resort and :meth:`_on_dispatch_timeout` discards the session.
+
+        The reply disarms both deadlines, so a normal completion (including a
+        recovery after the warning) never kills anything. ``dispatch_kill_grace``
+        of 0 collapses to the legacy single-phase kill at ``dispatch_timeout``.
+        Timeout disabled (0) preserves the original submit path."""
         timeout = self._dispatch_timeout
         # Per-call override: run_labtalk(timeout=N) bounds this one dispatch and
         # arms even when the global dispatch timeout is off (opt-in per call).
@@ -1291,37 +1386,80 @@ class Daemon:
             session.submit(request_id, name, kwargs,
                            lambda response: self._safe_send(conn, response))
             return
+        grace = self._dispatch_kill_grace if self._dispatch_kill_grace > 0 else 0.0
         ticket = {"conn": conn, "request_id": request_id, "done": False,
-                  "timeout": timeout}
+                  "answered": False, "timeout": timeout, "grace": grace}
         with self._dispatch_lock:
             self._dispatch_tickets[session_id] = ticket
 
         def _reply(response, sid=session_id, tk=ticket):
             with self._dispatch_lock:
-                if tk["done"]:
-                    return
+                already = tk["answered"]
                 tk["done"] = True
+                tk["answered"] = True
                 if self._dispatch_tickets.get(sid) is tk:
                     self._dispatch_tickets.pop(sid, None)
+            # Always disarm BOTH deadlines: the call finished (or recovered after
+            # a warning), so neither the notify nor the kill should fire.
             if self._watchdog is not None:
                 self._watchdog.disarm(sid, reason="dispatch")
-            self._safe_send(conn, response)
+                self._watchdog.disarm(sid, reason="dispatch-warn")
+            if not already:
+                self._safe_send(conn, response)
 
         # Arm BEFORE submit so a fast reply always disarms an already-armed
-        # deadline (never a stale one armed after completion).
-        self._watchdog.arm(session_id, session.pid, self._clock() + timeout,
+        # deadline (never a stale one armed after completion). Arm the soft warn
+        # FIRST so that if a clock jump makes both deadlines due in one watchdog
+        # tick, the (insertion-ordered) warn is processed before the hard kill.
+        now = self._clock()
+        if grace > 0:
+            # Soft notify: pid=None => the watchdog will NOT kill, only warn.
+            self._watchdog.arm(session_id, None, now + timeout,
+                               reason="dispatch-warn", callback=self._on_dispatch_warn)
+        self._watchdog.arm(session_id, session.pid, now + timeout + grace,
                             reason="dispatch", callback=self._on_dispatch_timeout)
         session.submit(request_id, name, kwargs, _reply)
 
+    def _on_dispatch_warn(self, session_id: str, pid: Optional[int]) -> None:
+        """Soft dispatch-timeout handler (watchdog thread; NO kill happened — the
+        deadline was armed with pid=None). Tell the client Origin looks wedged
+        and to dismiss any modal dialog, then leave the session alive so the call
+        recovers if the user frees Origin. The hard 'dispatch' deadline stays
+        armed as the last-resort kill."""
+        with self._dispatch_lock:
+            ticket = self._dispatch_tickets.get(session_id)
+            if ticket is None or ticket["answered"]:
+                return
+            ticket["answered"] = True  # the client is answered once, here
+            conn = ticket["conn"]
+            request_id = ticket["request_id"]
+            soft = ticket.get("timeout", self._dispatch_timeout)
+            grace = ticket.get("grace", 0.0)
+        self._safe_send(conn, {
+            "type": "response", "request_id": request_id, "ok": False,
+            "result": None,
+            "error": (
+                f"Origin has not responded for {soft:.0f}s — it is most likely "
+                "showing a MODAL DIALOG (e.g. 'Get MiKTeX Path', a font or import "
+                "prompt, or an error box) that blocks all automation. Switch to the "
+                "Origin window and close/confirm any open dialog: the operation "
+                "then finishes on its own and this session keeps working. If Origin "
+                f"stays stuck it is force-reset (restarted) in about {grace:.0f}s "
+                "and unsaved changes in this session may be lost."),
+        })
+
     def _on_dispatch_timeout(self, session_id: str, pid: Optional[int]) -> None:
-        """Watchdog dispatch-deadline handler (runs on the watchdog thread; the
-        Origin PID was already force-killed before this call). Reply the wedged
-        client once and discard the session so a reconnect mints a fresh one."""
+        """Hard dispatch-deadline handler (runs on the watchdog thread; the Origin
+        PID was already force-killed before this call). Discard the wedged session
+        so a reconnect mints a fresh one, and reply the client ONLY if the soft
+        notify has not already answered it."""
         with self._dispatch_lock:
             ticket = self._dispatch_tickets.pop(session_id, None)
-            if ticket is None or ticket["done"]:
+            if ticket is None:
                 return
+            answered = ticket["answered"]
             ticket["done"] = True
+            ticket["answered"] = True
             conn = ticket["conn"]
             request_id = ticket["request_id"]
             budget = ticket.get("timeout", self._dispatch_timeout)
@@ -1333,8 +1471,11 @@ class Daemon:
             self._pool.discard(session_id)
         with self._seen_lock:
             self._last_seen.pop(session_id, None)
+        self._last_snapshot.pop(session_id, None)
         self._lockfile_sessions.discard(session_id)
         self._rewrite_lockfile()
+        if answered:
+            return  # the soft notify already replied; don't send a second frame
         killed = " and its Origin was terminated" if pid is not None else (
             " but its Origin PID was unknown, so the wedged instance may persist "
             "until the next daemon restart")
@@ -1721,13 +1862,13 @@ def main(argv: Optional[list] = None) -> int:
     # well above the test default of 10s. Overridable via env.
     _start_env = os.environ.get("ORIGIN_PRO_MCP_START_TIMEOUT")
     start_timeout = float(_start_env) if _start_env is not None else 45.0
-    # Per-dispatch hang timeout (D2). DEFAULT-ON at 180s: with the N1-N7 crash
-    # causes fixed and session-death now detaching (project preserved), the only
-    # remaining way the daemon dies is an unforeseen COM wedge. A generous 180s
-    # budget never trips a legitimate op but reaps a truly wedged session by
-    # force-killing its Origin PID and replying a reset error, keeping the daemon
-    # alive for every other client. Set ORIGIN_PRO_MCP_DISPATCH_TIMEOUT=off (or 0)
-    # to disable; run_labtalk(timeout=...) overrides per call for slow scripts.
+    # Per-dispatch hang timeout (D2). Two-phase, ON by default. At the SOFT
+    # budget (default 90s) the client is told "Origin looks stuck — go dismiss
+    # the modal dialog" WITHOUT killing anything, so a user who frees Origin lets
+    # the call finish. Only if it stays wedged for another kill-grace (default
+    # 90s) is Origin force-killed as a last resort. Generous enough to never trip
+    # a legitimate op. Set ORIGIN_PRO_MCP_DISPATCH_TIMEOUT=off (or 0) to disable;
+    # run_labtalk(timeout=...) overrides the soft budget per call.
     _dt_env = os.environ.get("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT")
     _dt_default = DISPATCH_TIMEOUT_DEFAULT
     if _dt_env is None:
@@ -1739,15 +1880,40 @@ def main(argv: Optional[list] = None) -> int:
             dispatch_timeout = float(_dt_env)
         except ValueError:
             dispatch_timeout = _dt_default
-    # Autosave-before-destructive (Feature 2). OPT-IN at the daemon (default-OFF):
-    # the save-copy primitive is spike-verified (o.Save rebinds identity, so
-    # save_copy restores the original binding), but autosave also RE-PERSISTS the
-    # user's original project before a destructive op, which is a behavior change
-    # the user should opt into. Set ORIGIN_PRO_MCP_AUTOSAVE=on to activate.
-    _as_env = os.environ.get("ORIGIN_PRO_MCP_AUTOSAVE")
-    autosave_policy = None
-    if _as_env is not None and _as_env.strip().lower() in ("1", "on", "true", "yes"):
-        autosave_policy = AutosavePolicy.from_env()
+    # Kill grace AFTER the soft notify before Origin is force-killed. off/0 => no
+    # notify phase (legacy single-phase kill at the soft budget).
+    _kg_env = os.environ.get("ORIGIN_PRO_MCP_DISPATCH_KILL_GRACE")
+    if _kg_env is None:
+        dispatch_kill_grace = DISPATCH_KILL_GRACE_DEFAULT
+    elif _kg_env.strip().lower() in ("", "off", "false", "no"):
+        dispatch_kill_grace = 0.0
+    else:
+        try:
+            dispatch_kill_grace = float(_kg_env)
+        except ValueError:
+            dispatch_kill_grace = DISPATCH_KILL_GRACE_DEFAULT
+    # Autosave. DEFAULT-ON (opt-out): save_copy is N5-safe — it writes ONLY a
+    # timestamped backup in the backup dir and NEVER touches the user's original
+    # file. Preflight snapshots before a destructive op; the interval below also
+    # snapshots healthy sessions periodically. Set ORIGIN_PRO_MCP_AUTOSAVE=off to
+    # disable entirely.
+    autosave_policy = AutosavePolicy.from_env()
+    if not autosave_policy.enabled:
+        autosave_policy = None
+    # Proactive periodic autosave interval (seconds) for healthy, agent-isolated
+    # sessions (the attached user Origin is never auto-saved). 0/off disables.
+    _ai_env = os.environ.get("ORIGIN_PRO_MCP_AUTOSAVE_INTERVAL")
+    if _ai_env is None:
+        autosave_interval = AUTOSAVE_INTERVAL_DEFAULT
+    elif _ai_env.strip().lower() in ("", "off", "false", "no"):
+        autosave_interval = 0.0
+    else:
+        try:
+            autosave_interval = float(_ai_env)
+        except ValueError:
+            autosave_interval = AUTOSAVE_INTERVAL_DEFAULT
+    if autosave_policy is None:
+        autosave_interval = 0.0  # no policy => nothing to snapshot
     factory = resolve_origin_factory()
     # Wire the real child-PID resolver so production force-kills the spawned
     # Origin.exe (never the daemon's own pid); falls back to the safe default
@@ -1763,6 +1929,8 @@ def main(argv: Optional[list] = None) -> int:
                         reconnect_grace=reconnect_grace,
                         start_timeout=start_timeout,
                         dispatch_timeout=dispatch_timeout,
+                        dispatch_kill_grace=dispatch_kill_grace,
+                        autosave_interval=autosave_interval,
                         autosave_policy=autosave_policy,
                         attach_factory=attach_factory,
                         attach_get_pid=_attach_get_pid):
