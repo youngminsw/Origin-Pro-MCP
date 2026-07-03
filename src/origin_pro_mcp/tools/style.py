@@ -155,9 +155,14 @@ def set_plot_style(
         color: Color name (black, red, blue, green, orange, purple, cyan, magenta)
         rgb: Explicit "r,g,b" (each 0-255), e.g. "128,0,200", for per-curve
              rainbow/gradient colors that named colors can't express. Overrides
-             `color` when given. Works on grouped multi-curve plots.
+             `color` when given.
         open_symbol: True = open/hollow marker interior (publication standard),
                      False = solid fill (LabTalk `set -kf 1` vs `0`).
+
+    NOTE: color applies only on UNGROUPED plots. create_graph + add_plot_to_graph
+    build ungrouped plots (fine). For a grouped multi-curve plot (loaded project
+    or a single multi-Y plot), the group's color increment overrides this — call
+    ungroup_plots(graph_name) first. (line_width/symbol still apply while grouped.)
 
     Returns:
         Success message
@@ -301,6 +306,13 @@ def apply_publication_style(
     readable tick spacing, inward ticks, closed frame, and a borderless
     bold legend all at once. Designed to minimize token usage — call this
     once instead of many separate tools.
+
+    NOTE: per-curve COLORS apply only on UNGROUPED plots. Graphs built with
+    create_graph + add_plot_to_graph are ungrouped (fine). A grouped multi-curve
+    plot (loaded from a project, or a single multi-Y plot) shares one color
+    increment that overrides per-curve colors, so the palette will NOT apply —
+    call ungroup_plots(graph_name) first, then this. Axes/frame/labels apply
+    either way.
 
     Args:
         graph_name: Graph name
