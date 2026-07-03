@@ -38,7 +38,7 @@ from typing import Optional, Tuple
 from mcp.server.fastmcp import FastMCP
 
 from . import transport
-from .daemon import default_lockfile_path, read_lockfile
+from .daemon import DISPATCH_TIMEOUT_DEFAULT, default_lockfile_path, read_lockfile
 from .transport import FrameError
 
 HOST = "127.0.0.1"
@@ -186,15 +186,20 @@ def _reconcile_call_timeout(call_timeout: float) -> float:
     long enough to RECEIVE that error rather than tripping its own socket
     timeout first (which would surface a raw timeout instead of the daemon's
     self-heal message). We size the call timeout to the dispatch budget plus a
-    margin for the kill + reply round-trip. Default-off leaves it unchanged.
+    margin for the kill + reply round-trip. Env unset uses the daemon default;
+    ``off``/``0`` leaves the caller's timeout unchanged.
     """
     raw = os.environ.get("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT")
-    if not raw or raw.strip().lower() in ("off", "false", "no", "0", ""):
+    if raw is None:
+        # Env unset => daemon runs with the default budget; size the socket to it.
+        return max(call_timeout, DISPATCH_TIMEOUT_DEFAULT + 15.0)
+    if raw.strip().lower() in ("off", "false", "no", "0", ""):
         return call_timeout
     try:
         dispatch = float(raw)
     except (TypeError, ValueError):
-        return call_timeout
+        # Unparseable mirrors the daemon, which falls back to the default budget.
+        return max(call_timeout, DISPATCH_TIMEOUT_DEFAULT + 15.0)
     if dispatch <= 0:
         return call_timeout
     return max(call_timeout, dispatch + 15.0)

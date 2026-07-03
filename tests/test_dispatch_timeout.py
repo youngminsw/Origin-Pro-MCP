@@ -132,7 +132,7 @@ def test_dispatch_timeout_recovers_wedged_session(tmp_path):
 
 
 def test_dispatch_timeout_disabled_by_default_no_kill(tmp_path):
-    """dispatch_timeout=0 (default) => no deadline armed; a fast op is unaffected
+    """dispatch_timeout=0 (disabled) => no deadline armed; a fast op is unaffected
     and the terminate hook is never called for a normal request."""
     clock = FakeClock()
     daemon, origins, killed = _start(tmp_path, dispatch_timeout=0.0, clock=clock)
@@ -180,7 +180,8 @@ def test_run_labtalk_per_call_timeout_override_arms_when_global_off(tmp_path):
 def test_reconcile_call_timeout_env(monkeypatch):
     from origin_pro_mcp.shim import _reconcile_call_timeout
     monkeypatch.delenv("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT", raising=False)
-    assert _reconcile_call_timeout(60.0) == 60.0
+    # Env unset => daemon runs the 180s default; socket sized to outlive it.
+    assert _reconcile_call_timeout(60.0) == 195.0
     for off in ("off", "false", "no", "0", ""):
         monkeypatch.setenv("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT", off)
         assert _reconcile_call_timeout(60.0) == 60.0
@@ -189,4 +190,4 @@ def test_reconcile_call_timeout_env(monkeypatch):
     monkeypatch.setenv("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT", "90")
     assert _reconcile_call_timeout(60.0) == 105.0    # 90+15 > 60
     monkeypatch.setenv("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT", "garbage")
-    assert _reconcile_call_timeout(60.0) == 60.0     # unparseable => unchanged
+    assert _reconcile_call_timeout(60.0) == 195.0    # unparseable => default budget

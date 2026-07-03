@@ -148,11 +148,13 @@ You do not need to start Python or Origin manually. The MCP client starts `origi
 The background daemon runs one isolated Origin instance per session. A few
 opt-in environment variables harden it against a wedged Origin COM call (a
 synchronous operation that never returns) and against destructive mistakes.
-All default **off** — behavior is unchanged unless you set them.
+Most default **off** — behavior is unchanged unless you set them. The one
+exception is `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT`, which defaults **on** (180s) as a
+general wedge-containment backstop; set it to `off` to opt out.
 
 | Variable | Default | Effect |
 | :--- | :--- | :--- |
-| `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` | `off` | Seconds to bound each tool dispatch. If an Origin operation wedges past this budget, the daemon force-terminates *that session's* Origin process, frees the pool slot, and returns an actionable error — the daemon itself keeps serving other sessions. Set e.g. `120`. `off`/`0` disables. |
+| `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` | `180` | Seconds to bound each tool dispatch. If an Origin operation wedges past this budget, the daemon force-terminates *that session's* Origin process, frees the pool slot, and returns an actionable error — the daemon itself keeps serving other sessions. Defaults ON at 180s (generous enough never to trip a legitimate op) so an unforeseen COM wedge can't take down the daemon. Set `off`/`0` to disable. |
 | `ORIGIN_PRO_MCP_AUTOSAVE` | `off` | Set `on` to snapshot a recoverable project copy **before** a destructive op (delete graph/plot, column deletion, project load/new, overwriting a populated sheet, or a `confirm`ed destructive `run_labtalk`). Origin's `Save(path)` rebinds the project identity, so autosave writes a timestamped backup and then re-saves your project to restore its original path — meaning autosave also re-persists your open project. Opt-in for that reason. |
 | `ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED` | `1` | When autosave is on and a required snapshot fails, the destructive op is **not** run and an error is returned. Set `0` to proceed without a backup. |
 | `ORIGIN_PRO_MCP_AUTOSAVE_RETENTION` | `3` | How many autosave copies to keep per project (oldest pruned). |
@@ -163,7 +165,8 @@ All default **off** — behavior is unchanged unless you set them.
 | `ORIGIN_PRO_MCP_ATTACH` | `off` | Set `1` so this session **attaches to the Origin you already have open** (the shared `ApplicationSI` instance) instead of spawning a fresh isolated one — the agent then works on your currently-open project. Only **one** session can attach (a second falls back to an isolated instance); other agents keep their own isolated Origins. The attached instance is never force-killed by the daemon (it's yours). |
 
 Per-call override: `run_labtalk(script, confirm=True, timeout=120)` bounds that
-one call even when `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` is off.
+one call even when a longer/shorter budget than `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT`
+is needed (and works even when the timeout is `off`).
 
 **Rollback:** unset any of these (or set the timeout to `off`) to return to the
 prior behavior — no code change or redeploy required.

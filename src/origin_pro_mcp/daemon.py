@@ -42,6 +42,10 @@ ReplyFn = Callable[[dict], None]
 
 POOL_MAX_DEFAULT = 3
 DEFAULT_RECONNECT_GRACE: float = 3.0  # seconds; env: ORIGIN_PRO_MCP_RECONNECT_GRACE
+# Per-dispatch hang timeout default (D2). ON at 180s unless the env var
+# ORIGIN_PRO_MCP_DISPATCH_TIMEOUT is set to off/0/false/no. Shared with the shim
+# (shim.py imports this) so the client socket budget stays in sync.
+DISPATCH_TIMEOUT_DEFAULT: float = 180.0  # seconds; env: ORIGIN_PRO_MCP_DISPATCH_TIMEOUT
 
 def _env_flag_on(name: str) -> bool:
     """True when env var ``name`` is explicitly set to a truthy on-value."""
@@ -1717,16 +1721,24 @@ def main(argv: Optional[list] = None) -> int:
     # well above the test default of 10s. Overridable via env.
     _start_env = os.environ.get("ORIGIN_PRO_MCP_START_TIMEOUT")
     start_timeout = float(_start_env) if _start_env is not None else 45.0
-    # Per-dispatch hang timeout (D2). DEFAULT-OFF (0): no behavior change until
-    # an operator opts in. When set (seconds), a tool dispatch that wedges past
-    # this budget force-kills the session's Origin and returns a reset error.
+    # Per-dispatch hang timeout (D2). DEFAULT-ON at 180s: with the N1-N7 crash
+    # causes fixed and session-death now detaching (project preserved), the only
+    # remaining way the daemon dies is an unforeseen COM wedge. A generous 180s
+    # budget never trips a legitimate op but reaps a truly wedged session by
+    # force-killing its Origin PID and replying a reset error, keeping the daemon
+    # alive for every other client. Set ORIGIN_PRO_MCP_DISPATCH_TIMEOUT=off (or 0)
+    # to disable; run_labtalk(timeout=...) overrides per call for slow scripts.
     _dt_env = os.environ.get("ORIGIN_PRO_MCP_DISPATCH_TIMEOUT")
-    try:
-        dispatch_timeout = (float(_dt_env) if _dt_env is not None
-                            and _dt_env.strip().lower() not in ("", "off", "false", "no")
-                            else 0.0)
-    except ValueError:
+    _dt_default = DISPATCH_TIMEOUT_DEFAULT
+    if _dt_env is None:
+        dispatch_timeout = _dt_default
+    elif _dt_env.strip().lower() in ("", "off", "false", "no"):
         dispatch_timeout = 0.0
+    else:
+        try:
+            dispatch_timeout = float(_dt_env)
+        except ValueError:
+            dispatch_timeout = _dt_default
     # Autosave-before-destructive (Feature 2). OPT-IN at the daemon (default-OFF):
     # the save-copy primitive is spike-verified (o.Save rebinds identity, so
     # save_copy restores the original binding), but autosave also RE-PERSISTS the
