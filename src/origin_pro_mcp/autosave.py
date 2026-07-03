@@ -1,5 +1,6 @@
-"""Autosave-before-destructive-op: snapshot a recoverable project copy BEFORE a
-destructive operation so a wedge / crash / user mistake can be rolled back.
+"""Autosave-before-destructive-op AND periodic autosave: save the open project
+IN PLACE (its own file, same name) so a wedge / crash / user mistake can be rolled
+back by reloading the file. Autosave NEVER writes a differently-named copy.
 
 Design (from the downgrade plan, Feature 2):
 
@@ -16,17 +17,16 @@ Design (from the downgrade plan, Feature 2):
 * A conservative has-work predicate: any successful non-read-only tool marks the
   session as having work worth protecting; ``new_project`` resets it. A snapshot
   is skipped when there is no work (a fresh/empty project is not worth backing up).
-* The actual save primitive (:func:`save_copy`) is PLUGGABLE and its live
-  correctness on Origin 2020 is gated on a save-copy spike; everything else here
-  is COM-free and unit-tested. Runtime activation in the daemon is default-OFF
-  until that spike confirms the primitive (see ``ORIGIN_PRO_MCP_AUTOSAVE``).
+* The actual save primitive (:func:`save_in_place`) does a plain ``Save`` of the
+  project to its own path (never a copy), guarded so an empty/blanked project can
+  never overwrite a real file (N5). Runtime activation is via ``ORIGIN_PRO_MCP_AUTOSAVE``.
 
 All classification/policy/has-work logic in this module is COM-free.
 """
 from __future__ import annotations
 
 import os
-import time
+
 from typing import Optional
 
 from .labtalk_safe import _LABTALK_CONFIRM_PATTERNS, _strip_strings_and_comments
@@ -71,20 +71,17 @@ class AutosavePolicy:
     """Env-driven autosave configuration.
 
     ``ORIGIN_PRO_MCP_AUTOSAVE``           opt-out (default ON) — set off/false/no/0 to disable.
-    ``ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED``  default ON — when a required snapshot
-                                          fails, surface an error instead of
+    ``ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED``  default ON — when a required in-place
+                                          save fails, surface an error instead of
                                           silently proceeding with the destructive op.
-    ``ORIGIN_PRO_MCP_AUTOSAVE_RETENTION`` how many backups to keep (default 3).
-    ``ORIGIN_PRO_MCP_AUTOSAVE_DIR``       backup directory (default alongside the
-                                          project, or CWD when the project is unsaved).
+
+    Autosave saves the project IN PLACE (to its own file, same name) — it never
+    writes a differently-named copy.
     """
 
-    def __init__(self, enabled: bool = True, required: bool = True,
-                 retention: int = 3, backup_dir: Optional[str] = None):
+    def __init__(self, enabled: bool = True, required: bool = True):
         self.enabled = enabled
         self.required = required
-        self.retention = max(1, retention)
-        self.backup_dir = backup_dir
 
     @classmethod
     def from_env(cls, environ: Optional[dict] = None) -> "AutosavePolicy":
@@ -96,13 +93,7 @@ class AutosavePolicy:
         # REQUIRED defaults ON (unset -> required); explicit off/false/no/0 clears it.
         req_raw = env.get("ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED")
         required = True if req_raw is None else not _falsey_env(req_raw)
-        try:
-            retention = int(env.get("ORIGIN_PRO_MCP_AUTOSAVE_RETENTION", "3"))
-        except (TypeError, ValueError):
-            retention = 3
-        backup_dir = env.get("ORIGIN_PRO_MCP_AUTOSAVE_DIR") or None
-        return cls(enabled=enabled, required=required,
-                   retention=retention, backup_dir=backup_dir)
+        return cls(enabled=enabled, required=required)
 
 
 def is_readonly(name: str) -> bool:
@@ -185,80 +176,46 @@ class HasWorkTracker:
         self._has_work = False
 
 
-def backup_path(policy: AutosavePolicy, remembered_path: Optional[str],
-                now: Optional[float] = None) -> str:
-    """Compute the timestamped backup path for a snapshot."""
-    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
-    if remembered_path:
-        base = os.path.splitext(os.path.basename(remembered_path))[0]
-        default_dir = os.path.dirname(remembered_path) or os.getcwd()
-    else:
-        base = "untitled"
-        default_dir = os.getcwd()
-    directory = policy.backup_dir or default_dir
-    return os.path.join(directory, f"{base}.autosave-{stamp}.opju")
+def save_in_place(origin, remembered_path: Optional[str] = None) -> bool:
+    """Save the project to ITS OWN file — in place, same name. NOT a copy.
 
+    This is what "autosave" means: a plain Save of the open project, so the user
+    ends up with their project up to date, NOT a pile of differently-named
+    ``*.autosave-*.opju`` copies (which also rebound the project's identity to the
+    backup name — the behavior this replaces).
 
-def prune_backups(policy: AutosavePolicy, remembered_path: Optional[str],
-                  lister=None, remover=None) -> list:
-    """Keep only the newest ``policy.retention`` autosave copies for this project.
-    ``lister``/``remover`` are injectable for COM-free testing (default: os)."""
-    lister = lister or (lambda d: [os.path.join(d, f) for f in os.listdir(d)])
-    remover = remover or os.remove
-    if remembered_path:
-        base = os.path.splitext(os.path.basename(remembered_path))[0]
-        directory = policy.backup_dir or (os.path.dirname(remembered_path) or os.getcwd())
-    else:
-        base = "untitled"
-        directory = policy.backup_dir or os.getcwd()
-    marker = f"{base}.autosave-"
-    try:
-        candidates = [p for p in lister(directory)
-                      if os.path.basename(p).startswith(marker)]
-    except OSError:
-        return []
-    candidates.sort()  # timestamp in the name sorts chronologically
-    removed = []
-    while len(candidates) > policy.retention:
-        victim = candidates.pop(0)
-        try:
-            remover(victim)
-            removed.append(victim)
-        except OSError:
-            pass
-    return removed
+    Two safety guards keep the N5 data-destruction incident from recurring:
+      * NEVER save an EMPTY/blanked project (0 windows, e.g. after a flaky
+        empty-load) — that is exactly what once wrote a 450-byte file over a real
+        579 KB .opju.
+      * ONLY overwrite an EXISTING file — never create a new-named file. If the
+        project has no on-disk file yet (never saved), autosave is a no-op.
 
-
-def save_copy(origin, dest_path: str, remembered_path: Optional[str]) -> bool:
-    """Save a recoverable backup of the current project to ``dest_path`` (inside
-    the backup directory) — and NOTHING ELSE.
-
-    N5 (data destruction) root cause: this function used to also
-    ``Save(remembered_path)`` to "restore the original binding" after the backup
-    Save rebinds project identity. But when a flaky empty-load had blanked the
-    in-memory project, that second Save wrote the EMPTY project over the user's
-    real 579 KB .opju, destroying it (450 bytes). The fix:
-
-      * NEVER re-save the user's original file — the backup lives in the backup
-        directory only (``remembered_path`` is accepted for signature/naming
-        compat but is deliberately never written).
-      * NEVER back up an EMPTY project (0 windows): a flaky empty-load must not
-        cause any file write at all.
-
-    ``o.Save(dest_path)`` rebinds the active project's identity to the backup
-    path; that is harmless — the user's original file is never touched by
-    autosave, so it can never be destroyed by a snapshot. Returns True only when
-    a backup was actually written.
+    ``origin.Save("")`` does NOT save when a path exists (verified on Origin 2020),
+    so we save to the project's actual full path: the remembered load/save path
+    when known, else reconstructed from the ``%X`` (folder) + ``%G`` (name)
+    LabTalk registers. Saving to the current path is in place — no rename, no
+    rebind. Returns True only when a save actually happened.
     """
-    del remembered_path  # intentionally never written (see N5 above)
     try:
         pages = (origin.WorksheetPages.Count + origin.GraphPages.Count
                  + origin.MatrixPages.Count)
     except Exception:
         pages = -1
-    if pages == 0:
-        return False  # empty project -> nothing worth backing up; write NOTHING
+    if pages <= 0:
+        return False  # empty/blanked project -> never overwrite a real file (N5)
+    path = remembered_path
+    if not path:
+        try:
+            folder = origin.LTStr("%X")
+            name = origin.LTStr("%G")
+            if folder and name:
+                path = os.path.join(folder, f"{name}.opju")
+        except Exception:
+            path = None
+    if not path or not os.path.isfile(path):
+        return False  # never-saved project -> no in-place target; do nothing
     try:
-        return bool(origin.Save(dest_path))
+        return bool(origin.Save(path))
     except Exception:
         return False

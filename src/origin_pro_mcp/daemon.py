@@ -297,9 +297,10 @@ class Session:
                     "result": None, "error": f"{type(exc).__name__}: {exc}"}
 
     def _autosave_preflight(self, name: str, kwargs: dict) -> Optional[str]:
-        """Snapshot a recoverable copy BEFORE a destructive op. Returns None to
-        proceed, or an error string when a REQUIRED snapshot could not be taken.
-        No-op when autosave is not configured (default) or there is no work."""
+        """Save the project IN PLACE before a destructive op (so a bad delete is
+        recoverable by reloading the file). Returns None to proceed, or an error
+        string when a REQUIRED save could not be done. No-op when autosave is off
+        or there is no work."""
         policy = self._autosave_policy
         if policy is None or not policy.enabled:
             return None
@@ -316,29 +317,24 @@ class Session:
             remembered = get_remembered_project_path()
         except Exception:
             pass
-        dest = _autosave.backup_path(policy, remembered)
         ok = False
         try:
-            ok = _autosave.save_copy(origin, dest, remembered)
+            ok = _autosave.save_in_place(origin, remembered)
         except Exception:
             ok = False
         if ok:
-            try:
-                _autosave.prune_backups(policy, remembered)
-            except Exception:
-                pass
             return None
         if policy.required:
             return (f"Autosave before '{name}' failed, so the destructive "
                     "operation was NOT run (set ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED=0 "
-                    "to proceed without a backup). Save your project and retry.")
-        return None  # best-effort mode: proceed even though the backup failed
+                    "to proceed without saving). Save your project and retry.")
+        return None  # best-effort mode: proceed even though the save failed
 
     def _snapshot(self) -> None:
         """Proactive periodic autosave (runs on THIS worker thread for COM
-        affinity). Writes a timestamped backup of the current project when
+        affinity). Saves the project IN PLACE (its own file, same name) when
         autosave is enabled and there is recoverable work; best-effort, never
-        raises, never touches the user's original file (save_copy is N5-safe)."""
+        raises, never overwrites a real file with an empty project (N5-safe)."""
         policy = self._autosave_policy
         if policy is None or not policy.enabled:
             return
@@ -353,10 +349,8 @@ class Session:
             remembered = get_remembered_project_path()
         except Exception:
             pass
-        dest = _autosave.backup_path(policy, remembered)
         try:
-            if _autosave.save_copy(origin, dest, remembered):
-                _autosave.prune_backups(policy, remembered)
+            _autosave.save_in_place(origin, remembered)
         except Exception:
             pass
 
@@ -1892,11 +1886,11 @@ def main(argv: Optional[list] = None) -> int:
             dispatch_kill_grace = float(_kg_env)
         except ValueError:
             dispatch_kill_grace = DISPATCH_KILL_GRACE_DEFAULT
-    # Autosave. DEFAULT-ON (opt-out): save_copy is N5-safe — it writes ONLY a
-    # timestamped backup in the backup dir and NEVER touches the user's original
-    # file. Preflight snapshots before a destructive op; the interval below also
-    # snapshots healthy sessions periodically. Set ORIGIN_PRO_MCP_AUTOSAVE=off to
-    # disable entirely.
+    # Autosave. DEFAULT-ON (opt-out): saves the project IN PLACE (its own file,
+    # same name), never a differently-named copy, guarded so an empty/blanked
+    # project can't overwrite a real file (N5). Preflight saves before a
+    # destructive op; the interval below also saves healthy sessions periodically.
+    # Set ORIGIN_PRO_MCP_AUTOSAVE=off to disable entirely.
     autosave_policy = AutosavePolicy.from_env()
     if not autosave_policy.enabled:
         autosave_policy = None

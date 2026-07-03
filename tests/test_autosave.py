@@ -1,13 +1,13 @@
 """COM-free unit tests for the autosave core (policy, classification, has-work,
-backup pathing/retention, save-copy primitive)."""
+in-place save primitive)."""
 import os
 
 import pytest
 
 from fakes import FakeOrigin
 from origin_pro_mcp.autosave import (
-    AutosavePolicy, HasWorkTracker, backup_path, classify_autosave_labtalk,
-    prune_backups, save_copy, should_snapshot,
+    AutosavePolicy, HasWorkTracker, classify_autosave_labtalk,
+    save_in_place, should_snapshot,
 )
 
 
@@ -17,7 +17,6 @@ def test_policy_defaults_enabled_and_required():
     p = AutosavePolicy.from_env({})
     assert p.enabled is True
     assert p.required is True
-    assert p.retention == 3
 
 
 def test_policy_opt_out():
@@ -31,11 +30,11 @@ def test_policy_required_can_be_cleared():
     assert p.required is False
 
 
-def test_policy_retention_parse_and_fallback():
-    assert AutosavePolicy.from_env({"ORIGIN_PRO_MCP_AUTOSAVE_RETENTION": "5"}).retention == 5
-    assert AutosavePolicy.from_env({"ORIGIN_PRO_MCP_AUTOSAVE_RETENTION": "x"}).retention == 3
-    # retention floored at 1
-    assert AutosavePolicy.from_env({"ORIGIN_PRO_MCP_AUTOSAVE_RETENTION": "0"}).retention == 1
+def test_policy_no_retention_or_backup_dir_attrs():
+    # in-place autosave has no retention / backup-dir concept anymore
+    p = AutosavePolicy.from_env({})
+    assert not hasattr(p, "retention")
+    assert not hasattr(p, "backup_dir")
 
 
 # --- labtalk classification ------------------------------------------------ #
@@ -127,56 +126,30 @@ def test_has_work_load_then_destroy():
     assert t.has_work is True
 
 
-# --- backup pathing + retention -------------------------------------------- #
+# --- in-place save primitive ----------------------------------------------- #
 
-def test_backup_path_named_project(tmp_path):
-    proj = str(tmp_path / "study.opju")
-    p = backup_path(AutosavePolicy(), proj, now=0)
-    assert os.path.dirname(p) == str(tmp_path)
-    assert os.path.basename(p).startswith("study.autosave-")
-    assert p.endswith(".opju")
-
-
-def test_backup_path_unsaved_project_uses_backup_dir(tmp_path):
-    policy = AutosavePolicy(backup_dir=str(tmp_path))
-    p = backup_path(policy, None, now=0)
-    assert os.path.dirname(p) == str(tmp_path)
-    assert os.path.basename(p).startswith("untitled.autosave-")
-
-
-def test_prune_backups_keeps_newest(tmp_path):
-    proj = str(tmp_path / "study.opju")
-    names = [f"study.autosave-2024010{i}-000000.opju" for i in range(1, 6)]
-    for n in names:
-        (tmp_path / n).write_text("x")
-    (tmp_path / "study.opju").write_text("real")  # not an autosave copy
-    removed = prune_backups(AutosavePolicy(retention=2), proj)
-    # 5 copies, keep 2 => remove 3 oldest
-    assert len(removed) == 3
-    survivors = sorted(f.name for f in tmp_path.iterdir()
-                       if f.name.startswith("study.autosave-"))
-    assert survivors == names[3:]  # newest 2
-    assert (tmp_path / "study.opju").exists()  # real project untouched
-
-
-# --- save-copy primitive --------------------------------------------------- #
-
-def test_save_copy_writes_and_reports(tmp_path):
+def test_save_in_place_saves_to_own_file(tmp_path):
     fake = FakeOrigin()
-    dest = str(tmp_path / "study.autosave-0.opju")
-    assert save_copy(fake, dest, None) is True
-    assert fake.saved_paths == [dest]
+    proj = tmp_path / "study.opju"
+    proj.write_text("real")  # in-place only overwrites an EXISTING file
+    assert save_in_place(fake, str(proj)) is True
+    assert fake.saved_paths == [str(proj)]          # saved IN PLACE, same name
 
-def test_save_copy_never_resaves_the_original(tmp_path):
-    """N5 fix: save_copy backs up to the backup path ONLY — it must NEVER
-    re-save the user's original (remembered) file, which is how an empty
-    in-memory project once destroyed a real .opju."""
+
+def test_save_in_place_never_creates_a_differently_named_file(tmp_path):
     fake = FakeOrigin()
-    dest = str(tmp_path / "study.autosave-0.opju")
-    original = str(tmp_path / "study.opju")
-    assert save_copy(fake, dest, original) is True
-    assert fake.saved_paths == [dest]          # ONLY the backup; original untouched
-    assert original not in fake.saved_paths
+    proj = tmp_path / "study.opju"
+    proj.write_text("real")
+    save_in_place(fake, str(proj))
+    assert fake.saved_paths == [str(proj)]          # no ".autosave-<timestamp>" copy
+    assert not any(".autosave-" in p for p in fake.saved_paths)
+
+
+def test_save_in_place_skips_when_no_on_disk_file(tmp_path):
+    # never-saved project: no remembered path, LTStr("%X"/"%G") empty -> no-op
+    fake = FakeOrigin()
+    assert save_in_place(fake, None) is False
+    assert fake.saved_paths == []
 
 
 class _EmptyOrigin(FakeOrigin):
@@ -187,19 +160,22 @@ class _EmptyOrigin(FakeOrigin):
         self.matrices = []
 
 
-def test_save_copy_skips_empty_project(tmp_path):
-    """N5 fix: an EMPTY project (0 windows, e.g. after a flaky empty-load) is
-    never backed up and triggers NO file write at all."""
+def test_save_in_place_skips_empty_project(tmp_path):
+    """N5: an EMPTY project (0 windows, e.g. after a flaky empty-load) must NEVER
+    overwrite a real file."""
     fake = _EmptyOrigin()
-    original = str(tmp_path / "study.opju")
-    assert save_copy(fake, str(tmp_path / "b.opju"), original) is False
-    assert fake.saved_paths == []              # nothing written anywhere
+    proj = tmp_path / "study.opju"
+    proj.write_text("real 579 KB stand-in")
+    assert save_in_place(fake, str(proj)) is False
+    assert fake.saved_paths == []                    # real file untouched
 
 
-def test_save_copy_reports_failure(tmp_path):
+def test_save_in_place_reports_failure(tmp_path):
     fake = FakeOrigin()
     fake.save_result = False
-    assert save_copy(fake, str(tmp_path / "x.opju"), None) is False
+    proj = tmp_path / "x.opju"
+    proj.write_text("real")
+    assert save_in_place(fake, str(proj)) is False
 
 
 # --- daemon dispatch integration (COM-free) -------------------------------- #
@@ -214,11 +190,30 @@ def _registry():
     return {name: t.fn for name, t in mcp._tool_manager._tools.items()}
 
 
+class _PathedOrigin(FakeOrigin):
+    """A FakeOrigin that reports a real on-disk project path via %X/%G, so the
+    in-place autosave has a file to save to."""
+    def __init__(self, folder, name):
+        super().__init__()
+        self._folder = folder
+        self._name = name
+
+    def LTStr(self, key):
+        if key == "%X":
+            return self._folder
+        if key == "%G":
+            return self._name
+        return ""
+
+
 def _start_daemon(tmp_path, policy):
     origins = []
+    # the project's on-disk file must exist (in-place save only overwrites it)
+    proj = tmp_path / "proj.opju"
+    proj.write_text("real project")
 
     def factory():
-        o = FakeOrigin()
+        o = _PathedOrigin(str(tmp_path) + os.sep, "proj")
         origins.append(o)
         return o
 
@@ -227,7 +222,7 @@ def _start_daemon(tmp_path, policy):
                    host="127.0.0.1", port=0, get_pid=lambda i: 4242,
                    autosave_policy=policy, monitor_tick=0.01, reconnect_grace=0.0,
                    lockfile_path=str(tmp_path / "daemon.json"))
-    return d, origins
+    return d, origins, str(proj)
 
 
 def _call(conn, rid, name, kwargs):
@@ -236,8 +231,8 @@ def _call(conn, rid, name, kwargs):
 
 
 def test_daemon_autosave_snapshots_before_destructive(tmp_path):
-    policy = AutosavePolicy(enabled=True, required=True, backup_dir=str(tmp_path))
-    d, origins = _start_daemon(tmp_path, policy)
+    policy = AutosavePolicy(enabled=True, required=True)
+    d, origins, proj = _start_daemon(tmp_path, policy)
     conn = transport.connect(d.host, d.port, d.token, session_id="A")
     conn.settimeout(5.0)
     try:
@@ -245,20 +240,20 @@ def test_daemon_autosave_snapshots_before_destructive(tmp_path):
         r = _call(conn, "r1", "run_labtalk", {"script": "col(1)=1;"})
         assert r["ok"] is True
         origin = origins[0]
-        assert origin.saved_paths == []          # no snapshot for a non-destructive op
-        # destructive op => snapshot fires BEFORE it
+        assert origin.saved_paths == []          # no save for a non-destructive op
+        # destructive op => project saved IN PLACE (same name) BEFORE it
         r = _call(conn, "r2", "delete_graph", {"graph_name": "Graph1"})
         assert r["ok"] is True
-        assert len(origin.saved_paths) == 1
-        assert "untitled.autosave-" in origin.saved_paths[0]
+        assert origin.saved_paths == [proj]          # saved to its own file
+        assert not any(".autosave-" in p for p in origin.saved_paths)
     finally:
         conn.close()
         d.stop()
 
 
 def test_daemon_autosave_skips_when_no_work(tmp_path):
-    policy = AutosavePolicy(enabled=True, required=True, backup_dir=str(tmp_path))
-    d, origins = _start_daemon(tmp_path, policy)
+    policy = AutosavePolicy(enabled=True, required=True)
+    d, origins, proj = _start_daemon(tmp_path, policy)
     conn = transport.connect(d.host, d.port, d.token, session_id="A")
     conn.settimeout(5.0)
     try:
@@ -272,8 +267,8 @@ def test_daemon_autosave_skips_when_no_work(tmp_path):
 
 
 def test_daemon_autosave_required_failure_blocks_destructive(tmp_path):
-    policy = AutosavePolicy(enabled=True, required=True, backup_dir=str(tmp_path))
-    d, origins = _start_daemon(tmp_path, policy)
+    policy = AutosavePolicy(enabled=True, required=True)
+    d, origins, proj = _start_daemon(tmp_path, policy)
     conn = transport.connect(d.host, d.port, d.token, session_id="A")
     conn.settimeout(5.0)
     try:
@@ -290,7 +285,7 @@ def test_daemon_autosave_required_failure_blocks_destructive(tmp_path):
 
 
 def test_daemon_autosave_off_by_default(tmp_path):
-    d, origins = _start_daemon(tmp_path, None)  # no policy => off
+    d, origins, proj = _start_daemon(tmp_path, None)  # no policy => off
     conn = transport.connect(d.host, d.port, d.token, session_id="A")
     conn.settimeout(5.0)
     try:
