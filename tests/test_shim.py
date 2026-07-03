@@ -128,7 +128,7 @@ def test_shim_schema_is_byte_identical_for_all_tools():
     # the shim, not forwarded, but must still be schema-identical to the
     # in-process server).
     assert set(shim_tools) == set(real_tools)
-    assert len(shim_tools) == 48
+    assert len(shim_tools) == 45
 
     for name, real in real_tools.items():
         fwd = shim_tools[name].fn

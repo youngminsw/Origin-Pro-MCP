@@ -62,11 +62,12 @@ def _registry():
     return mcp._tool_manager._tools
 
 
-def test_registry_has_exactly_48_tools():
-    # 43 Origin tools + list_skills + get_skill = 45, plus the N7 additions
-    # set_plot_color, set_plot_line_width, ungroup_plots = 48. (Skills are
-    # exposed as first-class MCP tools via origin_pro_mcp.skills.register_skills.)
-    assert len(_registry()) == 48
+def test_registry_has_exactly_45_tools():
+    # 43 Origin tools + list_skills + get_skill = 45. N7 added ungroup_plots and
+    # folded per-plot RGB into set_plot_style (dropping set_plot_color /
+    # set_plot_line_width) and removed set_column_designation (use
+    # manage_columns op="properties"), netting back to 45.
+    assert len(_registry()) == 45
 
 
 def test_eight_new_dispatchers_registered():

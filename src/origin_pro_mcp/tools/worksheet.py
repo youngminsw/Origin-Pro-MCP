@@ -419,31 +419,6 @@ def _set_column_properties_impl(
     return f"Updated column {safe_col} of [{safe_book}]{safe_sheet}: {', '.join(changed)}"
 
 
-@mcp.tool()
-def set_column_designation(book_name: str, sheet_name: str, col: int, role: str) -> str:
-    """Set a worksheet column's plot designation by role name (no magic codes).
-
-    This controls how a column plots: X supplies abscissas, Y the data, Yerr/
-    Xerr become error bars, Label becomes tick/point text, Z feeds contour/3D.
-    Designate the SD/SE column as `yerr` BEFORE plotting (or before calling
-    set_error_bars) so Origin attaches it as error bars instead of a curve.
-
-    Args:
-        book_name: Workbook name
-        sheet_name: Sheet name
-        col: Column (1-based)
-        role: One of x, y, z, yerr, xerr, label, disregard, none
-
-    Returns:
-        Success message
-    """
-    safe_role = labtalk_choice(role.lower(), _DESIGNATIONS, "role")
-    _set_column_properties_impl(book_name, sheet_name, col, designation=safe_role)
-    return (
-        f"Set column {positive_column(col, 'col')} of "
-        f"[{labtalk_name(book_name, 'book_name')}]"
-        f"{labtalk_name(sheet_name, 'sheet_name')} designation to {safe_role}."
-    )
 
 @mcp.tool()
 def transpose_worksheet(book_name: str, sheet_name: str, output_book: str = "") -> str:

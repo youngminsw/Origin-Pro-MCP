@@ -139,6 +139,7 @@ def set_plot_style(
     symbol_size: int = 8,
     symbol_shape: int = 0,
     color: str = "",
+    rgb: str = "",
     open_symbol: bool = False,
 ) -> str:
     """Set line/symbol style for a data plot.
@@ -152,6 +153,9 @@ def set_plot_style(
         symbol_shape: 0=auto, 1=square, 2=circle, 3=triangle-up,
                       4=diamond, 5=triangle-down, 6=hexagon
         color: Color name (black, red, blue, green, orange, purple, cyan, magenta)
+        rgb: Explicit "r,g,b" (each 0-255), e.g. "128,0,200", for per-curve
+             rainbow/gradient colors that named colors can't express. Overrides
+             `color` when given. Works on grouped multi-curve plots.
         open_symbol: True = open/hollow marker interior (publication standard),
                      False = solid fill (LabTalk `set -kf 1` vs `0`).
 
@@ -176,10 +180,15 @@ def set_plot_style(
     activated = _activate_plot_by_name(get_origin(), safe_graph_name, pname)
     target = "%C" if activated else pname
 
+    # Resolve the color expression: explicit rgb overrides a named color.
+    c = None
+    if rgb:
+        r, g, b = _parse_rgb(rgb)
+        c = f"color({r},{g},{b})"
+    elif color:
+        c = COLOR_MAP[labtalk_choice(color.lower(), COLOR_MAP, "color")]
     # Each set command needs a small delay to avoid Origin COM rendering races
-    if color:
-        safe_color = labtalk_choice(color.lower(), COLOR_MAP, "color")
-        c = COLOR_MAP[safe_color]
+    if c is not None:
         execute_labtalk(f"set {target} -c {c};")
         time.sleep(0.2)
 
@@ -194,7 +203,7 @@ def set_plot_style(
         time.sleep(0.2)
         # Symbol interior: 1 = Open (hollow), 0 = Solid (verified on Origin 2020).
         execute_labtalk(f"set {target} -kf {1 if open_symbol else 0};")
-    elif color:
+    elif c is not None:
         # bar/column-type plots: color the fill too
         execute_labtalk(f"set {target} -cf {c};")
 
@@ -226,97 +235,16 @@ def _rgb_component(value: int, field: str) -> int:
     return v
 
 
-def _activate_plot(o, graph_name: str, plot_index: int) -> str:
-    """Activate the COM data plot at 1-based ``plot_index`` in FindGraphLayer's
-    DataPlots order (reliable — this is the order set_plot_style/get_plot_info
-    already trust) and return its dataset name. After Activate, LabTalk ``%C``
-    resolves to THIS exact plot, so ``set %C -c/-w`` targets it without the
-    ``layer -s N`` index scramble reported in N7. Raises on a bad index."""
-    gl = o.FindGraphLayer(f"[{graph_name}]Layer1")
-    if gl is None:
-        raise ValueError(f"Graph '{graph_name}' has no Layer1 to style.")
-    dp = gl.DataPlots
+def _parse_rgb(rgb: str):
+    """Parse an 'r,g,b' string into a validated (r, g, b) tuple (each 0-255)."""
+    parts = [p.strip() for p in str(rgb).split(",")]
+    if len(parts) != 3:
+        raise ValueError(f"rgb must be 'r,g,b' (three 0-255 values), got '{rgb}'.")
     try:
-        count = dp.Count
-    except Exception:
-        count = 0
-    if plot_index < 1 or plot_index > count:
-        raise ValueError(
-            f"plot_index {plot_index} is out of range; graph '{graph_name}' has "
-            f"{count} plot(s) on Layer1 (1-based, COM DataPlots order)."
-        )
-    plot = dp.Item(plot_index - 1)
-    try:
-        plot.Activate()
-    except Exception as exc:
-        raise ValueError(
-            f"Could not activate plot {plot_index} in '{graph_name}': {exc}"
-        )
-    return plot.Name
-
-
-@mcp.tool()
-def set_plot_color(graph_name: str, plot_index: int, r: int, g: int, b: int) -> str:
-    """Set ONE plot's color by RGB (0-255 each) — for per-curve rainbow/gradient
-    coloring that named colors can't express.
-
-    Targets the exact plot via its COM DataPlots index (``plot_index``, 1-based,
-    the reliable order), then sets the color on that activated plot. Works on
-    grouped multi-curve plots (overrides the group's color increment for that
-    curve). For line+symbol plots it colors both.
-
-    Args:
-        graph_name: Graph name.
-        plot_index: 1-based plot index in COM DataPlots order (see list via
-                    get_plot_names / set_plot_style ordering).
-        r, g, b: Red/Green/Blue components, 0-255.
-
-    Returns:
-        Confirmation with the resolved dataset name and RGB.
-    """
-    safe_graph = labtalk_name(graph_name, "graph_name")
-    rr = _rgb_component(r, "r")
-    gg = _rgb_component(g, "g")
-    bb = _rgb_component(b, "b")
-    require_graph(safe_graph)
-    activate_window(safe_graph, "graph_name")
-    name = _activate_plot(get_origin(), safe_graph, plot_index)
-    if not execute_labtalk(f"set %C -c color({rr},{gg},{bb});"):
-        raise ValueError(
-            f"Origin could not set the color of plot {plot_index} in {safe_graph}."
-        )
-    # For symbol plots also set the fill color so open/solid markers match.
-    if _plot_has_symbols(name):
-        execute_labtalk(f"set %C -cf color({rr},{gg},{bb});")
-    return (f"Set plot {plot_index} ({name}) color to RGB({rr},{gg},{bb}) "
-            f"in {safe_graph}")
-
-
-@mcp.tool()
-def set_plot_line_width(graph_name: str, plot_index: int, width: float) -> str:
-    """Set ONE plot's line width in points, targeting the exact plot by its COM
-    DataPlots index (1-based).
-
-    Args:
-        graph_name: Graph name.
-        plot_index: 1-based plot index (COM DataPlots order).
-        width: Line width in points (e.g. 2.5).
-
-    Returns:
-        Confirmation with the resolved dataset name and width.
-    """
-    safe_graph = labtalk_name(graph_name, "graph_name")
-    if width <= 0:
-        raise ValueError(f"width must be positive, got {width}.")
-    require_graph(safe_graph)
-    activate_window(safe_graph, "graph_name")
-    name = _activate_plot(get_origin(), safe_graph, plot_index)
-    lw = int(float(width) * _WIDTH_UNITS_PER_POINT)
-    if not execute_labtalk(f"set %C -w {lw};"):
-        raise ValueError(
-            f"Origin could not set the width of plot {plot_index} in {safe_graph}."
-        )
-    return f"Set plot {plot_index} ({name}) line width to {width} pt in {safe_graph}"
+        vals = [int(p) for p in parts]
+    except ValueError:
+        raise ValueError(f"rgb components must be integers, got '{rgb}'.")
+    return tuple(_rgb_component(v, "rgb") for v in vals)
 
 
 @mcp.tool()
@@ -325,9 +253,9 @@ def ungroup_plots(graph_name: str) -> str:
 
     Multiple Y columns plotted at once form a GROUP that shares an auto
     color/style increment list; that increment can override per-plot styling.
-    Ungrouping lets each plot keep its own color/width/symbol. (set_plot_color
-    already targets an individual grouped curve, but ungroup when you want the
-    group to stop re-applying its increment.)
+    Ungrouping lets each plot keep its own color/width/symbol. (set_plot_style
+    with an explicit `rgb` already targets an individual grouped curve, but
+    ungroup when you want the group to stop re-applying its increment.)
 
     Args:
         graph_name: Graph name.

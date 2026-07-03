@@ -2,29 +2,29 @@
 import pytest
 
 
-# --- set_column_designation --------------------------------------------------
+# --- column designation via manage_columns(op="properties") ------------------
 
-def test_set_column_designation_yerr(fake_origin):
-    from origin_pro_mcp.tools.worksheet import set_column_designation
+def test_manage_columns_designation_yerr(fake_origin):
+    from origin_pro_mcp.tools.worksheet import manage_columns
 
-    msg = set_column_designation("Book1", "Sheet1", 3, "yerr")
-    assert "yerr" in msg
+    msg = manage_columns("Book1", "Sheet1", op="properties", col=3, designation="yerr")
+    assert "designation" in msg
     assert any("wks.col3.type = 3" in s for s in fake_origin.executed)
 
 
-def test_set_column_designation_xerr_is_seven(fake_origin):
+def test_manage_columns_designation_xerr_is_seven(fake_origin):
     # Regression: xerr used to collide with label (both 5); it must be 7.
-    from origin_pro_mcp.tools.worksheet import set_column_designation
+    from origin_pro_mcp.tools.worksheet import manage_columns
 
-    set_column_designation("Book1", "Sheet1", 4, "xerr")
+    manage_columns("Book1", "Sheet1", op="properties", col=4, designation="xerr")
     assert any("wks.col4.type = 7" in s for s in fake_origin.executed)
 
 
-def test_set_column_designation_bad_role(fake_origin):
-    from origin_pro_mcp.tools.worksheet import set_column_designation
+def test_manage_columns_designation_bad_role(fake_origin):
+    from origin_pro_mcp.tools.worksheet import manage_columns
 
-    with pytest.raises(ValueError, match="role must be one of"):
-        set_column_designation("Book1", "Sheet1", 1, "abscissa")
+    with pytest.raises(ValueError, match="designation must be one of"):
+        manage_columns("Book1", "Sheet1", op="properties", col=1, designation="abscissa")
 
 
 # --- set_error_bars ----------------------------------------------------------

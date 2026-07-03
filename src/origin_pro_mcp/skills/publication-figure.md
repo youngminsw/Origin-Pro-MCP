@@ -373,7 +373,7 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
   which plots the error column, reassigns it as error bars (`set <err> -o <y>`),
   designates it as an error column, and rebuilds the legend, so no stray curve
   or extra legend entry is left. Or designate a column yourself with
-  `set_column_designation(book, sheet, col, "yerr")` (or `"xerr"`).
+  `manage_columns(book, sheet, op="properties", col=col, designation="yerr")` (or `"xerr"`).
 - **Open (hollow) markers** — publication standard — via
   `set_plot_style(graph, plot_index, symbol_shape=2, open_symbol=True)`
   (`open_symbol` maps to LabTalk `set -kf 1`; `-kf 0` is solid).
