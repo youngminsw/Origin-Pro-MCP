@@ -171,6 +171,38 @@ is needed (and works even when the timeout is `off`).
 **Rollback:** unset any of these (or set the timeout to `off`) to return to the
 prior behavior — no code change or redeploy required.
 
+#### Session lifecycle & restarts
+
+Each MCP client process gets its own daemon session (its own isolated Origin).
+Because sessions and the daemon can restart independently, the daemon keeps a
+small ledger sidecar (`sessions.json`, next to the private lockfile) recording
+each session's last Origin PID and project path. When a **new** session starts,
+the daemon reads that ledger once and, on the first successful tool response,
+piggybacks a short one-time **`[origin-mcp]` notice** telling the agent what
+happened — so it continues the work instead of silently rebuilding into an empty
+window. What you may see:
+
+- **Your MCP client restarted (new session).** Your previous Origin window was
+  **detached, not closed** (see `ORIGIN_PRO_MCP_REAP_CLOSE`): the notice says it
+  is still open with your project and to save/close it in the GUI before
+  reloading, or just work in the fresh instance.
+- **The daemon restarted and your old Origin is gone.** The notice says your
+  project is not loaded and to reopen it with `load_project`.
+- **Ghost windows.** Leftover Origins from earlier sessions are preserved by
+  default, so they can accumulate. The notice summarizes how many are still open;
+  close them in the GUI once saved, or set `ORIGIN_PRO_MCP_SWEEP_ORPHANS=1` so a
+  restarting daemon reclaims them.
+- **Attach (`ORIGIN_PRO_MCP_ATTACH=1`).** If you got the user's open Origin, the
+  notice reminds you that autosave and force-recovery are **disabled** there —
+  save explicitly and avoid destructive ops. If another session already holds the
+  single attach slot, the notice says you got an isolated Origin instead.
+
+Separately, `load_project` appends a one-line **collision warning** to its result
+when the ledger shows another live Origin still holding the same project file
+(saving from both would clobber it — close the other first). The notice and the
+warning are advisory strings only; they never block a call, and a
+missing/corrupt ledger is treated as empty.
+
 ### 4. Use It
 
 Just ask Claude to work with Origin:

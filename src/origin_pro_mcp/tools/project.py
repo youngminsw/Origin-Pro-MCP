@@ -4,6 +4,7 @@ import shutil
 from ..app import mcp
 from ..origin_connection import (
     activate_window,
+    check_project_collision,
     execute_labtalk,
     get_origin,
     graph_names,
@@ -149,7 +150,13 @@ def load_project(file_path: str) -> str:
         )
         raise ValueError(msg)
     remember_project_path(path)
-    return f"Loaded project: {path}"
+    message = f"Loaded project: {path}"
+    # Warn (never block) if another live Origin still holds this same project —
+    # saving from both would clobber. Pure string append from the session ledger.
+    warning = check_project_collision(path)
+    if warning:
+        message += "\n" + warning
+    return message
 
 @mcp.tool()
 def export_all_graphs(

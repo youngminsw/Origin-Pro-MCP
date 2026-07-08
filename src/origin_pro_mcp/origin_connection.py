@@ -41,7 +41,7 @@ def _close_instance(inst) -> None:
             break
 
 
-def set_session_origin(origin, factory=None) -> None:
+def set_session_origin(origin, factory=None, session_id=None) -> None:
     """Bind a COM proxy to the current thread (daemon worker / test injection).
 
     ``factory`` (daemon sessions) is the zero-arg callable that launched this
@@ -50,27 +50,82 @@ def set_session_origin(origin, factory=None) -> None:
     instance — instead of falling back to the shared ``ApplicationSI``, which
     could silently attach the agent to a DIFFERENT or user-opened Origin and
     modify the user's work.
+
+    ``session_id`` (daemon sessions) is stashed thread-locally so
+    project-path changes on this worker can be reported to the daemon's session
+    ledger without origin_connection importing the daemon (avoids a cycle).
     """
     _state.origin = origin
     if factory is not None:
         _state.factory = factory
+    if session_id is not None:
+        _state.session_id = session_id
 
 
 def clear_session_origin() -> None:
     """Drop the current thread's proxy and factory (full session teardown)."""
-    for attr in ("origin", "factory", "project_path"):
+    for attr in ("origin", "factory", "project_path", "session_id"):
         if hasattr(_state, attr):
             delattr(_state, attr)
+
+
+# --------------------------------------------------------------------------- #
+# Session-ledger seam (registered by the daemon; None in in-process mode)      #
+# --------------------------------------------------------------------------- #
+# The daemon registers callbacks here so project-path changes and load-time
+# collision checks can consult its ledger WITHOUT origin_connection importing
+# daemon (which would be a cycle). Both are no-ops until registered.
+_session_context_writer = None
+_session_collision_reader = None
+
+
+def set_session_context_writer(fn) -> None:
+    """Register (or clear with ``None``) the ledger writer the daemon uses to
+    record this thread's session -> project-path changes."""
+    global _session_context_writer
+    _session_context_writer = fn
+
+
+def set_session_collision_reader(fn) -> None:
+    """Register (or clear with ``None``) the ledger reader load_project uses to
+    detect another live Origin holding the same project."""
+    global _session_collision_reader
+    _session_collision_reader = fn
+
+
+def _notify_session_context(path) -> None:
+    """Report this thread's (session_id, path) to the ledger writer if wired."""
+    fn = _session_context_writer
+    sid = getattr(_state, "session_id", None)
+    if fn is None or sid is None:
+        return
+    try:
+        fn(sid, path)
+    except Exception:
+        pass
+
+
+def check_project_collision(path):
+    """Ask the ledger whether another live Origin holds ``path`` (or None)."""
+    fn = _session_collision_reader
+    sid = getattr(_state, "session_id", None)
+    if fn is None or sid is None:
+        return None
+    try:
+        return fn(sid, path)
+    except Exception:
+        return None
 
 
 def remember_project_path(path) -> None:
     """Record the last project this thread loaded/saved, so a relaunch after a
     crash (dead COM proxy) can auto-reopen it. Falsy value forgets it (e.g.
-    after ``new_project``)."""
+    after ``new_project``). Also reports the change to the session ledger."""
     if path:
         _state.project_path = path
     elif hasattr(_state, "project_path"):
         del _state.project_path
+    _notify_session_context(path if path else None)
 
 
 def get_remembered_project_path():

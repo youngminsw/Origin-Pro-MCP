@@ -354,7 +354,14 @@ class ShimClient:
                     continue  # not our response — keep reading
                 break
         if frame.get("ok"):
-            return frame.get("result")
+            result = frame.get("result")
+            # One-shot lifecycle notice the daemon may piggyback on the first
+            # successful response of a session (restart/ghost/attach context).
+            notice = frame.get("notice")
+            if notice:
+                base = result if result is not None else ""
+                return f"{base}\n\n[origin-mcp] {notice}"
+            return result
         raise RuntimeError(frame.get("error") or "unknown daemon error")
 
 

@@ -31,7 +31,7 @@ from . import autosave as _autosave
 from .autosave import AutosavePolicy
 from .origin_connection import (
     clear_session_origin, get_origin, get_remembered_project_path,
-    set_session_origin,
+    set_session_collision_reader, set_session_context_writer, set_session_origin,
 )
 from .transport import MAX_FRAME, Connection, FrameError, TcpServer
 
@@ -235,7 +235,7 @@ class Session:
             # Pass the factory so a dead proxy relaunches THIS session's own
             # isolated instance, never the shared ApplicationSI (which could
             # hijack the user's open Origin).
-            set_session_origin(self.instance, self._factory)
+            set_session_origin(self.instance, self._factory, self.session_id)
             try:
                 pid = self._get_pid(self.instance)
                 self.pid = int(pid) if pid is not None else None
@@ -609,6 +609,18 @@ class Pool:
                 self._attach_session_id = None  # free the single attach slot
             return self._sessions.pop(session_id, None)
 
+    def is_attached(self, session_id: str) -> bool:
+        """True if ``session_id`` currently holds the single attach slot (i.e. it
+        was granted the user's shared Origin, not an isolated fallback)."""
+        with self._lock:
+            return self._attach_session_id == session_id
+
+    def attach_available(self) -> bool:
+        """True if attach mode is wired at all (an attach factory exists). When
+        False, an attach request always maps to an isolated instance with no
+        'another session holds it' contention."""
+        return self._attach_factory is not None
+
     def session_ids(self) -> list[str]:
         with self._lock:
             return list(self._sessions.keys())
@@ -814,6 +826,56 @@ def write_lockfile(path: str, port: int, token: str, pid: int,
 def read_lockfile(path: str) -> dict:
     with open(path) as fh:
         return json.load(fh)
+
+
+# --- Session ledger sidecar (lifecycle continuity) ------------------------- #
+# A private-dir sidecar next to the lockfile recording, per session_id, the last
+# known {pid, project, attach, ts}. It lets a freshly-minted session (after a
+# shim or daemon restart) TELL the agent what happened to its predecessor —
+# preserved Origin windows, an unloaded project, or leftover ghosts — instead of
+# the agent silently rebuilding into an empty instance. Corrupt/missing is always
+# treated as empty and overwritten; it is advisory state, never authoritative.
+
+
+def default_sessions_path() -> str:
+    lf = os.environ.get("ORIGIN_PRO_MCP_LOCKFILE") or default_lockfile_path()
+    return os.path.join(os.path.dirname(lf), "sessions.json")
+
+
+def read_sessions(path: str) -> dict:
+    """Read the ledger, tolerating a missing/garbage file (returns an empty
+    ledger). Never raises — a corrupt sidecar must never break the daemon."""
+    empty = {"generation": None, "sessions": {}}
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError, TypeError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    sessions = data.get("sessions")
+    if not isinstance(sessions, dict):
+        sessions = {}
+    # Drop malformed ENTRIES too (valid JSON but not an object) — a bad entry
+    # must never make the mint path raise on a session's first tool call.
+    sessions = {k: v for k, v in sessions.items() if isinstance(v, dict)}
+    return {"generation": data.get("generation"), "sessions": sessions}
+
+
+def write_sessions(path: str, data: dict) -> None:
+    """Atomically write the ledger (user-only on POSIX), mirroring
+    :func:`write_lockfile`. Best-effort: an IO failure is swallowed by callers."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    if sys.platform == "win32":
+        with open(tmp, "w") as fh:
+            json.dump(data, fh)
+    else:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(data, fh)
+    os.replace(tmp, path)
+    if sys.platform != "win32":
+        os.chmod(path, 0o600)
 
 
 # --- Persistent spawned-Origin PID log ------------------------------------- #
@@ -1064,6 +1126,17 @@ class Daemon:
         self._seen_lock = threading.Lock()
         self._idle_since: Optional[float] = None
         self._lockfile_lock = threading.Lock()
+        # -- session ledger (lifecycle continuity) --------------------------- #
+        self._sessions_path: Optional[str] = None
+        self._generation: Optional[str] = None
+        self._prev_ledger: dict = {"generation": None, "sessions": {}}
+        self._ledger: dict = {"generation": None, "sessions": {}}
+        self._ledger_lock = threading.Lock()
+        self._minted: set = set()            # session_ids whose notice was composed
+        self._pending_notices: dict[str, str] = {}  # session_id -> one-shot notice
+        # Injectable ONE-SHOT liveness helper (set of live Origin PIDs). Reused
+        # for mint notices and load-time collision checks; never polled.
+        self._live_origin_pids: Callable[[], set] = _origin_process_pids
         self._monitor_tick = 0.01
         self._monitor_stop: Optional[threading.Event] = None
         self._monitor_thread: Optional[threading.Thread] = None
@@ -1100,6 +1173,8 @@ class Daemon:
               attach_factory: Optional[OriginFactory] = None,
               attach_get_pid: Optional[GetPid] = None,
               dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None,
+              generation: Optional[str] = None,
+              live_origin_pids: Optional[Callable[[], set]] = None,
               monitor_tick: float = 0.01) -> bool:
         """Acquire the singleton, sweep any orphans left by a crashed prior
         daemon, start the server/pool/watchdog/monitor, write the lockfile, and
@@ -1114,6 +1189,26 @@ class Daemon:
         self._spawn_log_path = os.path.join(
             os.path.dirname(lockfile_path), "spawned-pids.log"
         )
+        # Session ledger: load the PREVIOUS generation's snapshot (for restart
+        # notices), then seed the current generation's ledger from it so history
+        # persists until superseded. Not written until the first update point.
+        self._sessions_path = os.path.join(
+            os.path.dirname(lockfile_path), "sessions.json"
+        )
+        # A random token, not the PID: a restarted daemon can be handed the
+        # predecessor's recycled PID, which would erase the "previous
+        # generation" distinction the continuity notice depends on.
+        self._generation = generation or secrets.token_hex(8)
+        self._live_origin_pids = live_origin_pids or _origin_process_pids
+        self._prev_ledger = read_sessions(self._sessions_path)
+        self._ledger = {"generation": self._generation,
+                        "sessions": dict(self._prev_ledger.get("sessions", {}))}
+        self._minted = set()
+        self._pending_notices = {}
+        # Register the ledger seams so worker-thread project-path changes and
+        # load-time collision checks reach this daemon without a cyclic import.
+        set_session_context_writer(self._ledger_record_project)
+        set_session_collision_reader(self._ledger_collision_check)
         self._clock = clock or time.monotonic
         self._dispatch_timeout = dispatch_timeout if dispatch_timeout and dispatch_timeout > 0 else 0.0
         self._dispatch_kill_grace = (dispatch_kill_grace
@@ -1272,6 +1367,12 @@ class Daemon:
         with self._seen_lock:
             self._last_seen.pop(session_id, None)
         self._lockfile_sessions.discard(session_id)
+        # Keep the ledger entry (a DETACHED Origin may still be alive) but flag it
+        # ended, and clear one-shot state so a genuinely fresh mint re-notifies.
+        self._ledger_write(session_id, {"ended": True})
+        with self._ledger_lock:
+            self._minted.discard(session_id)
+            self._pending_notices.pop(session_id, None)
         self._rewrite_lockfile()
 
     def _rewrite_lockfile(self) -> None:
@@ -1283,6 +1384,193 @@ class Daemon:
                                os.getpid(), self._pool.child_pids())
         except OSError:
             pass
+
+    # -- session ledger + mint notices --------------------------------------- #
+
+    def _flush_ledger_locked(self) -> None:
+        """Write the ledger to disk (caller holds ``_ledger_lock``). Bounds the
+        entry count so the sidecar can't grow without limit across many restarts,
+        keeping the newest by timestamp. Best-effort; never raises."""
+        if not self._sessions_path or self._stopped:
+            return
+        sessions = self._ledger["sessions"]
+        if len(sessions) > 64:
+            newest = sorted(sessions.items(),
+                            key=lambda kv: kv[1].get("ts", 0.0), reverse=True)[:64]
+            sessions = dict(newest)
+            self._ledger["sessions"] = sessions
+        try:
+            write_sessions(self._sessions_path, self._ledger)
+        except OSError:
+            pass
+
+    def _ledger_write(self, session_id: str, updates: dict,
+                      replace: bool = False) -> None:
+        """Upsert ``session_id``'s ledger entry and flush. ``replace`` starts a
+        fresh entry (used at spawn so a reused id doesn't inherit stale
+        pid/project); otherwise the existing entry is merged into."""
+        if not session_id:
+            return
+        with self._ledger_lock:
+            if replace:
+                entry: dict = {"pid": None, "project": None, "attach": False}
+            else:
+                entry = dict(self._ledger["sessions"].get(session_id)
+                             or {"pid": None, "project": None, "attach": False})
+            entry.update(updates)
+            entry["ts"] = time.time()
+            self._ledger["sessions"][session_id] = entry
+            self._flush_ledger_locked()
+
+    def _ledger_record_project(self, session_id: str, path) -> None:
+        """Ledger writer seam (runs on a session worker thread): record this
+        session's current on-disk project path (or None when cleared)."""
+        self._ledger_write(session_id, {"project": path or None})
+
+    def _ledger_collision_check(self, session_id: str, path):
+        """Ledger reader seam (runs on a worker thread at load_project): return a
+        warning if ANOTHER session's entry has a LIVE Origin holding the same
+        project path, else None. A one-off liveness check (not polled)."""
+        if not path:
+            return None
+        try:
+            live = self._live_origin_pids() or set()
+        except Exception:
+            live = set()
+        target = os.path.normcase(os.path.normpath(path))
+        with self._ledger_lock:
+            entries = list(self._ledger["sessions"].items())
+        for sid, entry in entries:
+            if sid == session_id:
+                continue
+            other = entry.get("project")
+            pid = entry.get("pid")
+            if not other or pid is None or pid not in live:
+                continue
+            if os.path.normcase(os.path.normpath(other)) == target:
+                return (
+                    f"WARNING: another Origin instance (pid {pid}) may still have "
+                    "this project open — saving from both will clobber; close the "
+                    "other one first."
+                )
+        return None
+
+    def _maybe_mint_notice(self, session_id: str, session: "Session",
+                           attach_requested: bool) -> None:
+        """On the FIRST request for ``session_id`` this generation, compose a
+        one-shot lifecycle notice from the previous ledger and record the new
+        entry. Liveness is checked ONCE here (never polled)."""
+        if not session_id:
+            return
+        with self._ledger_lock:
+            if session_id in self._minted:
+                return
+            self._minted.add(session_id)
+        try:
+            live = self._live_origin_pids() or set()
+        except Exception:
+            live = set()
+        attach_granted = (self._pool.is_attached(session_id)
+                          if self._pool is not None else False)
+        attach_available = (self._pool.attach_available()
+                            if self._pool is not None else False)
+        # The notice is ADVISORY: composing it must never fail the session's
+        # first tool call, whatever a hand-edited/migrated ledger contains.
+        try:
+            notice = self._compose_notice(session_id, session, live,
+                                          attach_requested, attach_granted,
+                                          attach_available)
+        except Exception:
+            notice = None
+        # Record the freshly-minted session (fresh entry: no stale pid/project).
+        try:
+            self._ledger_write(session_id,
+                               {"pid": session.pid, "attach": attach_granted,
+                                "ended": False},
+                               replace=True)
+        except Exception:
+            pass
+        if notice:
+            with self._ledger_lock:
+                self._pending_notices[session_id] = notice
+
+    def _compose_notice(self, session_id: str, session: "Session", live: set,
+                        attach_requested: bool, attach_granted: bool,
+                        attach_available: bool) -> Optional[str]:
+        """Build the ≤3-line one-shot notice (or None) for a freshly-minted
+        session, from the previous-generation ledger snapshot + live PID set."""
+        lines: list[str] = []
+        prev_sessions = self._prev_ledger.get("sessions", {}) or {}
+        prev_gen = self._prev_ledger.get("generation")
+        pool_ids = set(self._pool.session_ids()) if self._pool is not None else set()
+
+        # (1) This same session_id existed in a PREVIOUS generation.
+        own = prev_sessions.get(session_id)
+        if own is not None and prev_gen != self._generation:
+            pid = own.get("pid")
+            proj = own.get("project")
+            if pid is not None and pid in live:
+                if proj:
+                    lines.append(
+                        f"Note: your previous session's Origin (pid {pid}) is "
+                        f"still open with project {proj}. It was preserved on "
+                        f"purpose — save/close it in the GUI before reloading "
+                        f"{proj}, or work in this fresh instance.")
+                else:
+                    lines.append(
+                        f"Note: your previous session's Origin (pid {pid}) is "
+                        "still open. It was preserved on purpose — save/close it "
+                        "in the GUI, or work in this fresh instance.")
+            else:
+                if proj:
+                    lines.append(
+                        f"Note: the daemon restarted; your previous project "
+                        f"{proj} is not loaded. Continue with "
+                        f"load_project(r'{proj}').")
+                else:
+                    lines.append(
+                        "Note: the daemon restarted; your previous project is "
+                        "not loaded.")
+
+        # (2) OTHER leftover Origins (any prior/current entry) still alive but not
+        #     in the pool — a summarizing ghost line.
+        merged = dict(prev_sessions)
+        with self._ledger_lock:
+            merged.update(self._ledger["sessions"])
+        ghost_pids: list[int] = []
+        ghost_projects: list[str] = []
+        for sid, entry in merged.items():
+            if sid == session_id or sid in pool_ids:
+                continue
+            pid = entry.get("pid")
+            if pid is None or pid not in live or pid in ghost_pids:
+                continue
+            ghost_pids.append(pid)
+            proj = entry.get("project")
+            if proj:
+                ghost_projects.append(os.path.basename(proj))
+        if ghost_pids:
+            projects = ", ".join(ghost_projects) if ghost_projects else "unsaved"
+            lines.append(
+                f"Note: {len(ghost_pids)} leftover Origin window(s) from earlier "
+                f"sessions are still open (projects: {projects}). Close them in "
+                "the GUI once saved, or set ORIGIN_PRO_MCP_SWEEP_ORPHANS=1 to have "
+                "restarts clean them.")
+
+        # (3) Attach outcome.
+        if attach_granted:
+            lines.append(
+                "Note: attached to the user's open Origin. Autosave and "
+                "force-recovery are disabled here — save explicitly and avoid "
+                "destructive ops.")
+        elif attach_requested and attach_available:
+            lines.append(
+                "Note: attach was requested but another session already holds "
+                "the user's Origin — this session got an isolated Origin instead.")
+
+        if not lines:
+            return None
+        return "\n".join(lines[:3])  # keep the notice ≤ 3 lines
 
     # -- liveness tracking + monitor ----------------------------------------- #
 
@@ -1472,7 +1760,11 @@ class Daemon:
         # response — the shim must never wait out its call_timeout on a hang.
         try:
             self._mark_live(session_id, conn)  # a request implies liveness
-            session = self._pool.acquire(session_id, attach=bool(frame.get("attach")))
+            attach_req = bool(frame.get("attach"))
+            session = self._pool.acquire(session_id, attach=attach_req)
+            # First request for this session this generation: compose the
+            # one-shot lifecycle notice and record the ledger entry.
+            self._maybe_mint_notice(session_id, session, attach_req)
             if session_id not in self._lockfile_sessions:
                 self._lockfile_sessions.add(session_id)
                 self._rewrite_lockfile()
@@ -1645,6 +1937,12 @@ class Daemon:
             self._last_seen.pop(session_id, None)
         self._last_snapshot.pop(session_id, None)
         self._lockfile_sessions.discard(session_id)
+        # The Origin PID was force-killed: flag the entry ended and clear one-shot
+        # state so a reconnect mints (and re-notifies) cleanly.
+        self._ledger_write(session_id, {"ended": True})
+        with self._ledger_lock:
+            self._minted.discard(session_id)
+            self._pending_notices.pop(session_id, None)
         self._rewrite_lockfile()
         if answered:
             return  # the soft notify already replied; don't send a second frame
@@ -1660,8 +1958,17 @@ class Daemon:
                       "unsaved changes in that session may be lost."),
         })
 
-    @staticmethod
-    def _safe_send(conn: Connection, frame: dict) -> None:
+    def _safe_send(self, conn: Connection, frame: dict) -> None:
+        # Piggyback a one-shot lifecycle notice on the FIRST successful response
+        # for a session, then never again (pop). Errors carry no notice.
+        sid = getattr(conn, "session_id", None)
+        if (sid and frame.get("type") == "response" and frame.get("ok")
+                and "notice" not in frame):
+            with self._ledger_lock:
+                notice = self._pending_notices.pop(sid, None)
+            if notice:
+                frame = dict(frame)
+                frame["notice"] = notice
         try:
             conn.send_frame(frame)
         except (OSError, FrameError):
@@ -1673,6 +1980,14 @@ class Daemon:
                 return
             self._stopped = True
         self._running = False
+        # Unregister the ledger seams so a stopped daemon never services a
+        # worker-thread project change / collision check (the next daemon
+        # re-registers its own in start()).
+        try:
+            set_session_context_writer(None)
+            set_session_collision_reader(None)
+        except Exception:
+            pass
         if self._monitor_stop is not None:
             self._monitor_stop.set()
         if self._server is not None:
