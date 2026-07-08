@@ -153,8 +153,9 @@ are safe (see each row). Set any to `off` to opt out.
 
 | Variable | Default | Effect |
 | :--- | :--- | :--- |
-| `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` | `90` | Soft budget (seconds) for each tool dispatch. If Origin doesn't respond within it, the client is told **Origin looks wedged — most likely a modal dialog (e.g. "Get MiKTeX Path") — go dismiss it**; NOTHING is killed. Dismiss the dialog and the operation finishes on its own and the session keeps working. Set `off`/`0` to disable. |
+| `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT` | `90` | Soft budget (seconds) for each tool dispatch. If Origin doesn't respond within it, a persistent per-session watchdog is polled for the modal dialog that is blocking it: when one is found, the error **names its exact title** and says whether it was already auto-dismissed (retry the call) or is waiting for you to close it by hand; if none is found it falls back to the generic "most likely a modal dialog" message. NOTHING is killed at this stage. Set `off`/`0` to disable. |
 | `ORIGIN_PRO_MCP_DISPATCH_KILL_GRACE` | `90` | Grace (seconds) AFTER the soft warning before Origin is **force-killed** as a last resort (so a wedged session can never permanently hold a pool slot). Total time to a hard reset = timeout + grace (default 180s). Set `off`/`0` for no warning phase (legacy: force-kill straight at the soft budget). |
+| `ORIGIN_PRO_MCP_DIALOG_AUTODISMISS` | `on` | Every session runs a persistent watchdog that polls (~2s) for modal dialogs owned by its Origin process and records their titles. By **default** it also auto-dismisses (closes) each one it finds, so a startup or mid-session dialog no longer freezes the session. Set to `0`/`off`/`false`/`no` to keep detection and reporting (dispatch-timeout errors still name the dialog) without the daemon closing it — you then close it by hand in the Origin window. |
 | `ORIGIN_PRO_MCP_AUTOSAVE` | `on` | Save the project **in place** (its own file, same name — like pressing Save) **before** a destructive op (delete graph/plot, column deletion, project load/new, overwriting a populated sheet, or a `confirm`ed destructive `run_labtalk`), so a bad edit is recoverable by reloading. It never writes a differently-named copy, and never overwrites a real file with an empty/blanked project (N5-safe). Only saves a project that already has a file on disk. Set `off` to disable autosave entirely. |
 | `ORIGIN_PRO_MCP_AUTOSAVE_INTERVAL` | `300` | Also save the project **in place** every N seconds (proactive autosave), not just before destructive ops. Applies to agent-isolated sessions with a saved project; the Origin you `ATTACH` to is left to you. `off`/`0` disables periodic autosave (preflight still runs). |
 | `ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED` | `1` | When autosave is on and a required *preflight* in-place save fails, the destructive op is **not** run and an error is returned. Set `0` to proceed without saving. |
@@ -273,7 +274,7 @@ used to be many single-purpose ones.
 | `create_worksheet` | Create new workbook |
 | `set_worksheet_data` | Write column data (JSON arrays) |
 | `get_worksheet_data` | Read worksheet data as JSON (empty cells → null) |
-| `import_data` | Import a CSV/text or Excel file (`format="auto"/"csv"/"excel"`) |
+| `import_data` | Import a CSV/text or Excel file (`format="auto"/"csv"/"excel"`); CSV/text import suppresses Origin's auto-generated sparkline mini-graph windows by default (`sparklines=False`) |
 | `export_worksheet` | Export a worksheet to CSV/text |
 | `list_worksheets` | List open workbooks, graphs, and matrices |
 | `manage_columns` | Add, delete, or edit columns — `op="add"/"delete"/"properties"/"formula"` |
@@ -325,7 +326,7 @@ used to be many single-purpose ones.
 ### Advanced
 | Tool | Description |
 |------|-------------|
-| `run_labtalk` | Execute LabTalk with destructive/file-writing commands blocked; optional `capture` reads variables back |
+| `run_labtalk` | Execute LabTalk with destructive/file-writing commands blocked; optional `capture` reads variables back. If a 2+ statement script fails as a whole, it is automatically retried statement-by-statement and each statement's OK/FAILED status is reported (partial application is possible — this is intentional) |
 | `get_labtalk_variable` | Read a LabTalk variable value |
 
 ### Skills
@@ -413,6 +414,7 @@ Pull the skill with `get_skill("publication-figure")` (or copy `src/origin_pro_m
 | `[Book]Sheet!col(n).type = ...` silently ignored | Activate the sheet, then use `wks.col(n).type` |
 | `set <plot>` fails when the graph isn't active | Run `win -a <graph>` before `set` commands |
 | Typed LabTalk locals (`int x = ...`) unreadable later | Use untyped assignment to read values back via COM |
+| A graph loaded from a `.opju` can report zero data plots over COM (per-curve styling/ungrouping silently no-ops) | The core per-curve/axis/frame tools (`set_plot_style`, `ungroup_plots`, `remove_plot`, `axis` range/scale/tick) now activate the page and re-acquire a fresh layer handle before each call; if the layer is still empty, the tool raises an actionable error instead of returning fake success — recreate the graph in-session if you hit it. Text/font/legend tools (`set_graph_font`, `set_legend`) still go through plain LabTalk and can silently no-op on a loaded graph — verify those visually |
 
 ## Supported Plot Types
 
@@ -476,8 +478,10 @@ by `curve_fit(plot_on_graph=...)` uses a muted brick red (170, 68, 80).
 | Problem | Solution |
 |---------|----------|
 | "Could not connect to Origin via COM" | Check that Origin/OriginPro is installed and licensed; if it is, run Origin once as administrator to re-register the Automation Server |
-| Tools timeout | Origin may be showing a dialog — check the Origin window |
+| Tools timeout / "Origin has not responded" | A persistent watchdog polls for modal dialogs on your session's Origin process; by default it auto-dismisses them, and a timeout error names the dialog's exact title and whether it was closed for you. If auto-dismiss is off (`ORIGIN_PRO_MCP_DIALOG_AUTODISMISS=0`), switch to the Origin window and close/confirm the named dialog yourself — the operation then finishes on its own |
+| "No editable data plots found" on `set_plot_style`/`ungroup_plots`/axis ops, or "did not take effect" on an axis-range call | The graph was loaded from a `.opju` project file in a state Origin freezes over COM (its layer reports zero data plots even after activating the window). This used to silently no-op; it is now a raised error instead of a fake success. Recreate the graph in-session (`create_graph`/`plotxy`) or reopen the project fresh — no manual export-and-compare-pixels needed to detect it anymore |
 | "Export failed: ... was not created" | `export_graph` writes the file directly via `expGraph` (no clipboard); this means Origin (Windows) could not write to that path — use a Windows path (`C:\...`) or `/mnt/<drive>/...` instead of a WSL/Linux path |
+| "... is a Linux/WSL path that Origin ... cannot access" | Any file-path argument (import/export/save/load) given as a bare POSIX path (e.g. `/tmp/x.csv`) is now rejected upfront with this error rather than silently resolving against the wrong drive — use `/mnt/<drive>/...` (auto-translated) or a native Windows path |
 | "Window 'X' not found" errors | The error lists every open workbook/graph — use one of those names (Origin may have renamed the window if the name was taken) |
 | Legend missing after styling | Legend uses data coordinates — verify axis range is set before positioning |
 | Symbols appear hollow | Do NOT use `set -d` flag (it's for dash patterns, not fill) |

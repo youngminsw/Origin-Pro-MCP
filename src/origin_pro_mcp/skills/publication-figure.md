@@ -11,7 +11,7 @@ Use this when the user asks for a manuscript figure, publication-quality graph, 
 - Windows with a licensed Origin/OriginPro installation
 - `origin-pro` MCP launched by the MCP client through Windows Python
 - Prefer typed MCP tools over raw LabTalk
-- Use `run_labtalk` for advanced graph and analysis commands; destructive and file-writing commands are blocked
+- Use `run_labtalk` for advanced graph and analysis commands; destructive and file-writing commands are blocked. If a multi-statement script fails as a whole, the server automatically retries it statement-by-statement and reports each one's OK/FAILED status — proactively splitting a script into small chunks is still fine, but no longer required to see which statement caused a failure
 - Verified on Origin Pro 2020 only; other versions may work but are not verified by this skill
 
 ## First Pass
@@ -395,6 +395,9 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
 `manage_columns(op="formula"/"add"/"delete"/"properties")` (column formulas,
 add/delete columns, units/long name/designation), `sort_worksheet`,
 `transpose_worksheet`, `import_data` (CSV/text or Excel), `export_worksheet`.
+`import_data` suppresses Origin's auto-generated sparkline mini-graph windows
+by default for CSV/text imports (`sparklines=False`) — no manual cleanup of
+those throwaway windows is needed; pass `sparklines=True` to keep them.
 
 ### Reuse and sized export
 
@@ -424,6 +427,7 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | Error-bar `set -erw`/`-erwc` use POINTS, unlike the data line's `-w` (~200 units/pt) | Set `-erw` (error-bar line width) and `-erwc` (cap/whisker width) in points. Passing a `-w`-scale value (e.g. 550) into `-erw` makes bars explode — that was a units mistake, not an Origin bug. MCP tools set `-erw` in points and scale `-erwc` to the symbol size |
 | `set <plot>` silently fails when the graph window is not active | Run `win -a <graph>` first |
 | `[Book]Sheet!col(n).type = ...` is silently ignored | Activate the sheet and use `wks.col(n).type` instead |
+| A graph loaded from a `.opju` project file can report zero data plots over COM, so per-curve styling/ungrouping used to silently no-op | The core per-curve/axis/frame tools (`set_plot_style`, `ungroup_plots`, `remove_plot`, `axis` range/scale/tick) now activate the page and re-acquire a fresh layer handle before each call; axis-range calls also read the value back and raise if it didn't change. If plots are still zero, the tool raises an actionable error — recreate the graph in-session (`create_graph`/`plotxy`) rather than editing the loaded one. Text/font/legend tools (`set_graph_font`, `set_legend`) still go through plain LabTalk and can silently no-op on a loaded graph — verify those in the exported image |
 
 ## Pre-Export Checklist
 

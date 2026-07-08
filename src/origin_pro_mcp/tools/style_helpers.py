@@ -1,6 +1,7 @@
 from ..labtalk_safe import labtalk_choice, labtalk_name
 from ..origin_connection import (
-    execute_labtalk, get_lt_var, get_origin, sheet_names,
+    activate_window, execute_labtalk, get_lt_var, get_origin, graph_names,
+    sheet_names,
 )
 
 # COM Column.Type designation codes (Origin 2020 type library)
@@ -8,15 +9,71 @@ _COM_COLTYPE_Y_ERROR = 2
 _COM_COLTYPE_X = 3
 
 
-def get_plot_names(graph_name: str) -> list:
-    o = get_origin()
-    safe_graph_name = labtalk_name(graph_name, "graph_name")
+def _find_layer_com(o, safe_graph_name: str):
+    """A FRESH Layer1 COM handle for a graph, via a fallback chain.
+
+    1. ``FindGraphLayer("[name]Layer1")`` — the direct route.
+    2. Walk the ``GraphPages`` collection for the page by name and take its
+       first layer.
+
+    Never caches — a stale handle is exactly what freezes graphs loaded from a
+    project file. Returns the layer or None. The second path is LIVE-UNVERIFIED
+    (defensive backstop for loaded pages that don't resolve through
+    ``FindGraphLayer``)."""
     gl = o.FindGraphLayer(f"[{safe_graph_name}]Layer1")
-    if not gl:
-        return []
-    dp = gl.DataPlots
-    out = []
+    if gl is not None:
+        return gl
     try:
+        pages = o.GraphPages
+        count = pages.Count
+    except Exception:
+        return None
+    for i in range(count):
+        try:
+            page = pages.Item(i)
+            if page.Name != safe_graph_name:
+                continue
+            layers = page.Layers
+            if layers.Count:
+                return layers.Item(0)
+        except Exception:
+            continue
+    return None
+
+
+def acquire_graph_layer(graph_name: str, *, activate: bool = True):
+    """THE single fresh-handle acquisition path for every graph-targeting op.
+
+    Given a graph name it (1) activates the page (``win -a``), then (2) takes a
+    FRESH Layer1 COM handle (never cached) through ``_find_layer_com``. The
+    activation is what un-freezes graphs loaded from a ``.opju``: their layer
+    reports zero DataPlots and silently no-ops ``layer.*`` / per-plot commands
+    until the page is the active window, and only a handle taken AFTER
+    activation sees the real plots. Raises ValueError (with the open-graph
+    list) if the graph can't be resolved — never returns a dead handle a caller
+    would silently no-op against.
+    """
+    safe_graph_name = labtalk_name(graph_name, "graph_name")
+    o = get_origin()
+    if activate:
+        # Raises with the open-window list on a real Origin if the name is
+        # unknown; a fresh handle is then taken against the now-active page.
+        activate_window(safe_graph_name, "graph_name")
+    gl = _find_layer_com(o, safe_graph_name)
+    if gl is None:
+        graphs = ", ".join(graph_names()) or "(none)"
+        msg = (
+            f"Could not acquire a graph layer for '{safe_graph_name}'. "
+            f"Open graphs: {graphs}."
+        )
+        raise ValueError(msg)
+    return gl
+
+
+def _plot_names_from_layer(gl) -> list:
+    out: list = []
+    try:
+        dp = gl.DataPlots
         count = dp.Count
     except Exception:
         return out
@@ -26,6 +83,19 @@ def get_plot_names(graph_name: str) -> list:
         except Exception:
             continue  # isolate a plot whose name can't be read
     return out
+
+
+def get_plot_names(graph_name: str) -> list:
+    """Names of the data plots on a graph's first layer, in plot order.
+
+    Acquires the layer through ``acquire_graph_layer`` — the page is activated
+    and a fresh handle taken FIRST. On a graph loaded from a ``.opju`` the
+    DataPlots collection reports zero until its page is active, so enumerating
+    without activating is exactly what returned an empty (frozen) plot list and
+    made per-curve edits silently no-op.
+    """
+    gl = acquire_graph_layer(graph_name)
+    return _plot_names_from_layer(gl)
 
 
 def _com_book_sheet_names(o, book: str) -> list:
@@ -118,13 +188,76 @@ def get_plot_info(graph_name: str) -> list:
     return infos
 
 
+def require_data_plots(graph_name: str) -> tuple[list, list]:
+    """(all plot infos, data-plot names) for a graph, RAISING if it has no
+    editable data plots once its page has been activated.
+
+    The anti-silent-no-op guard for per-curve edits: a multi-series graph
+    loaded from a ``.opju`` can report zero DataPlots (and quietly ignore every
+    style command) until its page is activated and a fresh handle taken — which
+    ``get_plot_info`` now does. If plots are STILL zero we refuse instead of
+    returning a fake success.
+    """
+    infos = get_plot_info(graph_name)
+    data_names = [p["name"] for p in infos if not p["is_error"]]
+    if not data_names:
+        msg = (
+            f"No editable data plots found on '{graph_name}' — its layer "
+            f"reports zero plots even after activating the window. This graph "
+            f"was most likely loaded from a project file (.opju) in a state "
+            f"Origin will not expose over COM. Recreate it in-session "
+            f"(create_graph / plotxy) or reopen the project fresh; refusing to "
+            f"report success on an edit that would silently do nothing."
+        )
+        raise ValueError(msg)
+    return infos, data_names
+
+
 def graph_layer_execute(graph_name: str, script: str) -> bool:
-    o = get_origin()
-    safe_graph_name = labtalk_name(graph_name, "graph_name")
-    gl = o.FindGraphLayer(f"[{safe_graph_name}]Layer1")
-    if not gl:
-        return False
+    """Run a LabTalk script against a graph's Layer1 COM object.
+
+    Routes through ``acquire_graph_layer`` so the page is activated and a
+    FRESH layer handle is taken before every call — this is what unfreezes
+    ``layer.*`` and per-plot commands on graphs loaded from a project file.
+    """
+    gl = acquire_graph_layer(graph_name)
     return gl.Execute(script)
+
+
+def read_layer_value(graph_name: str, expr: str):
+    """Read a numeric ``layer.*`` property back through a fresh layer handle.
+
+    Returns a float, or None when the read-back is unavailable (so callers do
+    not raise a false alarm). Used to confirm a mutation actually took effect.
+    """
+    var = "__mcp_rb"
+    if not graph_layer_execute(graph_name, f"{var} = {expr};"):
+        return None
+    try:
+        return float(get_lt_var(var))
+    except Exception:
+        return None
+
+
+def verify_layer_value(graph_name: str, prop: str, expected: float, label: str) -> None:
+    """Read ``prop`` back after setting it and raise if it did not change.
+
+    Turns the loaded-graph silent no-op into a loud, actionable failure. A tiny
+    relative+absolute tolerance absorbs float round-trip noise. If the property
+    can't be read back at all, this is a no-op (preconditions still guard the
+    freeze case)."""
+    got = read_layer_value(graph_name, prop)
+    if got is None:
+        return
+    tol = max(1e-6, abs(expected) * 1e-6)
+    if abs(got - expected) > tol:
+        msg = (
+            f"{label} did not take effect on '{graph_name}' (set {expected}, "
+            f"read back {got}). The layer ignored the change — the graph was "
+            f"most likely loaded from a .opju in a state Origin freezes over "
+            f"COM; recreate it in-session with create_graph / plotxy."
+        )
+        raise ValueError(msg)
 
 
 def set_legend_entries(graph_name: str, entries: list) -> None:

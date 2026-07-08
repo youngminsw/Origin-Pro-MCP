@@ -161,7 +161,8 @@ class Session:
 
     def __init__(self, session_id: str, origin_factory: OriginFactory,
                  registry: dict, get_pid: Optional[GetPid] = None,
-                 autosave_policy: Optional[AutosavePolicy] = None):
+                 autosave_policy: Optional[AutosavePolicy] = None,
+                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None):
         self.session_id = session_id
         self._factory = origin_factory
         self._registry = registry
@@ -175,6 +176,14 @@ class Session:
         self.saved_recovery_path: Optional[str] = None
         self.reaping: bool = False  # set once a reap has COMMITTED (stage 1)
         self._start_error: Optional[BaseException] = None
+        # S1 runtime modal-dialog handling: the watchdog thread (started once the
+        # PID is known) records dialogs here so the dispatch-timeout path can name
+        # the exact dialog instead of returning a bare timeout the agent
+        # misdiagnoses as a crash.
+        self._dialog_watchdog_factory = dialog_watchdog_factory
+        self._dialog_watchdog: Optional[object] = None
+        self._dialog_events: list = []
+        self._dialog_lock = threading.Lock()
         self._thread = threading.Thread(
             target=self._run, name=f"session-{session_id}", daemon=True
         )
@@ -234,6 +243,7 @@ class Session:
                 # Unknown PID -> None ("do not force-kill"), NEVER os.getpid().
                 self.pid = None
             self._ready.set()
+            self._start_dialog_watchdog()
             try:
                 while True:
                     item = self._queue.get()
@@ -253,10 +263,64 @@ class Session:
                     request_id, name, kwargs, reply_fn = item
                     reply_fn(self._dispatch(request_id, name, kwargs))
             finally:
+                self._stop_dialog_watchdog()
                 clear_session_origin()
         finally:
             if com_inited:
                 self._com_uninitialize()
+
+    # -- S1 modal-dialog watchdog ------------------------------------------- #
+
+    def _start_dialog_watchdog(self) -> None:
+        """Start the persistent per-session dialog watchdog once the PID is known.
+
+        No-op without a factory (tests/fakes that don't wire one) or an unknown
+        PID (the attached USER Origin is pid=None and must not be dialog-swept).
+        Exception-proof: a watchdog that fails to start never fails the session."""
+        if self._dialog_watchdog_factory is None or not self.pid:
+            return
+        try:
+            wd = self._dialog_watchdog_factory(self.pid, self.record_dialog_event)
+            wd.start()
+            self._dialog_watchdog = wd
+        except Exception:
+            self._dialog_watchdog = None
+
+    def _stop_dialog_watchdog(self) -> None:
+        wd = self._dialog_watchdog
+        self._dialog_watchdog = None
+        if wd is not None:
+            try:
+                wd.stop()
+            except Exception:
+                pass
+
+    def record_dialog_event(self, event: dict) -> None:
+        """Record a detected modal dialog (called from the watchdog thread)."""
+        with self._dialog_lock:
+            self._dialog_events.append(event)
+            # Bound the history so a long session with a chatty dialog source
+            # can't grow it without limit.
+            if len(self._dialog_events) > 50:
+                del self._dialog_events[:-50]
+
+    def last_dialog_event(self) -> Optional[dict]:
+        """The most recently recorded dialog event, or None."""
+        with self._dialog_lock:
+            return dict(self._dialog_events[-1]) if self._dialog_events else None
+
+    def poll_dialogs_now(self) -> Optional[dict]:
+        """Force one immediate dialog scan (used by the dispatch-timeout diagnosis
+        so it reports a dialog that appeared since the last periodic poll), then
+        return the latest recorded event. Falls back to history when no watchdog
+        is wired. Never raises."""
+        wd = self._dialog_watchdog
+        if wd is not None:
+            try:
+                wd.poll_once()
+            except Exception:
+                pass
+        return self.last_dialog_event()
 
     def _graceful_reap(self, recovery_dir: str, getter) -> None:
         """Stage 1 of a reap, ON THIS WORKER THREAD (so COM affinity holds).
@@ -444,13 +508,15 @@ class Pool:
                  start_timeout: float = 10.0,
                  autosave_policy: Optional[AutosavePolicy] = None,
                  attach_factory: Optional[OriginFactory] = None,
-                 attach_get_pid: Optional[GetPid] = None):
+                 attach_get_pid: Optional[GetPid] = None,
+                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None):
         self._factory = origin_factory
         self._registry = registry
         self._max_size = max_size
         self._get_pid = get_pid
         self._start_timeout = start_timeout
         self._autosave_policy = autosave_policy
+        self._dialog_watchdog_factory = dialog_watchdog_factory
         # ATTACH mode: at most ONE session may attach to the user's already-open
         # Origin (the shared ApplicationSI instance). A second SI attach would
         # share that one instance and collide, so only the first is honored;
@@ -494,6 +560,7 @@ class Pool:
             session = Session(
                 session_id, factory, self._registry, get_pid,
                 autosave_policy=self._autosave_policy,
+                dialog_watchdog_factory=self._dialog_watchdog_factory,
             )
             if use_attach:
                 self._attach_session_id = session_id
@@ -1032,6 +1099,7 @@ class Daemon:
               autosave_policy: Optional[AutosavePolicy] = None,
               attach_factory: Optional[OriginFactory] = None,
               attach_get_pid: Optional[GetPid] = None,
+              dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None,
               monitor_tick: float = 0.01) -> bool:
         """Acquire the singleton, sweep any orphans left by a crashed prior
         daemon, start the server/pool/watchdog/monitor, write the lockfile, and
@@ -1079,7 +1147,8 @@ class Daemon:
                           get_pid=get_pid, start_timeout=start_timeout,
                           autosave_policy=autosave_policy,
                           attach_factory=attach_factory,
-                          attach_get_pid=attach_get_pid)
+                          attach_get_pid=attach_get_pid,
+                          dialog_watchdog_factory=dialog_watchdog_factory)
         self._watchdog = Watchdog(terminate_process=self._terminate,
                                   on_reap=self._on_watchdog_reap,
                                   tick=monitor_tick, clock=self._clock)
@@ -1484,12 +1553,35 @@ class Daemon:
                             reason="dispatch", callback=self._on_dispatch_timeout)
         session.submit(request_id, name, kwargs, _reply)
 
+    def _dialog_note(self, session_id: str) -> Optional[str]:
+        """A DEFINITIVE description of the modal dialog blocking ``session_id``,
+        or None when no dialog is detected. Forces a fresh out-of-band scan (via
+        the session's watchdog) plus the recorded history, so a wedged dispatch is
+        never reported as a bare timeout the agent misdiagnoses as a crash."""
+        session = self._pool.get(session_id) if self._pool is not None else None
+        if session is None:
+            return None
+        try:
+            event = session.poll_dialogs_now()
+        except Exception:
+            event = None
+        if not event:
+            return None
+        title = event.get("title") or "(untitled)"
+        if event.get("dismissed"):
+            return (f"Origin was blocked by a modal dialog titled '{title}', which "
+                    "the daemon AUTO-DISMISSED — retry the call.")
+        return (f"Origin is blocked by a modal dialog titled '{title}' and "
+                "auto-dismiss is OFF — switch to the Origin window and "
+                "close/confirm it; the operation then finishes on its own.")
+
     def _on_dispatch_warn(self, session_id: str, pid: Optional[int]) -> None:
         """Soft dispatch-timeout handler (watchdog thread; NO kill happened — the
         deadline was armed with pid=None). Tell the client Origin looks wedged
         and to dismiss any modal dialog, then leave the session alive so the call
         recovers if the user frees Origin. The hard 'dispatch' deadline stays
         armed as the last-resort kill."""
+        note = self._dialog_note(session_id)
         with self._dispatch_lock:
             ticket = self._dispatch_tickets.get(session_id)
             if ticket is None or ticket["answered"]:
@@ -1499,17 +1591,24 @@ class Daemon:
             request_id = ticket["request_id"]
             soft = ticket.get("timeout", self._dispatch_timeout)
             grace = ticket.get("grace", 0.0)
-        self._safe_send(conn, {
-            "type": "response", "request_id": request_id, "ok": False,
-            "result": None,
-            "error": (
+        if note is not None:
+            # Definitive: the watchdog saw (and usually already closed) the exact
+            # dialog. No "most likely" hedging — name it so the agent acts right.
+            error = (f"Origin has not responded for {soft:.0f}s. {note} If Origin "
+                     f"stays stuck it is force-reset (restarted) in about "
+                     f"{grace:.0f}s and unsaved changes in this session may be lost.")
+        else:
+            error = (
                 f"Origin has not responded for {soft:.0f}s — it is most likely "
                 "showing a MODAL DIALOG (e.g. 'Get MiKTeX Path', a font or import "
                 "prompt, or an error box) that blocks all automation. Switch to the "
                 "Origin window and close/confirm any open dialog: the operation "
                 "then finishes on its own and this session keeps working. If Origin "
                 f"stays stuck it is force-reset (restarted) in about {grace:.0f}s "
-                "and unsaved changes in this session may be lost."),
+                "and unsaved changes in this session may be lost.")
+        self._safe_send(conn, {
+            "type": "response", "request_id": request_id, "ok": False,
+            "result": None, "error": error,
         })
 
     def _on_dispatch_timeout(self, session_id: str, pid: Optional[int]) -> None:
@@ -1517,6 +1616,9 @@ class Daemon:
         PID was already force-killed before this call). Discard the wedged session
         so a reconnect mints a fresh one, and reply the client ONLY if the soft
         notify has not already answered it."""
+        # Capture the dialog diagnosis BEFORE discarding the session (discard
+        # removes it from the pool, after which the watchdog history is gone).
+        note = self._dialog_note(session_id)
         with self._dispatch_lock:
             ticket = self._dispatch_tickets.pop(session_id, None)
             if ticket is None:
@@ -1532,7 +1634,13 @@ class Daemon:
             existing = self._pool.get(session_id)
             if existing is not None:
                 existing.reaping = True
-            self._pool.discard(session_id)
+                # The PID is already dead, so the wedged COM call unblocks and
+                # the worker returns to its queue: _STOP (via force_close, which
+                # never joins) lets it exit through _run's finally — stopping the
+                # session's DialogWatchdog instead of leaking it as a forever
+                # EnumWindows poller against a dead PID.
+                existing.force_close()
+            self._pool.discard(session_id, expected=existing)
         with self._seen_lock:
             self._last_seen.pop(session_id, None)
         self._last_snapshot.pop(session_id, None)
@@ -1543,12 +1651,13 @@ class Daemon:
         killed = " and its Origin was terminated" if pid is not None else (
             " but its Origin PID was unknown, so the wedged instance may persist "
             "until the next daemon restart")
+        cause = f" {note}" if note is not None else ""
         self._safe_send(conn, {
             "type": "response", "request_id": request_id, "ok": False,
             "result": None,
             "error": (f"Origin operation exceeded the {budget:.0f}s "
-                      f"dispatch timeout and was force-reset{killed}. Retry; unsaved "
-                      "changes in that session may be lost."),
+                      f"dispatch timeout and was force-reset{killed}.{cause} Retry; "
+                      "unsaved changes in that session may be lost."),
         })
 
     @staticmethod
@@ -1764,25 +1873,149 @@ def _dismiss_origin_dialogs(pid: int, find_dialogs=None, close=None) -> int:
         return 0
 
 
-def _spawn_dialog_dismisser(pid: int, duration: float = 30.0,
-                            interval: float = 1.0) -> None:
-    """Background thread: for ``duration`` s after launch, close any startup
-    dialog on Origin ``pid`` (it appears once, asynchronously, during init)."""
-    if not pid or sys.platform != "win32":
-        return
+def _window_title(hwnd) -> str:
+    """The visible title text of ``hwnd`` (Win32), or '' if it can't be read.
 
-    def _run():
-        end = time.monotonic() + duration
-        closed_any = False
-        while time.monotonic() < end:
-            if _dismiss_origin_dialogs(pid):
-                closed_any = True
-            elif closed_any:
-                return  # dismissed and nothing left — startup is past
-            time.sleep(interval)
+    LIVE-UNVERIFIED: win32gui.GetWindowText on a real Origin dialog HWND is
+    exercised only on Windows; from WSL the DialogWatchdog uses injected seams.
+    """
+    try:
+        import win32gui
 
-    threading.Thread(target=_run, name=f"dialog-dismiss-{pid}",
-                     daemon=True).start()
+        return win32gui.GetWindowText(hwnd) or ""
+    except Exception:
+        return ""
+
+
+def _dialog_autodismiss_enabled() -> bool:
+    """Whether the per-session watchdog auto-closes modal dialogs it finds.
+
+    Default ON (env ``ORIGIN_PRO_MCP_DIALOG_AUTODISMISS`` unset). Set the var to
+    0/off/false/no to only RECORD+REPORT dialogs (the agent is told the title and
+    to close it by hand) without the daemon dismissing them."""
+    val = os.environ.get("ORIGIN_PRO_MCP_DIALOG_AUTODISMISS")
+    if val is None:
+        return True
+    return val.strip().lower() not in ("0", "off", "false", "no")
+
+
+def _scan_dialogs_once(pid, seen_hwnds, find_dialogs, get_title, close,
+                       autodismiss) -> tuple:
+    """One out-of-band (COM-free) scan for modal dialogs owned by ``pid``.
+
+    Returns ``(events, current_hwnds)``. An event dict
+    ``{"time", "title", "dismissed"}`` is produced ONLY for a NEWLY-appeared
+    dialog (an hwnd not in ``seen_hwnds``) so a dialog left open under
+    autodismiss-off does not spam an event every poll. ``current_hwnds`` is the
+    full set found this scan (the caller carries it forward as the next
+    ``seen_hwnds``). Pure/injectable: all Win32 access goes through the passed
+    ``find_dialogs`` / ``get_title`` / ``close`` seams.
+    """
+    events: list = []
+    hwnds = find_dialogs(pid) or []
+    current = set(hwnds)
+    for hwnd in hwnds:
+        if hwnd in seen_hwnds:
+            # Already recorded on a prior poll; don't re-report — but the
+            # close is an async WM_CLOSE the dialog may have ignored, so a
+            # still-open dialog gets another dismiss attempt every poll.
+            if autodismiss:
+                try:
+                    close(hwnd)
+                except Exception:
+                    pass
+            continue
+        try:
+            title = get_title(hwnd) or ""
+        except Exception:
+            title = ""
+        dismissed = False
+        if autodismiss:
+            try:
+                close(hwnd)
+                dismissed = True
+            except Exception:
+                dismissed = False
+        events.append({"time": time.time(), "title": title,
+                       "dismissed": dismissed})
+    return events, current
+
+
+class DialogWatchdog:
+    """Persistent per-session modal-dialog watchdog (S1).
+
+    A ``daemon=True`` thread that, for the whole session lifetime, polls (~2s)
+    for visible modal dialogs (``#32770``) owned by the session's Origin PID —
+    entirely out-of-band via Win32, so it works even while the session's COM/STA
+    worker thread is wedged on the modal. On detection it records the dialog
+    (timestamp + title) via ``on_event`` and, unless auto-dismiss is disabled,
+    closes it. Every poll is exception-proof: a finder/title/close failure can
+    never take the thread (or the daemon) down. ``find_dialogs`` / ``get_title``
+    / ``close`` / ``autodismiss`` are injection seams for tests.
+    """
+
+    def __init__(self, pid, on_event, interval: float = 2.0,
+                 find_dialogs=None, get_title=None, close=None,
+                 autodismiss: Optional[bool] = None):
+        self._pid = pid
+        self._on_event = on_event
+        self._interval = interval
+        self._find = find_dialogs or _find_origin_dialogs
+        self._title = get_title or _window_title
+        self._close = close or _close_window
+        self._autodismiss = (_dialog_autodismiss_enabled()
+                             if autodismiss is None else autodismiss)
+        self._seen: set = set()
+        self._poll_lock = threading.Lock()  # poll_once runs on the loop thread AND
+        self._stop = threading.Event()      # synchronously from the timeout diagnosis
+        self._thread = threading.Thread(
+            target=self._run, name=f"dialog-watch-{pid}", daemon=True
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self, join_timeout: float = 2.0) -> None:
+        self._stop.set()
+        self._thread.join(timeout=join_timeout)
+
+    def poll_once(self) -> list:
+        """Run one scan, feed any new events to ``on_event``, return them.
+
+        Never raises: a Win32/finder failure yields an empty list so both the
+        poll loop and any synchronous caller (the dispatch-timeout diagnosis)
+        stay alive."""
+        try:
+            with self._poll_lock:
+                events, current = _scan_dialogs_once(
+                    self._pid, self._seen, self._find, self._title, self._close,
+                    self._autodismiss,
+                )
+                self._seen = current
+        except Exception:
+            return []
+        for ev in events:
+            try:
+                self._on_event(ev)
+            except Exception:
+                pass
+        return events
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self.poll_once()
+            self._stop.wait(self._interval)
+
+
+def _make_dialog_watchdog(pid, on_event) -> DialogWatchdog:
+    """Production per-session watchdog factory (real Win32 seams).
+
+    LIVE-UNVERIFIED: the full loop against a real Origin modal (#32770 owned by
+    the spawned PID: detect -> GetWindowText -> WM_CLOSE) runs only on Windows.
+    Every piece is unit-tested here via injected fakes; the Win32 wiring itself
+    needs a live-Origin smoke check (see the report's verification checklist).
+    """
+    return DialogWatchdog(pid, on_event)
 
 
 def _real_origin_factory():
@@ -1815,9 +2048,10 @@ def _real_origin_factory():
         instance.Visible = _origin_visible()
     except Exception:
         pass
-    # Auto-dismiss the modal "New Workbook" startup dialog (if the user's Origin
-    # is set to show it) so it can't block automation.
-    _spawn_dialog_dismisser(pid)
+    # The modal "New Workbook" startup dialog (if the user's Origin is set to
+    # show it), and any dialog raised later mid-session, is handled by the
+    # persistent per-session DialogWatchdog the Session starts once its PID is
+    # known — so nothing is spawned here.
     _real_pid_tls.pid = pid
     # Persist the PID so a later daemon can reclaim this Origin if it is ever
     # orphaned (crash / spurious relaunch / Exit that didn't take).
@@ -1987,6 +2221,12 @@ def main(argv: Optional[list] = None) -> int:
     # (Origin.ApplicationSI). Always available; a client opts in per session via
     # the request frame's `attach` flag (ORIGIN_PRO_MCP_ATTACH on the shim side).
     attach_factory = resolve_attach_factory()
+    # S1: wire the persistent per-session modal-dialog watchdog only for the real
+    # DispatchEx factory (it needs Win32 + a real spawned Origin PID). Fakes/tests
+    # inject their own factory via the constructor chain.
+    dialog_watchdog_factory = (
+        _make_dialog_watchdog if factory is _real_origin_factory else None
+    )
     daemon = Daemon()
     if not daemon.start(origin_factory=factory, get_pid=get_pid,
                         lockfile_path=lockfile_path,
@@ -1997,7 +2237,8 @@ def main(argv: Optional[list] = None) -> int:
                         autosave_interval=autosave_interval,
                         autosave_policy=autosave_policy,
                         attach_factory=attach_factory,
-                        attach_get_pid=_attach_get_pid):
+                        attach_get_pid=_attach_get_pid,
+                        dialog_watchdog_factory=dialog_watchdog_factory):
         return 0  # another daemon owns the singleton; the loser exits cleanly
 
     stop = threading.Event()

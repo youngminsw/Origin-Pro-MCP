@@ -76,6 +76,77 @@ def test_import_data_excel_returns_json_name(fake_origin, tmp_path):
     assert out["file"] == str(f)
 
 
+def test_import_data_csv_sparklines_default_deletes_new_graph_windows(fake_origin, tmp_path, monkeypatch):
+    from origin_pro_mcp.tools.worksheet import import_data
+    from tests.fakes import FakeGraph
+
+    f = tmp_path / "data.csv"
+    f.write_text("1,2\n")
+    fake_origin.LTStr = lambda name: "Book1" if name == "page.name$" else ""
+
+    original_execute = fake_origin.Execute
+
+    def fake_execute(script):
+        if script.startswith("impasc"):
+            fake_origin.graphs.append(FakeGraph("Spark1"))
+            fake_origin.graphs.append(FakeGraph("Spark2"))
+        return original_execute(script)
+
+    monkeypatch.setattr(fake_origin, "Execute", fake_execute)
+
+    out = json.loads(import_data(str(f)))
+    assert out["sparklines_suppressed"] is True
+    assert out["sparklines_deleted"] == 2
+    assert "win -cd Spark1;" in fake_origin.executed
+    assert "win -cd Spark2;" in fake_origin.executed
+    # Pre-existing windows must never be touched.
+    assert not any(s == "win -cd Graph1;" for s in fake_origin.executed)
+
+
+def test_import_data_csv_sparklines_true_skips_cleanup(fake_origin, tmp_path, monkeypatch):
+    from origin_pro_mcp.tools.worksheet import import_data
+    from tests.fakes import FakeGraph
+
+    f = tmp_path / "data.csv"
+    f.write_text("1,2\n")
+    fake_origin.LTStr = lambda name: "Book1" if name == "page.name$" else ""
+
+    original_execute = fake_origin.Execute
+
+    def fake_execute(script):
+        if script.startswith("impasc"):
+            fake_origin.graphs.append(FakeGraph("Spark1"))
+        return original_execute(script)
+
+    monkeypatch.setattr(fake_origin, "Execute", fake_execute)
+
+    out = json.loads(import_data(str(f), sparklines=True))
+    assert out["sparklines_suppressed"] is False
+    assert out["sparklines_deleted"] == 0
+    assert not any(s.startswith("win -cd") for s in fake_origin.executed)
+
+
+def test_import_data_csv_sparkline_option_unsupported_falls_back(fake_origin, tmp_path, monkeypatch):
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    f = tmp_path / "data.csv"
+    f.write_text("1,2\n")
+    fake_origin.LTStr = lambda name: "Book1" if name == "page.name$" else ""
+
+    def fake_execute(script):
+        fake_origin.executed.append(script)
+        return "Sparklines" not in script
+
+    monkeypatch.setattr(fake_origin, "Execute", fake_execute)
+
+    out = json.loads(import_data(str(f)))
+    assert out["sparklines_suppressed"] is False
+    impasc_calls = [s for s in fake_origin.executed if s.startswith("impasc")]
+    assert len(impasc_calls) == 2
+    assert "Sparklines" in impasc_calls[0]
+    assert "Sparklines" not in impasc_calls[1]
+
+
 def test_export_graph_sized_unknown_graph(fake_origin, tmp_path):
     from origin_pro_mcp.tools.graph import export_graph
 

@@ -546,3 +546,292 @@ def test_normal_result_passes_through_unflagged():
     assert resp["ok"] is True
     assert resp["result"] == "[]"
     assert resp["error"] is None
+
+
+# --------------------------------------------------------------------------- #
+# S1: persistent per-session modal-dialog watchdog                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_dialog_autodismiss_enabled_env_toggle(monkeypatch):
+    from origin_pro_mcp.daemon import _dialog_autodismiss_enabled
+
+    monkeypatch.delenv("ORIGIN_PRO_MCP_DIALOG_AUTODISMISS", raising=False)
+    assert _dialog_autodismiss_enabled() is True  # default ON
+    for off in ("0", "off", "false", "no", "OFF", "False"):
+        monkeypatch.setenv("ORIGIN_PRO_MCP_DIALOG_AUTODISMISS", off)
+        assert _dialog_autodismiss_enabled() is False
+    for on in ("1", "on", "true", "yes", "anything-else"):
+        monkeypatch.setenv("ORIGIN_PRO_MCP_DIALOG_AUTODISMISS", on)
+        assert _dialog_autodismiss_enabled() is True
+
+
+def test_scan_dialogs_once_detects_titles_and_dismisses():
+    from origin_pro_mcp.daemon import _scan_dialogs_once
+
+    titles = {11: "Get MiKTeX Path", 12: "Reminder Message"}
+    closed: list = []
+    events, current = _scan_dialogs_once(
+        pid=4242, seen_hwnds=set(),
+        find_dialogs=lambda pid: [11, 12],
+        get_title=lambda h: titles[h],
+        close=closed.append,
+        autodismiss=True,
+    )
+    assert {e["title"] for e in events} == {"Get MiKTeX Path", "Reminder Message"}
+    assert all(e["dismissed"] for e in events)
+    assert all("time" in e for e in events)
+    assert sorted(closed) == [11, 12]  # both auto-closed
+    assert current == {11, 12}
+
+
+def test_scan_dialogs_once_dedups_persisting_dialog():
+    """A dialog left open (autodismiss off) is reported ONCE, not every poll."""
+    from origin_pro_mcp.daemon import _scan_dialogs_once
+
+    find = lambda pid: [11]
+    seen: set = set()
+    events, seen = _scan_dialogs_once(
+        4242, seen, find, lambda h: "Error", close=lambda h: None,
+        autodismiss=False,
+    )
+    assert len(events) == 1 and events[0]["dismissed"] is False
+    # Next poll with the SAME hwnd still present -> no new event.
+    events2, seen = _scan_dialogs_once(
+        4242, seen, find, lambda h: "Error", close=lambda h: None,
+        autodismiss=False,
+    )
+    assert events2 == []
+    assert seen == {11}
+
+
+def test_dialog_watchdog_poll_records_via_callback_and_survives_finder_error():
+    from origin_pro_mcp.daemon import DialogWatchdog
+
+    recorded: list = []
+    closed: list = []
+    wd = DialogWatchdog(
+        pid=4242, on_event=recorded.append, interval=999,
+        find_dialogs=lambda pid: [7], get_title=lambda h: "Font Missing",
+        close=closed.append, autodismiss=True,
+    )
+    got = wd.poll_once()
+    assert len(got) == 1 and got[0]["title"] == "Font Missing"
+    assert recorded and recorded[0]["title"] == "Font Missing"
+    assert closed == [7]
+
+    # A finder that raises must not propagate (thread + callers stay alive).
+    def boom(pid):
+        raise RuntimeError("EnumWindows failed")
+
+    wd2 = DialogWatchdog(pid=1, on_event=recorded.append, find_dialogs=boom)
+    assert wd2.poll_once() == []  # swallowed, returns empty
+
+
+def test_dialog_watchdog_thread_polls_then_stops():
+    """The real thread loop detects a dialog and stops cleanly on stop()."""
+    from origin_pro_mcp.daemon import DialogWatchdog
+
+    recorded: list = []
+    closed: list = []
+    wd = DialogWatchdog(
+        pid=4242, on_event=recorded.append, interval=0.01,
+        find_dialogs=lambda pid: [7], get_title=lambda h: "Blocking",
+        close=closed.append, autodismiss=True,
+    )
+    wd.start()
+    assert _spin(lambda: bool(recorded), timeout=2.0)
+    wd.stop()
+    assert recorded[0]["title"] == "Blocking" and recorded[0]["dismissed"] is True
+    assert 7 in closed
+
+
+class _FakeDialogWatchdog:
+    """Records a fixed dialog on first poll; tracks start/stop. No real thread."""
+
+    def __init__(self, pid, on_event, title="Get MiKTeX Path", dismissed=True):
+        self._on_event = on_event
+        self._title = title
+        self._dismissed = dismissed
+        self.started = False
+        self.stopped = False
+        self._fired = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self, join_timeout=2.0):
+        self.stopped = True
+
+    def poll_once(self):
+        if self._fired:
+            return []
+        self._fired = True
+        ev = {"time": 1.0, "title": self._title, "dismissed": self._dismissed}
+        self._on_event(ev)
+        return [ev]
+
+
+def test_session_starts_and_stops_dialog_watchdog():
+    """A Session with a known PID starts its watchdog, records dialogs it reports,
+    and stops it on teardown."""
+    from origin_pro_mcp.daemon import Session
+
+    made: list = []
+
+    def wd_factory(pid, on_event):
+        wd = _FakeDialogWatchdog(pid, on_event)
+        made.append(wd)
+        return wd
+
+    session = Session("s-dlg", FakeFactory(), {"list_worksheets": lambda: "[]"},
+                      get_pid=FakeFactory.get_pid,
+                      dialog_watchdog_factory=wd_factory)
+    session.start()
+    try:
+        assert len(made) == 1 and made[0].started is True
+        # Force a poll (as the dispatch-timeout diagnosis would) -> event recorded.
+        event = session.poll_dialogs_now()
+        assert event is not None and event["title"] == "Get MiKTeX Path"
+        assert session.last_dialog_event()["dismissed"] is True
+    finally:
+        session.stop()
+    assert made[0].stopped is True
+
+
+def test_session_skips_dialog_watchdog_without_pid():
+    """The attached user Origin has pid=None -> no watchdog is started (its
+    dialogs must never be swept by the daemon)."""
+    from origin_pro_mcp.daemon import Session
+
+    made: list = []
+    session = Session("s-nopid", FakeFactory(), {"list_worksheets": lambda: "[]"},
+                      get_pid=lambda i: None,
+                      dialog_watchdog_factory=lambda pid, ev: made.append(1))
+    session.start()
+    try:
+        assert made == []  # never constructed
+        assert session.poll_dialogs_now() is None
+    finally:
+        session.stop()
+
+
+def test_record_dialog_event_history_is_bounded():
+    from origin_pro_mcp.daemon import Session
+
+    session = Session("s-cap", FakeFactory(), {})
+    for i in range(120):
+        session.record_dialog_event({"time": i, "title": f"d{i}", "dismissed": True})
+    with session._dialog_lock:
+        assert len(session._dialog_events) == 50
+    assert session.last_dialog_event()["title"] == "d119"
+
+
+def test_dialog_note_definitive_messages():
+    """_dialog_note names the dialog: auto-dismissed vs. off-and-open vs. none."""
+    daemon = Daemon()
+
+    class _PoolWith:
+        def __init__(self, session):
+            self._s = session
+
+        def get(self, sid):
+            return self._s
+
+    class _Sess:
+        def __init__(self, event):
+            self._event = event
+
+        def poll_dialogs_now(self):
+            return self._event
+
+    daemon._pool = _PoolWith(_Sess({"title": "Get MiKTeX Path", "dismissed": True}))
+    note = daemon._dialog_note("A")
+    assert "Get MiKTeX Path" in note and "AUTO-DISMISSED" in note
+
+    daemon._pool = _PoolWith(_Sess({"title": "Error Box", "dismissed": False}))
+    note = daemon._dialog_note("A")
+    assert "Error Box" in note and "auto-dismiss is OFF" in note
+
+    daemon._pool = _PoolWith(_Sess(None))
+    assert daemon._dialog_note("A") is None
+
+
+# -- end-to-end: the soft dispatch-timeout warning NAMES the modal dialog ----- #
+
+
+class _BlockingClock:
+    def __init__(self, start=0.0):
+        self._t = start
+        self._lock = threading.Lock()
+
+    def __call__(self):
+        with self._lock:
+            return self._t
+
+    def advance(self, dt):
+        with self._lock:
+            self._t += dt
+
+
+class _BlockingExecuteOrigin(FakeOrigin):
+    def __init__(self):
+        super().__init__()
+        self.unblock = threading.Event()
+        self.execute_entered = threading.Event()
+
+    def Execute(self, script):
+        if "HANG" in script:
+            self.execute_entered.set()
+            self.unblock.wait(10)
+            return True
+        return super().Execute(script)
+
+
+def test_soft_timeout_warning_names_the_modal_dialog(tmp_path):
+    """The anti-misdiagnosis fix: when a session wedges AND its watchdog has seen a
+    modal dialog, the soft-timeout reply names that dialog definitively (with the
+    title) instead of the generic 'most likely a modal dialog' hedge."""
+    clock = _BlockingClock()
+    origins: list = []
+    killed: list = []
+
+    def factory():
+        o = _BlockingExecuteOrigin()
+        o.fake_pid = 77001 + len(origins)
+        origins.append(o)
+        return o
+
+    def wd_factory(pid, on_event):
+        return _FakeDialogWatchdog(pid, on_event, title="Get MiKTeX Path")
+
+    daemon = Daemon()
+    ok = daemon.start(
+        origin_factory=factory, registry=_real_registry(), max_size=3,
+        host="127.0.0.1", port=0, get_pid=lambda i: i.fake_pid,
+        terminate_process=lambda pid: killed.append(pid), clock=clock,
+        dispatch_timeout=5.0, dispatch_kill_grace=10.0, monitor_tick=0.005,
+        reconnect_grace=0.0, lockfile_path=str(tmp_path / "daemon.json"),
+        dialog_watchdog_factory=wd_factory,
+    )
+    assert ok
+    conns: list = []
+    try:
+        conn = transport.connect(daemon.host, daemon.port, daemon.token,
+                                 session_id="A")
+        conn.settimeout(5.0)
+        conns.append(conn)
+        conn.send_frame({"type": "request", "request_id": "r1",
+                         "name": "run_labtalk", "kwargs": {"script": "HANG;"}})
+        assert _spin(lambda: origins and origins[0].execute_entered.is_set())
+        clock.advance(6.0)  # trip the soft budget (before the hard kill)
+        resp = conn.recv_frame()
+        assert resp["ok"] is False
+        assert "Get MiKTeX Path" in resp["error"]      # NAMED, not hedged
+        assert "AUTO-DISMISSED" in resp["error"]
+        assert killed == []                            # only warned, not killed
+        origins[0].unblock.set()                       # let the wedge clear
+    finally:
+        for c in conns:
+            c.close()
+        daemon.stop()

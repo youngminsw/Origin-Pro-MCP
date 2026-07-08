@@ -13,6 +13,7 @@ from .style_helpers import (
     get_plot_info,
     graph_layer_execute,
     place_legend_avoiding_data,
+    require_data_plots,
     set_legend_entries,
 )
 
@@ -172,8 +173,11 @@ def set_plot_style(
     import time
     safe_graph_name = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph_name)
-    infos = get_plot_info(safe_graph_name)  # all plots (incl. error bars), in order
-    data_plots = [p["name"] for p in infos if not p["is_error"]]
+    # require_data_plots activates the page and takes a fresh handle first, then
+    # RAISES an actionable error if the layer still exposes no data plots (the
+    # loaded-from-.opju freeze) — so this never silently no-ops on a graph whose
+    # plots Origin won't reveal over COM.
+    infos, data_plots = require_data_plots(safe_graph_name)
 
     idx = plot_index - 1
     if idx < 0 or idx >= len(data_plots):
@@ -286,10 +290,9 @@ def ungroup_plots(graph_name: str, plot_type: str = "line") -> str:
     require_graph(safe_graph)
     codes = {"line": 200, "scatter": 201, "line+symbol": 202}
     ptype = codes[labtalk_choice(plot_type, codes, "plot_type")]
-    infos = get_plot_info(safe_graph)
-    data_names = [p["name"] for p in infos if not p["is_error"]]
-    if not data_names:
-        return f"No data plots to ungroup on Layer1 of {safe_graph}."
+    # Activates + fresh handle, then RAISES if the layer exposes no plots (the
+    # loaded-graph freeze) rather than reporting a no-op ungroup as success.
+    infos, data_names = require_data_plots(safe_graph)
     has_error = any(p["is_error"] for p in infos)
     # Remove every plot, then re-plot each DATA dataset on its own. Run on the
     # Layer1 COM object (gl.Execute) so it works without an active window (win -a
@@ -464,6 +467,19 @@ def apply_publication_style(
     placement = place_legend_avoiding_data(safe_graph_name, safe_legend_position)
 
     moved_out = " — moved outside the frame to avoid the data" if placement.startswith("outside") else ""
+    if data_index == 0:
+        # Axes/frame/labels above still applied, but no data plot was found to
+        # style — do not let that read as full success. On a graph loaded from
+        # a .opju whose layer stays frozen even after activation, per-curve
+        # styling is impossible; say so instead of implying the curves were
+        # styled.
+        return (
+            f"Publication style applied to {safe_graph_name}: axes, frame and "
+            f"labels set, but NO data plots were found to style. If this graph "
+            f"was loaded from a project file (.opju) and its curves look "
+            f"unstyled, Origin is freezing its plot list over COM — recreate "
+            f"the graph in-session (create_graph / plotxy)."
+        )
     grouping_note = ""
     if data_index > 1:
         # Can't reliably read Origin's group state over COM on this build, so

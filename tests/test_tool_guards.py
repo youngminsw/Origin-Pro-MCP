@@ -50,6 +50,21 @@ def test_windows_path_converts_wsl_style():
     assert windows_path("C:\\Users\\me\\fig.png", "p") == "C:\\Users\\me\\fig.png"
 
 
+def test_windows_path_rejects_bare_posix_on_windows(monkeypatch):
+    # On the real (Windows) daemon a bare POSIX path resolves against the
+    # current drive (C:\tmp\...) and would report success at a path the
+    # WSL-side agent can never see. It must be rejected upfront there.
+    import sys
+
+    from origin_pro_mcp.labtalk_safe import windows_path
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    with pytest.raises(ValueError, match="Windows process"):
+        windows_path("/tmp/fig.png", "p")
+    # /mnt/<drive>/ paths keep translating fine on Windows too.
+    assert windows_path("/mnt/d/out/fig.png", "p") == "D:\\out\\fig.png"
+
+
 def test_get_worksheet_data_handles_hresult_return(fake_origin):
     from origin_pro_mcp.tools.worksheet import get_worksheet_data
 

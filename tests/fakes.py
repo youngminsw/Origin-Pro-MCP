@@ -6,6 +6,8 @@ instances on separate worker threads. Keeping the fakes here (instead of inside
 ``conftest``) lets every test module import the exact same COM surface.
 """
 
+import re
+
 
 class FakePages:
     def __init__(self, pages):
@@ -57,20 +59,78 @@ class FakePlot:
         self.activated = True
 
 
+# Match `layer.<x|y>.<from|to> = <number>` writes and `__var = layer.<x|y>.<from|to>`
+# reads so the fake can model the loaded-graph freeze (writes ignored) and the
+# read-back verification path (verify_layer_value).
+_LAYER_WRITE_RE = re.compile(r"layer\.([xy])\.(from|to)\s*=\s*(-?[0-9.eE+]+)")
+_LAYER_READ_RE = re.compile(r"^\s*(__\w+)\s*=\s*layer\.([xy])\.(from|to)\s*;?\s*$")
+
+
 class FakeLayer:
-    def __init__(self, plot_names):
-        self.DataPlots = FakePages([FakePlot(n) for n in plot_names])
+    """A graph layer COM double.
+
+    ``DataPlots`` is computed from the parent graph's *visible* plots, so a
+    graph flagged ``loaded`` reports zero plots until its page is activated and
+    ``frozen`` reports zero forever — modelling the .opju freeze. ``Execute``
+    delegates recording and result to the parent FakeOrigin (so tests can still
+    assert on ``fake_origin.executed`` and inject failures via
+    ``execute_results``) and models ``layer.<axis>.from/to`` writes/reads for
+    the read-back verification path.
+    """
+
+    def __init__(self, graph, origin=None):
+        self._graph = graph
+        self._origin = origin
         self.executed = []
+        self._vals = {}
+
+    @property
+    def DataPlots(self):
+        names = self._graph.visible_plot_names() if self._graph is not None else []
+        return FakePages([FakePlot(n) for n in names])
 
     def Execute(self, script):
         self.executed.append(script)
+        o = self._origin
+        read = _LAYER_READ_RE.match(script)
+        if read is not None and o is not None:
+            var, axis, bound = read.group(1), read.group(2), read.group(3)
+            o.lt_vars[var] = self._vals.get((axis, bound), 0.0)
+        else:
+            frozen = self._graph is not None and self._graph.frozen
+            for w in _LAYER_WRITE_RE.finditer(script):
+                if not frozen:  # a frozen layer silently ignores the write
+                    self._vals[(w.group(1), w.group(2))] = float(w.group(3))
+        if o is None:
+            return True
+        o.executed.append(script)
+        for prefix, result in o.execute_results.items():
+            if script.startswith(prefix):
+                return result
         return True
 
 
 class FakeGraph:
-    def __init__(self, name, plot_names=()):
+    def __init__(self, name, plot_names=(), *, loaded=False, frozen=False):
         self.Name = name
         self.plot_names = list(plot_names)
+        # loaded: DataPlots empty until the page is activated (win -a).
+        # frozen: DataPlots empty even after activation (unrecoverable freeze).
+        self.loaded = loaded
+        self.frozen = frozen
+        self.activated = False
+
+    def visible_plot_names(self):
+        if self.frozen:
+            return []
+        if self.loaded and not self.activated:
+            return []
+        return self.plot_names
+
+    @property
+    def Layers(self):
+        # Fallback acquisition route (_find_layer_com via GraphPages).
+        return FakePages([FakeLayer(self, None)])
 
 
 class FakeMatrix:
@@ -94,6 +154,9 @@ class FakeOrigin:
         self.matrices = []
         self.matrix_data = {}
         self.lt_vars = {}
+        # When True, FindGraphLayer returns None so acquisition must use the
+        # GraphPages fallback route (exercises _find_layer_com's second path).
+        self.find_graph_layer_returns_none = False
 
     @property
     def WorksheetPages(self):
@@ -109,10 +172,22 @@ class FakeOrigin:
 
     def Execute(self, script):
         self.executed.append(script)
+        self._maybe_activate(script)
         for prefix, result in self.execute_results.items():
             if script.startswith(prefix):
                 return result
         return True
+
+    def _maybe_activate(self, script):
+        # Model `win -a <name>` activating a graph page: a graph flagged
+        # ``loaded`` only reveals its DataPlots once its page is active.
+        m = re.match(r"\s*win\s+-a\s+([A-Za-z_]\w*)", script)
+        if m is None:
+            return
+        name = m.group(1)
+        for g in self.graphs:
+            if g.Name == name:
+                g.activated = True
 
     def FindWorksheet(self, target):
         for book in self.books:
@@ -123,12 +198,14 @@ class FakeOrigin:
         return None
 
     def FindGraphLayer(self, target):
+        if self.find_graph_layer_returns_none:
+            return None
         cache = self.__dict__.setdefault("_graph_layers", {})
         if target in cache:
             return cache[target]
         for graph in self.graphs:
             if target == f"[{graph.Name}]Layer1":
-                cache[target] = FakeLayer(graph.plot_names)
+                cache[target] = FakeLayer(graph, self)
                 return cache[target]
         return None
 

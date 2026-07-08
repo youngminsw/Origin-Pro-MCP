@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from origin_pro_mcp.origin_connection import execute_labtalk, get_lt_var, get_lt_str
@@ -82,6 +84,84 @@ def test_run_labtalk_reports_errors_from_origin(fake_origin):
     result = run_labtalk("boom;")
     assert fake_origin.executed == ["boom;"]
     assert "with errors" in result
+    # Single-statement failure: no statement-level retry.
+    assert "Statement-level retry" not in result
+
+
+# --- run_labtalk statement-level retry on whole-script failure (S5) ---
+
+
+def test_run_labtalk_statement_retry_names_the_failing_statement(fake_origin, monkeypatch):
+    script = 'layer.x.from=1; layer.x.to=5; yl.text$="";'
+
+    def fake_execute(s):
+        fake_origin.executed.append(s)
+        if s == script:
+            return False
+        return "yl.text$" not in s
+
+    monkeypatch.setattr(fake_origin, "Execute", fake_execute)
+    result = run_labtalk(script)
+    assert "with errors" in result
+    assert "Statement-level retry" in result
+    assert "1 OK `layer.x.from=1;`" in result
+    assert "2 OK `layer.x.to=5;`" in result
+    assert '3 FAILED `yl.text$="";`' in result
+    # The whole script was tried first, then each statement individually.
+    assert fake_origin.executed == [
+        script,
+        "layer.x.from=1;",
+        " layer.x.to=5;",
+        ' yl.text$="";',
+    ]
+
+
+def test_run_labtalk_statement_retry_capture_adds_json_field(fake_origin, monkeypatch):
+    script = "a=1; b=2;"
+
+    def fake_execute(s):
+        fake_origin.executed.append(s)
+        return s != script
+
+    monkeypatch.setattr(fake_origin, "Execute", fake_execute)
+    payload = json.loads(run_labtalk(script, capture=["a"]))
+    assert payload["status"] == "error"
+    assert payload["statement_results"] == [
+        {"index": 1, "status": "OK", "statement": "a=1;"},
+        {"index": 2, "status": "OK", "statement": "b=2;"},
+    ]
+
+
+def test_run_labtalk_statement_split_respects_braces_and_strings(fake_origin, monkeypatch):
+    # The `;`s inside the `{}` block and inside the string literal must NOT
+    # be split points — only the three top-level `;`s are.
+    script = 'a=1; if(x>0){y=2;z=3;}; w="a;b";'
+
+    def fake_execute(s):
+        fake_origin.executed.append(s)
+        return s != script
+
+    monkeypatch.setattr(fake_origin, "Execute", fake_execute)
+    run_labtalk(script)
+    assert fake_origin.executed == [
+        script,
+        "a=1;",
+        " if(x>0){y=2;z=3;};",
+        ' w="a;b";',
+    ]
+
+
+def test_run_labtalk_single_statement_failure_no_retry(fake_origin, monkeypatch):
+    script = "boom;"
+
+    def fake_execute(s):
+        fake_origin.executed.append(s)
+        return False
+
+    monkeypatch.setattr(fake_origin, "Execute", fake_execute)
+    result = run_labtalk(script)
+    assert fake_origin.executed == [script]  # no per-statement retry calls
+    assert "Statement-level retry" not in result
 
 
 def test_run_labtalk_default_confirm_is_false():

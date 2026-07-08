@@ -22,6 +22,7 @@ from ..labtalk_safe import (
     positive_int,
     windows_path,
 )
+from .style_helpers import graph_layer_execute, verify_layer_value
 
 # Plot type IDs verified against OriginLab's "Plot Type IDs" reference and
 # tested live on Origin Pro 2020. The earlier values for area/bar/box/
@@ -310,7 +311,9 @@ def remove_plot(graph_name: str, plot_index: int = 1) -> str:
     # `layer -e <dataset>` removes the dataset from the layer; `layer -ie`
     # then purges the now-unused style holder (which is what leaves a "dead
     # guide" legend entry behind). `layer -d` would delete the whole LAYER.
-    if not execute_labtalk(f"win -a {safe_graph}; layer -e {pname}; layer -ie;"):
+    # Run on a FRESH, activated layer handle (graph_layer_execute) so it works
+    # on graphs loaded from a .opju, not only in-session ones.
+    if not graph_layer_execute(safe_graph, f"layer -e {pname}; layer -ie;"):
         msg = f"Origin could not remove plot {plot_index} ({pname}) from {safe_graph}."
         raise ValueError(msg)
     return f"Removed data plot {plot_index} ({pname}) from {safe_graph}."
@@ -488,23 +491,24 @@ def _set_axis_range_impl(
         Success message
     """
     safe_graph_name = labtalk_name(graph_name, "graph_name")
-    activate_window(safe_graph_name, "graph_name")
-    if x_min is not None:
-        if not execute_labtalk(f"layer.x.from = {x_min};"):
-            msg = f"Could not set x-axis minimum on {safe_graph_name}."
+    require_graph(safe_graph_name)
+    # Route each bound through the fresh, activated layer handle
+    # (graph_layer_execute), then READ IT BACK: a graph loaded from a .opju used
+    # to accept `layer.y.from = ...` and silently ignore it while returning
+    # success. verify_layer_value turns that no-op into a loud, actionable error.
+    for bound, value, label in (
+        ("x.from", x_min, "x-axis minimum"),
+        ("x.to", x_max, "x-axis maximum"),
+        ("y.from", y_min, "y-axis minimum"),
+        ("y.to", y_max, "y-axis maximum"),
+    ):
+        if value is None:
+            continue
+        prop = f"layer.{bound}"
+        if not graph_layer_execute(safe_graph_name, f"{prop} = {value};"):
+            msg = f"Could not set {label} on {safe_graph_name}."
             raise ValueError(msg)
-    if x_max is not None:
-        if not execute_labtalk(f"layer.x.to = {x_max};"):
-            msg = f"Could not set x-axis maximum on {safe_graph_name}."
-            raise ValueError(msg)
-    if y_min is not None:
-        if not execute_labtalk(f"layer.y.from = {y_min};"):
-            msg = f"Could not set y-axis minimum on {safe_graph_name}."
-            raise ValueError(msg)
-    if y_max is not None:
-        if not execute_labtalk(f"layer.y.to = {y_max};"):
-            msg = f"Could not set y-axis maximum on {safe_graph_name}."
-            raise ValueError(msg)
+        verify_layer_value(safe_graph_name, prop, float(value), label)
     return f"Set axis range for {safe_graph_name}"
 
 def _export_graph_impl(
@@ -583,7 +587,9 @@ def _rescale_axis_to_data(graph_name: str, axis: str, is_log: bool) -> bool:
     lo, hi = min(vals), max(vals)
     if lo == hi:
         return False
-    return bool(execute_labtalk(f"layer.{axis}.from = {lo}; layer.{axis}.to = {hi};"))
+    return bool(graph_layer_execute(
+        graph_name, f"layer.{axis}.from = {lo}; layer.{axis}.to = {hi};"
+    ))
 
 
 def _set_axis_scale_impl(
@@ -607,8 +613,9 @@ def _set_axis_scale_impl(
     safe_axis = labtalk_choice(axis.lower(), {"x", "y"}, "axis")
     safe_scale = labtalk_choice(scale.lower(), _AXIS_SCALES, "scale")
     require_graph(safe_graph)
-    activate_window(safe_graph, "graph_name")
-    if not execute_labtalk(f"layer.{safe_axis}.type = {_AXIS_SCALES[safe_scale]};"):
+    # Fresh, activated layer handle so the scale change also lands on graphs
+    # loaded from a .opju (where a global `layer.*` after `win -a` froze).
+    if not graph_layer_execute(safe_graph, f"layer.{safe_axis}.type = {_AXIS_SCALES[safe_scale]};"):
         msg = f"Could not set {safe_axis} axis of {safe_graph} to {safe_scale}."
         raise ValueError(msg)
     rescaled = ""
@@ -634,9 +641,9 @@ def _set_axis_frame_impl(graph_name: str, frame: str = "closed") -> str:
     safe_graph = labtalk_name(graph_name, "graph_name")
     safe_frame = labtalk_choice(frame.lower(), _FRAME_MODES, "frame")
     require_graph(safe_graph)
-    activate_window(safe_graph, "graph_name")
     opposite = 1 if safe_frame == "closed" else 0
-    if not execute_labtalk(f"layer.x.opposite = {opposite}; layer.y.opposite = {opposite};"):
+    # Fresh, activated layer handle so the frame toggle also lands on loaded graphs.
+    if not graph_layer_execute(safe_graph, f"layer.x.opposite = {opposite}; layer.y.opposite = {opposite};"):
         msg = f"Could not set the frame of {safe_graph} to {safe_frame}."
         raise ValueError(msg)
     return f"Set frame of {safe_graph} to {safe_frame}"

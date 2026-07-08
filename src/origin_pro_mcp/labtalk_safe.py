@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Iterable
 from typing import Final
 
@@ -119,6 +120,16 @@ def windows_path(value: str, field: str) -> str:
         drive = match.group(1).upper()
         rest = (match.group(2) or "/").replace("/", "\\")
         path = f"{drive}:{rest}"
+    if path.startswith("/") and sys.platform == "win32":
+        # On the Windows daemon a POSIX path like /tmp/x silently resolves
+        # against the current drive (C:\tmp\x): Origin would "successfully"
+        # write somewhere the WSL-side agent can never see. Reject upfront.
+        msg = (
+            f"{field} is a Linux/WSL path ({path}) that Origin — a Windows "
+            "process — cannot access. Use a Windows path (C:\\...) or a "
+            "/mnt/<drive>/... path."
+        )
+        raise ValueError(msg)
     return path
 
 
@@ -233,6 +244,39 @@ def classify_labtalk_script(script: str) -> tuple[bool, bool, str]:
     if best_start is None:
         return (True, False, "")
     return (True, True, best_label)
+
+
+def split_labtalk_statements(script: str) -> list[str]:
+    """Split a LabTalk script into top-level statements on `;`.
+
+    A `;` inside a string literal, a `//`/`/* */` comment, or a `{...}` block
+    is NOT a split point — brace depth and string/comment state are tracked
+    via the same scan :func:`_strip_strings_and_comments` uses, so this stays
+    in sync with the confirm-gate's tokenization instead of a naive
+    ``script.split(';')``.
+
+    Returns the original (unstripped) substrings, each including its
+    trailing `;` where present. Whitespace-only fragments are dropped, so a
+    script with no real statements (or a single trailing `;`) yields at most
+    one entry.
+    """
+    cleaned = _strip_strings_and_comments(script)
+    statements: list[str] = []
+    start = 0
+    depth = 0
+    for i, ch in enumerate(cleaned):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+        elif ch == ";" and depth == 0:
+            statements.append(script[start:i + 1])
+            start = i + 1
+    tail = script[start:]
+    if tail.strip():
+        statements.append(tail)
+    return [s for s in statements if s.strip()]
 
 
 def safe_labtalk_script(value: str) -> str:

@@ -2,7 +2,7 @@ import json
 
 from ..app import mcp
 from ..origin_connection import execute_labtalk, get_lt_var, get_lt_str
-from ..labtalk_safe import labtalk_variable, classify_labtalk_script
+from ..labtalk_safe import labtalk_variable, classify_labtalk_script, split_labtalk_statements
 
 @mcp.tool()
 def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = None,
@@ -28,6 +28,22 @@ def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = 
     The variables' values are read back after the script runs and returned as
     JSON. Use a `$` suffix for string variables (e.g. `capture=["name$"]`).
 
+    Statement-level retry on failure: Origin can fail a whole multi-statement
+    script (e.g. 3+ `layer.*` statements) with "Executed with errors" while
+    applying nothing, and give no indication which statement was the
+    problem. When the whole-script Execute fails and the script has 2+
+    top-level statements, this function automatically retries it
+    statement-by-statement and reports each statement's outcome. Because the
+    retry executes each statement as its own command, it CAN partially apply
+    a script that failed as a whole — this is intentional: it reproduces the
+    field-verified workaround of manually splitting a failing script into
+    2-3 statement chunks, so the statements Origin can run still take
+    effect. A single-statement script that fails is reported as before, with
+    no retry. Caveat: if the whole-script pass DID apply some statements
+    before failing, the retry re-runs them — harmless for idempotent
+    assignments (`layer.x.from=1`), but avoid batching non-idempotent
+    statements (appends, increments) in one script.
+
     Args:
         script: LabTalk script to execute
         confirm: Set True to run a script that uses a gated command token
@@ -43,7 +59,10 @@ def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = 
     Returns:
         Success/failure message, or an actionable not-executed message when a
         gated token is present and confirm is False. When `capture` is given,
-        a JSON object with the executed status and the captured variable values.
+        a JSON object with the executed status and the captured variable
+        values. On a whole-script failure with 2+ top-level statements, a
+        statement-level retry report is appended to the message (or added as
+        "statement_results" in the JSON when `capture` is given).
     """
     _ok, requires_confirm, reason = classify_labtalk_script(script)
     if requires_confirm and not confirm:
@@ -54,16 +73,37 @@ def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = 
             f"Script: {script}"
         )
     success = execute_labtalk(script)
+    statement_results: list[dict] | None = None
+    if not success:
+        statements = split_labtalk_statements(script)
+        if len(statements) >= 2:
+            statement_results = [
+                {
+                    "index": idx,
+                    "status": "OK" if execute_labtalk(stmt) else "FAILED",
+                    "statement": stmt.strip(),
+                }
+                for idx, stmt in enumerate(statements, start=1)
+            ]
     status = "ok" if success else "error"
     if not capture:
-        return f"Executed {'successfully' if success else 'with errors'}: {script}"
+        msg = f"Executed {'successfully' if success else 'with errors'}: {script}"
+        if statement_results:
+            report = " / ".join(
+                f"{r['index']} {r['status']} `{r['statement']}`" for r in statement_results
+            )
+            msg += f"\nStatement-level retry: {report}"
+        return msg
     values: dict = {}
     for raw_name in capture:
         safe_name = labtalk_variable(raw_name, "capture")
         values[safe_name] = (
             get_lt_str(safe_name) if safe_name.endswith("$") else get_lt_var(safe_name)
         )
-    return json.dumps({"status": status, "script": script, "values": values})
+    result = {"status": status, "script": script, "values": values}
+    if statement_results:
+        result["statement_results"] = statement_results
+    return json.dumps(result)
 
 @mcp.tool()
 def get_labtalk_variable(name: str) -> str:

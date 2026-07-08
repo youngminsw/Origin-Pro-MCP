@@ -8,6 +8,7 @@ from ..origin_connection import (
     execute_labtalk,
     get_origin,
     get_lt_str,
+    graph_names,
     require_worksheet,
     safe_page_names,
     sheet_names,
@@ -163,7 +164,8 @@ def get_worksheet_data(book_name: str, sheet_name: str) -> str:
 def _import_csv_to_worksheet_impl(
     file_path: str,
     book_name: str = "",
-    delimiter: str = ","
+    delimiter: str = ",",
+    sparklines: bool = False,
 ) -> str:
     """Import a CSV/text file into an Origin worksheet.
 
@@ -172,11 +174,21 @@ def _import_csv_to_worksheet_impl(
                    C:\\Users\\data.csv or /mnt/c/Users/data.csv)
         book_name: Optional workbook name. Auto-generated if empty.
         delimiter: Column delimiter (default: comma)
+        sparklines: Whether to allow Origin's auto-generated sparkline mini-
+            graph windows for this import (default False = suppressed).
+            ASCII/CSV import can otherwise spawn a dozen-plus throwaway graph
+            windows per import, bloating the project. Suppression is
+            attempted at the source (an ImpASC option) and, regardless of
+            whether that took effect, any graph window that appears as a
+            side effect of this specific import call is deleted afterward.
 
     Returns:
         JSON object: {"name": <actual workbook name>, "requested_name":
         <book_name if given, else null>, "renamed": <bool, true if the
-        actual name differs from the requested name>, "file": <file_path>}
+        actual name differs from the requested name>, "file": <file_path>,
+        "sparklines_suppressed": <bool, true if the ImpASC option call
+        succeeded>, "sparklines_deleted": <int, graph windows removed by the
+        post-import cleanup>}
     """
     o = get_origin()
     path = windows_path(file_path, "file_path")
@@ -191,18 +203,48 @@ def _import_csv_to_worksheet_impl(
         execute_labtalk(f"win -a {requested_name};")
 
     if delimiter == ",":
-        ok = execute_labtalk(f"impasc fname:={labtalk_path(path, 'file_path')} options.FileStruct.Delimiter:=1;")
+        delim_clause = "options.FileStruct.Delimiter:=1"
     elif delimiter == "\t":
-        ok = execute_labtalk(f"impasc fname:={labtalk_path(path, 'file_path')} options.FileStruct.Delimiter:=0;")
+        delim_clause = "options.FileStruct.Delimiter:=0"
     else:
         safe_delimiter = labtalk_choice(delimiter, {";", "|", " "}, "delimiter")
-        ok = execute_labtalk(
-            f"impasc fname:={labtalk_path(path, 'file_path')} "
-            f"options.FileStruct.CustomDelimiter:={labtalk_string(safe_delimiter, 'delimiter')};"
+        delim_clause = (
+            f"options.FileStruct.CustomDelimiter:={labtalk_string(safe_delimiter, 'delimiter')}"
         )
+
+    graphs_before = set(graph_names()) if not sparklines else set()
+    sparklines_suppressed = False
+    if sparklines:
+        ok = execute_labtalk(f"impasc fname:={labtalk_path(path, 'file_path')} {delim_clause};")
+    else:
+        # LIVE-UNVERIFIED: ImpASC's options tree is reported to include a
+        # Sparklines mode (0=No) alongside FileStruct.Delimiter, but the
+        # exact key has not been confirmed against a live Origin install. If
+        # it's wrong/unsupported, Origin fails the whole Execute (returns
+        # False) and we transparently retry without it — the post-import
+        # graph-window cleanup below is the reliable backstop either way.
+        ok = execute_labtalk(
+            f"impasc fname:={labtalk_path(path, 'file_path')} {delim_clause} "
+            "options.Miscellaneous.Sparklines:=0;"
+        )
+        if ok:
+            sparklines_suppressed = True
+        else:
+            ok = execute_labtalk(f"impasc fname:={labtalk_path(path, 'file_path')} {delim_clause};")
     if not ok:
         msg = f"Origin could not import {path} — check the file format and delimiter."
         raise ValueError(msg)
+
+    sparklines_deleted = 0
+    if not sparklines:
+        # Defensive net: delete only graph windows that appeared as a result
+        # of THIS import call (never a pre-existing/user window). Explicit
+        # per-name `win -cd <name>;` commands, not a `win -cd %()` loop — the
+        # latter is unreliable inside LabTalk loops.
+        new_graphs = [g for g in graph_names() if g not in graphs_before]
+        for g in new_graphs:
+            execute_labtalk(f"win -cd {g};")
+        sparklines_deleted = len(new_graphs)
 
     active_book = o.LTStr("page.name$")
     return json.dumps({
@@ -210,6 +252,8 @@ def _import_csv_to_worksheet_impl(
         "requested_name": requested_name,
         "renamed": bool(requested_name) and active_book != requested_name,
         "file": path,
+        "sparklines_suppressed": sparklines_suppressed,
+        "sparklines_deleted": sparklines_deleted,
     })
 
 def _sheet_names(o, book_name: str, page=None) -> list:
@@ -648,6 +692,7 @@ def import_data(
     format: str = "auto",
     book_name: str = "",
     delimiter: str = ",",
+    sparklines: bool = False,
 ) -> str:
     """Import a data file into an Origin worksheet.
 
@@ -659,11 +704,17 @@ def import_data(
         book_name: Optional workbook name for the result.
         delimiter: Column delimiter for CSV/text (default comma; ignored for
             Excel).
+        sparklines: CSV/text import only. Whether to allow Origin's auto-
+            generated sparkline mini-graph windows (default False =
+            suppressed — an unsuppressed CSV import can spawn a dozen-plus
+            throwaway graph windows, bloating the project).
 
     Returns:
         JSON object: {"name": <actual workbook name>, "requested_name":
         <book_name if given, else null>, "renamed": <bool, true if Origin
-        gave the workbook a different name>, "file": <file_path>}
+        gave the workbook a different name>, "file": <file_path>}. For
+        CSV/text imports, also: {"sparklines_suppressed": <bool>,
+        "sparklines_deleted": <int>}.
     """
     safe_format = labtalk_choice(format.lower(), _IMPORT_FORMATS, "format")
     if safe_format == "auto":
@@ -671,4 +722,4 @@ def import_data(
         safe_format = "excel" if ext in _EXCEL_EXTENSIONS else "csv"
     if safe_format == "excel":
         return _import_excel_impl(file_path, book_name)
-    return _import_csv_to_worksheet_impl(file_path, book_name, delimiter)
+    return _import_csv_to_worksheet_impl(file_path, book_name, delimiter, sparklines)
