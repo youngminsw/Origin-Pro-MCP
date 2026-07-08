@@ -196,3 +196,37 @@ def test_set_layer_geometry_requires_an_argument(fake_origin):
 
     with pytest.raises(ValueError, match="at least one of"):
         set_layer_geometry("Graph1")
+
+
+# --- setter execute-result checks (consistency with raise-on-failure) -------
+
+def test_set_graph_font_raises_on_execute_failure(fake_origin):
+    from origin_pro_mcp.tools import style as S
+
+    fake_origin.execute_results["xb.font$"] = False
+    with pytest.raises(ValueError, match="x-axis title font"):
+        S.set_graph_font("Graph1", target="axes")
+
+
+def test_set_tick_labels_raises_on_execute_failure(fake_origin, monkeypatch):
+    from origin_pro_mcp.tools import style as S
+
+    monkeypatch.setattr(S, "graph_layer_execute", lambda graph_name, script: False)
+    with pytest.raises(ValueError, match="Could not update tick labels"):
+        S.set_tick_labels("Graph1", format="decimal")
+
+
+def test_axis_tick_raises_on_execute_failure(fake_origin, monkeypatch):
+    from origin_pro_mcp.tools import style as S
+
+    monkeypatch.setattr(S, "graph_layer_execute", lambda graph_name, script: False)
+    with pytest.raises(ValueError, match="Could not update .* tick style"):
+        S._set_tick_style_impl("Graph1")
+
+
+def test_set_legend_hide_raises_on_execute_failure(fake_origin):
+    from origin_pro_mcp.tools.style import set_legend
+
+    fake_origin.execute_results["legend.show"] = False
+    with pytest.raises(ValueError, match="Could not hide the legend"):
+        set_legend("Graph1", visible=False)

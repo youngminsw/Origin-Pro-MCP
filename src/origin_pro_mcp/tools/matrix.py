@@ -62,14 +62,22 @@ def create_matrix(book_name: str, rows: int = 10, cols: int = 10) -> str:
         cols: Initial number of columns (default 10)
 
     Returns:
-        Created matrix name (may differ from book_name if it was taken)
+        JSON object: {"name": <actual matrix book name>, "requested_name":
+        <book_name>, "renamed": <bool, true if Origin uniquified the name>,
+        "rows": <rows>, "cols": <cols>}
     """
     safe_book = labtalk_name(book_name, "book_name")
     safe_rows = positive_int(rows, "rows")
     safe_cols = positive_int(cols, "cols")
     name = _create_matrix_book(safe_book)
     execute_labtalk(f"win -a {name}; mdim cols:={safe_cols} rows:={safe_rows};")
-    return f"Created matrix: [{name}]MSheet1 ({safe_rows}x{safe_cols})"
+    return json.dumps({
+        "name": name,
+        "requested_name": safe_book,
+        "renamed": name != safe_book,
+        "rows": safe_rows,
+        "cols": safe_cols,
+    })
 
 
 @mcp.tool()
@@ -126,15 +134,17 @@ def get_matrix_data(book_name: str) -> str:
 
     Returns:
         JSON object {"rows": [[...], ...]}; empty cells are null
+
+    Raises:
+        ValueError: if the matrix is not found.
     """
     safe_book = labtalk_name(book_name, "book_name")
     target = require_matrix(safe_book)
     data = get_origin().GetMatrix(target)
     if not isinstance(data, (list, tuple)):
         mats = ", ".join(matrix_names()) or "(none)"
-        return json.dumps(
-            {"error": f"Matrix {target} not found. Open matrices: {mats}."}
-        )
+        msg = f"Matrix {target} not found. Open matrices: {mats}."
+        raise ValueError(msg)
     rows = [
         [None if abs(v) >= _MISSING_MAGNITUDE else v for v in row]
         for row in data
@@ -168,7 +178,10 @@ def worksheet_to_matrix(
         matrix_book: Optional name for the output matrix book
 
     Returns:
-        Name of the created matrix
+        JSON object: {"name": <actual matrix book name>, "requested_name":
+        <matrix_book if given, else null>, "renamed": <bool, true if Origin
+        uniquified the name>, "source": <"[data_book]data_sheet">, "rows":
+        <rows>, "cols": <cols>}
     """
     safe_book = labtalk_name(data_book, "data_book")
     safe_sheet = labtalk_name(data_sheet, "data_sheet")
@@ -182,8 +195,8 @@ def worksheet_to_matrix(
     # xyz2mat needs the Z column designated as Z (type 6) on the active sheet.
     execute_labtalk(f'win -a {safe_book}; page.active$ = "{safe_sheet}"; wks.col{safe_z}.type = 6;')
 
-    base = labtalk_name(matrix_book, "matrix_book") if matrix_book else "Matrix"
-    name = _create_matrix_book(base)
+    requested_name = labtalk_name(matrix_book, "matrix_book") if matrix_book else None
+    name = _create_matrix_book(requested_name or "Matrix")
     cmd = (
         f"xyz2mat iz:=[{safe_book}]{safe_sheet}!({safe_x},{safe_y},{safe_z}) "
         f"settings.ConvertToMatrix.columns:={safe_cols} "
@@ -197,7 +210,14 @@ def worksheet_to_matrix(
             f"({safe_x},{safe_y},{safe_z}). Check that the columns contain data."
         )
         raise ValueError(msg)
-    return f"Gridded [{safe_book}]{safe_sheet} into matrix [{name}]MSheet1 ({safe_rows}x{safe_cols})"
+    return json.dumps({
+        "name": name,
+        "requested_name": requested_name,
+        "renamed": bool(requested_name) and name != requested_name,
+        "source": f"[{safe_book}]{safe_sheet}",
+        "rows": safe_rows,
+        "cols": safe_cols,
+    })
 
 
 @mcp.tool()
@@ -218,7 +238,9 @@ def create_matrix_plot(
                  (3D) and the color-scale title.
 
     Returns:
-        Created graph name
+        JSON object: {"name": <actual graph name>, "requested_name":
+        <graph_name if given, else null>, "renamed": <bool, true if the
+        actual name differs from the requested name>, "plot_type": <plot_type>}
     """
     safe_book = labtalk_name(matrix_book, "matrix_book")
     safe_type = labtalk_choice(plot_type, _MATRIX_PLOT_TYPES, "plot_type")
@@ -250,4 +272,9 @@ def create_matrix_plot(
         f"win -r {name} {requested};"
     ):
         name = requested
-    return f"Created graph: {name} ({safe_type} from {safe_book})"
+    return json.dumps({
+        "name": name,
+        "requested_name": requested,
+        "renamed": bool(requested) and name != requested,
+        "plot_type": safe_type,
+    })

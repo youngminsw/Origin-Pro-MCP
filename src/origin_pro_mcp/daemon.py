@@ -33,7 +33,7 @@ from .origin_connection import (
     clear_session_origin, get_origin, get_remembered_project_path,
     set_session_origin,
 )
-from .transport import Connection, FrameError, TcpServer
+from .transport import MAX_FRAME, Connection, FrameError, TcpServer
 
 OriginFactory = Callable[[], object]
 GetPid = Callable[[object], Optional[int]]
@@ -108,6 +108,38 @@ def _default_get_pid(_instance: object) -> Optional[int]:
     spawned ``Origin.exe`` process id (see ``_real_origin_get_pid``).
     """
     return None
+
+
+def _oversized_result_message(name: str, frame: dict) -> Optional[str]:
+    """Return an actionable error when the serialized ``frame`` would exceed the
+    transport frame cap, else ``None``.
+
+    A tool result larger than :data:`~.transport.MAX_FRAME` cannot be delivered:
+    the peer's pre-auth length guard rejects the oversized frame with a raw
+    ``FrameError`` the agent can't act on. We detect that here, at the
+    serialization boundary, and swap in a clear message telling the agent how to
+    shrink the request instead of shipping a doomed frame.
+    """
+    result = frame.get("result")
+    # Hot-path short-circuit: no JSON encoding can expand a source string past
+    # ~12 bytes/char, so a result this small can never reach MAX_FRAME — skip the
+    # full re-serialize that would otherwise run on every dispatch.
+    if not result or len(result) < MAX_FRAME // 12:
+        return None
+    try:
+        size = len(json.dumps(frame).encode("utf-8"))
+    except (TypeError, ValueError):
+        return None
+    if size <= MAX_FRAME:
+        return None
+    size_mib = size / (1024 * 1024)
+    limit_mib = MAX_FRAME / (1024 * 1024)
+    return (
+        f"Result from '{name}' is {size_mib:.1f} MiB, exceeding the "
+        f"{limit_mib:.0f} MiB transport limit, so it cannot be returned. Narrow "
+        "the request: read fewer rows/columns (e.g. pass a row range) or export "
+        "to a file with export_worksheet / export_graph and read that instead."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -290,8 +322,15 @@ class Session:
             self._has_work.record_success(name)
             if result is not None and not isinstance(result, str):
                 result = json.dumps(result)
-            return {"type": "response", "request_id": request_id, "ok": True,
-                    "result": result, "error": None}
+            response = {"type": "response", "request_id": request_id, "ok": True,
+                        "result": result, "error": None}
+            oversized = _oversized_result_message(name, response)
+            if oversized is not None:
+                # Too big for one frame: return an actionable error instead of an
+                # oversized frame the peer would reject with a raw FrameError.
+                return {"type": "response", "request_id": request_id, "ok": False,
+                        "result": None, "error": oversized}
+            return response
         except Exception as exc:
             return {"type": "response", "request_id": request_id, "ok": False,
                     "result": None, "error": f"{type(exc).__name__}: {exc}"}
@@ -853,11 +892,42 @@ def default_is_alive(pid: int) -> bool:
     return True
 
 
+def iter_registered_tools(mcp) -> dict:
+    """Return ``{tool_name: fn}`` for every tool registered on a FastMCP server.
+
+    FastMCP exposes no public accessor for its tool registry, so we reach into
+    the private ``mcp._tool_manager._tools`` mapping. That path is version-
+    fragile: if a FastMCP upgrade renames or relocates it, this raises a LOUD
+    ``RuntimeError`` naming the attribute it expected — it MUST NEVER silently
+    return ``{}``, which would bring the server up exposing ZERO tools. This is
+    the single source of truth both the daemon and the shim route through.
+    """
+    try:
+        tools = mcp._tool_manager._tools
+    except AttributeError as exc:
+        raise RuntimeError(
+            "FastMCP tool registry is inaccessible via the private path "
+            f"'mcp._tool_manager._tools' ({exc}). This FastMCP version is "
+            "incompatible with origin-pro-mcp's registry accessor; update "
+            "iter_registered_tools() to the new internals rather than starting "
+            "a server that exposes zero tools."
+        ) from exc
+    registry = {name: tool.fn for name, tool in tools.items()}
+    if not registry:
+        raise RuntimeError(
+            "FastMCP exposed an EMPTY tool registry via "
+            "'mcp._tool_manager._tools'. Either tool registration did not run, "
+            "or this FastMCP version relocated its registry; update "
+            "iter_registered_tools(). Refusing to start a server with zero tools."
+        )
+    return registry
+
+
 def _default_registry() -> dict:
     from . import server  # noqa: F401 — importing registers every tool
     from .app import mcp
 
-    return {name: tool.fn for name, tool in mcp._tool_manager._tools.items()}
+    return iter_registered_tools(mcp)
 
 
 # --------------------------------------------------------------------------- #

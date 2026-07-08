@@ -3,7 +3,32 @@
 Column add/delete/properties/formula operations are driven through the
 consolidated ``manage_columns`` dispatcher.
 """
+import json
+
 import pytest
+
+
+def test_create_worksheet_returns_parseable_name(fake_origin):
+    from origin_pro_mcp.tools.worksheet import create_worksheet
+
+    out = json.loads(create_worksheet("NewBook"))
+    assert out == {
+        "name": "NewBook",
+        "requested_name": "NewBook",
+        "renamed": False,
+        "sheet": "Sheet1",
+    }
+
+
+def test_create_worksheet_reports_rename(fake_origin):
+    from origin_pro_mcp.tools.worksheet import create_worksheet
+
+    # Simulate Origin uniquifying the name on collision.
+    fake_origin.CreatePage = lambda kind, name, template: "NewBook2"
+    out = json.loads(create_worksheet("NewBook"))
+    assert out["name"] == "NewBook2"
+    assert out["requested_name"] == "NewBook"
+    assert out["renamed"] is True
 
 
 def test_set_column_formula_blocks_injection(fake_origin):
@@ -106,3 +131,13 @@ def test_transpose_unknown_sheet(fake_origin):
 
     with pytest.raises(ValueError, match="not found"):
         transpose_worksheet("Ghost", "Sheet1")
+
+
+def test_get_worksheet_data_maps_missing_to_null(fake_origin):
+    from origin_pro_mcp.tools.worksheet import get_worksheet_data
+
+    # Simulate a ragged column: Origin pads the shorter column with its
+    # missing-value sentinel (~1.2e308).
+    fake_origin.worksheet_data = ((1.0, 4.0), (2.0, 1.23e308))
+    out = json.loads(get_worksheet_data("Book1", "Sheet1"))
+    assert out["columns"] == [[1.0, 2.0], [4.0, None]]

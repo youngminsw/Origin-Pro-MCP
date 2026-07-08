@@ -9,6 +9,8 @@ lookups, not synchronous LabTalk) turn that into an immediate friendly error
 instead of a command that can wedge the COM apartment. These tests lock the
 invariant in COM-free via the shared FakeOrigin (Book1 workbook, Graph1 graph).
 """
+import json
+
 import pytest
 
 
@@ -67,5 +69,5 @@ def test_valid_create_graph_still_dispatches_plot(fake_origin):
     """Positive control: a correct worksheet source DOES reach plotxy."""
     from origin_pro_mcp.tools.graph import create_graph
     out = create_graph("G", "Book1", "Sheet1", 1, 2)
-    assert "Created graph" in out
+    assert json.loads(out)["name"]
     assert any(s.startswith("plotxy") for s in fake_origin.executed)

@@ -464,3 +464,85 @@ def test_acquire_does_not_block_pool_during_start_and_rolls_back():
     finally:
         release.set()
         pool.stop_all()
+
+
+# --------------------------------------------------------------------------- #
+# ROBUSTNESS 1 — FastMCP registry accessor fails LOUD, never returns {}        #
+# --------------------------------------------------------------------------- #
+
+
+def test_iter_registered_tools_returns_the_real_registry():
+    from origin_pro_mcp.daemon import iter_registered_tools
+    from origin_pro_mcp import server  # noqa: F401 — registers all tools
+    from origin_pro_mcp.app import mcp
+
+    reg = iter_registered_tools(mcp)
+    assert isinstance(reg, dict) and len(reg) > 0
+    assert all(callable(fn) for fn in reg.values())
+
+
+def test_iter_registered_tools_raises_when_internals_renamed():
+    """A FastMCP upgrade that renames ``_tool_manager`` must raise a LOUD error
+    naming the missing attribute — NEVER silently return an empty registry."""
+    from origin_pro_mcp.daemon import iter_registered_tools
+
+    class RenamedInternals:  # no ``_tool_manager`` at all
+        pass
+
+    with pytest.raises(RuntimeError) as ei:
+        iter_registered_tools(RenamedInternals())
+    assert "_tool_manager" in str(ei.value)
+
+
+def test_iter_registered_tools_raises_on_empty_registry():
+    """An empty ``_tool_manager._tools`` (relocated registry / failed
+    registration) must raise, not bring a zero-tool server up silently."""
+    from origin_pro_mcp.daemon import iter_registered_tools
+
+    class EmptyManager:
+        _tools: dict = {}
+
+    class EmptyMCP:
+        _tool_manager = EmptyManager()
+
+    with pytest.raises(RuntimeError) as ei:
+        iter_registered_tools(EmptyMCP())
+    assert "zero tools" in str(ei.value).lower()
+
+
+# --------------------------------------------------------------------------- #
+# ROBUSTNESS 2 — an oversized tool result becomes an actionable error          #
+# --------------------------------------------------------------------------- #
+
+
+def test_oversized_result_returns_actionable_error():
+    """A result larger than MAX_FRAME must be replaced, at the serialization
+    boundary, with an actionable error — not shipped as an oversized frame the
+    peer would reject with a raw FrameError."""
+    import json
+
+    from origin_pro_mcp.daemon import Session
+    from origin_pro_mcp.transport import MAX_FRAME
+
+    huge = "x" * (MAX_FRAME + 4096)
+    session = Session("s-big", FakeFactory(), {"get_worksheet_data": lambda: huge})
+    resp = session._dispatch("r1", "get_worksheet_data", {})
+
+    assert resp["ok"] is False
+    assert resp["result"] is None
+    assert "transport limit" in resp["error"]
+    assert "export_worksheet" in resp["error"]
+    # The replacement response itself fits in one frame (no raw FrameError).
+    assert len(json.dumps(resp).encode("utf-8")) <= MAX_FRAME
+
+
+def test_normal_result_passes_through_unflagged():
+    """A normal-sized result is returned unchanged (the size guard is inert)."""
+    from origin_pro_mcp.daemon import Session
+
+    session = Session("s-ok", FakeFactory(), {"list_worksheets": lambda: "[]"})
+    resp = session._dispatch("r1", "list_worksheets", {})
+
+    assert resp["ok"] is True
+    assert resp["result"] == "[]"
+    assert resp["error"] is None

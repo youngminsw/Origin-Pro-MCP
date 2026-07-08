@@ -35,7 +35,9 @@ def create_worksheet(book_name: str, sheet_name: str = "Sheet1") -> str:
         sheet_name: Name for the sheet (default: Sheet1)
 
     Returns:
-        Created workbook name (may differ from book_name if it was taken)
+        JSON object: {"name": <actual workbook name>, "requested_name":
+        <book_name>, "renamed": <bool, true if Origin uniquified the name>,
+        "sheet": <sheet name>}
     """
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
@@ -43,7 +45,12 @@ def create_worksheet(book_name: str, sheet_name: str = "Sheet1") -> str:
     name = o.CreatePage(2, safe_book_name, "origin")
     if safe_sheet_name != "Sheet1":
         execute_labtalk(f'page.active$ = "Sheet1"; wks.name$ = {labtalk_string(safe_sheet_name, "sheet_name")};')
-    return f"Created workbook: [{name}]{safe_sheet_name}"
+    return json.dumps({
+        "name": name,
+        "requested_name": safe_book_name,
+        "renamed": name != safe_book_name,
+        "sheet": safe_sheet_name,
+    })
 
 @mcp.tool()
 def set_worksheet_data(
@@ -119,7 +126,11 @@ def get_worksheet_data(book_name: str, sheet_name: str) -> str:
         sheet_name: Sheet name
 
     Returns:
-        JSON object with column data
+        JSON object with column data; empty cells (including a shorter
+        ragged column padded by Origin) are returned as null.
+
+    Raises:
+        ValueError: if the worksheet is not found.
     """
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
@@ -129,17 +140,23 @@ def get_worksheet_data(book_name: str, sheet_name: str) -> str:
     # On failure GetWorksheet returns None or an HRESULT int, never a sequence
     if not isinstance(data, (list, tuple)):
         books = ", ".join(workbook_names()) or "(none)"
-        return json.dumps(
-            {"error": f"Worksheet {target} not found. Open workbooks: {books}."}
-        )
+        msg = f"Worksheet {target} not found. Open workbooks: {books}."
+        raise ValueError(msg)
 
     if len(data) == 0:
         return json.dumps({"columns": []})
 
+    def _cell(v):
+        # Origin's missing-value sentinel (~1.2e308), same convention as
+        # get_matrix_data / export_worksheet.
+        if isinstance(v, (int, float)) and abs(v) >= 1e100:
+            return None
+        return v
+
     num_cols = len(data[0])
     columns = []
     for c in range(num_cols):
-        columns.append([row[c] for row in data])
+        columns.append([_cell(row[c]) for row in data])
 
     return json.dumps({"columns": columns})
 
@@ -157,7 +174,9 @@ def _import_csv_to_worksheet_impl(
         delimiter: Column delimiter (default: comma)
 
     Returns:
-        Name of the created workbook
+        JSON object: {"name": <actual workbook name>, "requested_name":
+        <book_name if given, else null>, "renamed": <bool, true if the
+        actual name differs from the requested name>, "file": <file_path>}
     """
     o = get_origin()
     path = windows_path(file_path, "file_path")
@@ -165,10 +184,11 @@ def _import_csv_to_worksheet_impl(
         msg = f"File not found: {path}"
         raise ValueError(msg)
 
+    requested_name = None
     if book_name:
-        safe_book_name = labtalk_name(book_name, "book_name")
-        o.CreatePage(2, safe_book_name, "origin")
-        execute_labtalk(f"win -a {safe_book_name};")
+        requested_name = labtalk_name(book_name, "book_name")
+        o.CreatePage(2, requested_name, "origin")
+        execute_labtalk(f"win -a {requested_name};")
 
     if delimiter == ",":
         ok = execute_labtalk(f"impasc fname:={labtalk_path(path, 'file_path')} options.FileStruct.Delimiter:=1;")
@@ -185,7 +205,12 @@ def _import_csv_to_worksheet_impl(
         raise ValueError(msg)
 
     active_book = o.LTStr("page.name$")
-    return f"Imported to workbook: {active_book}"
+    return json.dumps({
+        "name": active_book,
+        "requested_name": requested_name,
+        "renamed": bool(requested_name) and active_book != requested_name,
+        "file": path,
+    })
 
 def _sheet_names(o, book_name: str, page=None) -> list:
     """Sheet names of a workbook: the shared crash-safe LabTalk enumeration
@@ -522,7 +547,9 @@ def _import_excel_impl(file_path: str, book_name: str = "") -> str:
         book_name: Optional name for the resulting workbook
 
     Returns:
-        Name of the workbook the data was imported into
+        JSON object: {"name": <actual workbook name>, "requested_name":
+        <book_name if given, else null>, "renamed": <bool, true if the
+        actual name differs from the requested name>, "file": <file_path>}
     """
     o = get_origin()
     path = windows_path(file_path, "file_path")
@@ -533,11 +560,17 @@ def _import_excel_impl(file_path: str, book_name: str = "") -> str:
         msg = f"Origin could not import the Excel file: {path}"
         raise ValueError(msg)
     active = o.LTStr("page.name$")
+    requested_name = None
     if book_name:
-        safe_book = labtalk_name(book_name, "book_name")
-        if active != safe_book and execute_labtalk(f"win -r {active} {safe_book};"):
-            active = safe_book
-    return f"Imported {os.path.basename(path)} into workbook: {active}"
+        requested_name = labtalk_name(book_name, "book_name")
+        if active != requested_name and execute_labtalk(f"win -r {active} {requested_name};"):
+            active = requested_name
+    return json.dumps({
+        "name": active,
+        "requested_name": requested_name,
+        "renamed": bool(requested_name) and active != requested_name,
+        "file": path,
+    })
 
 
 # --- Consolidated dispatchers (Phase 2) ---------------------------------------
@@ -628,7 +661,9 @@ def import_data(
             Excel).
 
     Returns:
-        Name of the workbook the data was imported into.
+        JSON object: {"name": <actual workbook name>, "requested_name":
+        <book_name if given, else null>, "renamed": <bool, true if Origin
+        gave the workbook a different name>, "file": <file_path>}
     """
     safe_format = labtalk_choice(format.lower(), _IMPORT_FORMATS, "format")
     if safe_format == "auto":

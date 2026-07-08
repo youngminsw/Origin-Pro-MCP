@@ -1,7 +1,7 @@
 import pytest
 
 from origin_pro_mcp.origin_connection import execute_labtalk, get_lt_var, get_lt_str
-from origin_pro_mcp.tools.labtalk import run_labtalk
+from origin_pro_mcp.tools.labtalk import get_labtalk_variable, run_labtalk
 
 
 # --- COM-backed primitives (Windows-only) ---
@@ -121,3 +121,25 @@ def test_run_labtalk_capture_still_gated(fake_origin):
 def test_run_labtalk_capture_rejects_bad_variable_name(fake_origin):
     with pytest.raises(ValueError):
         run_labtalk("x = 1;", capture=["bad name; del all"])
+
+
+# --- get_labtalk_variable existence check ---
+
+
+def test_get_labtalk_variable_returns_value_when_defined(fake_origin):
+    fake_origin.lt_vars["_opm_lt_exist"] = 1.0
+    fake_origin.lt_vars["x"] = 42.0
+    assert get_labtalk_variable("x") == "42.0"
+
+
+def test_get_labtalk_variable_raises_when_undefined(fake_origin):
+    fake_origin.lt_vars["_opm_lt_exist"] = 0.0
+    with pytest.raises(ValueError, match="is not defined"):
+        get_labtalk_variable("nope")
+
+
+def test_get_labtalk_variable_string_unaffected_by_exist_check(fake_origin):
+    fake_origin.lt_vars["str$"] = "unused"
+    # String variables bypass the exist() check entirely.
+    get_labtalk_variable("str$")
+    assert not any("exist(" in s for s in fake_origin.executed)

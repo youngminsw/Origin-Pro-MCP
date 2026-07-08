@@ -213,15 +213,21 @@ def test_axis_scale_equiv(fake_origin):
                   disp_kw={"axis": "y", "scale": "log10"})
 
 
-def test_axis_scale_default_axis_defaults_to_y(fake_origin):
-    """MEDIUM 3: axis(op="scale") with NO axis arg must default to y (the old
-    set_axis_scale default) and issue the SAME command — not forward
-    axis="both", which the impl rejects."""
-    _assert_equiv(fake_origin,
-                  G._set_axis_scale_impl, ("Graph1",),
-                  G.axis, ("Graph1", "scale"),
-                  impl_kw={"scale": "log10"},   # impl default axis="y"
-                  disp_kw={"scale": "log10"})   # dispatcher: no axis -> must be y
+def test_axis_scale_default_axis_applies_to_both(fake_origin):
+    """axis(op="scale") with NO axis arg (or axis="both") must apply the scale
+    to BOTH x and y — silently narrowing to y-only left x on the old scale
+    with no indication in the return value, which was a truthfulness bug."""
+    r1, e1, x1 = _run(fake_origin, G._set_axis_scale_impl, "Graph1",
+                       axis="x", scale="log10")
+    r2, e2, x2 = _run(fake_origin, G._set_axis_scale_impl, "Graph1",
+                       axis="y", scale="log10")
+    expected_result = f"{r1}. {r2}"
+    expected_executed = x1 + x2
+
+    r3, e3, x3 = _run(fake_origin, G.axis, "Graph1", "scale", scale="log10")
+    assert x3 == expected_executed, (x3, expected_executed)
+    assert e3 is None
+    assert r3 == expected_result, (r3, expected_result)
 
 
 def test_axis_tick_equiv(fake_origin):

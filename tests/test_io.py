@@ -1,4 +1,6 @@
 """Guard tests for data IO / export tools (no Origin needed)."""
+import json
+
 import pytest
 
 
@@ -34,6 +36,44 @@ def test_import_excel_missing_file(fake_origin, tmp_path):
     # format="auto" routes .xlsx through the Excel impl.
     with pytest.raises(ValueError, match="File not found"):
         import_data(str(tmp_path / "nope.xlsx"))
+
+
+def test_import_data_csv_returns_json_name(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    f = tmp_path / "data.csv"
+    f.write_text("1,2\n3,4\n")
+    fake_origin.LTStr = lambda name: "Book2" if name == "page.name$" else ""
+    out = json.loads(import_data(str(f), book_name="Book2"))
+    assert out["name"] == "Book2"
+    assert out["requested_name"] == "Book2"
+    assert out["renamed"] is False
+    assert out["file"] == str(f)
+
+
+def test_import_data_csv_no_book_name_requested_is_null(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    f = tmp_path / "data.csv"
+    f.write_text("1,2\n")
+    fake_origin.LTStr = lambda name: "Book1" if name == "page.name$" else ""
+    out = json.loads(import_data(str(f)))
+    assert out["name"] == "Book1"
+    assert out["requested_name"] is None
+    assert out["renamed"] is False
+
+
+def test_import_data_excel_returns_json_name(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    f = tmp_path / "data.xlsx"
+    f.write_bytes(b"PK\x03\x04stub")
+    fake_origin.LTStr = lambda name: "Book1" if name == "page.name$" else ""
+    out = json.loads(import_data(str(f)))
+    assert out["name"] == "Book1"
+    assert out["requested_name"] is None
+    assert out["renamed"] is False
+    assert out["file"] == str(f)
 
 
 def test_export_graph_sized_unknown_graph(fake_origin, tmp_path):

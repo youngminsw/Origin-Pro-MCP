@@ -6,6 +6,29 @@ import pytest
 from conftest import FakeMatrix
 
 
+def test_create_matrix_returns_parseable_name(fake_origin):
+    from origin_pro_mcp.tools.matrix import create_matrix
+
+    # _create_matrix_book reads the assigned name back via LTStr("page.name$");
+    # the default fake always returns "", so simulate Origin echoing the name.
+    fake_origin.LTStr = lambda name: "NewMtx" if name == "page.name$" else ""
+    out = json.loads(create_matrix("NewMtx", rows=5, cols=7))
+    assert out == {
+        "name": "NewMtx",
+        "requested_name": "NewMtx",
+        "renamed": False,
+        "rows": 5,
+        "cols": 7,
+    }
+
+
+def test_get_matrix_data_unknown_matrix_raises(fake_origin):
+    from origin_pro_mcp.tools.matrix import get_matrix_data
+
+    with pytest.raises(ValueError, match="not found"):
+        get_matrix_data("Ghost")
+
+
 def test_set_matrix_data_rejects_bad_json(fake_origin):
     from origin_pro_mcp.tools.matrix import set_matrix_data
 
@@ -64,11 +87,51 @@ def test_worksheet_to_matrix_unknown_sheet(fake_origin):
         worksheet_to_matrix("Ghost", "Sheet1", 1, 2, 3)
 
 
+def test_worksheet_to_matrix_returns_json_name(fake_origin):
+    from origin_pro_mcp.tools.matrix import worksheet_to_matrix
+
+    # _create_matrix_book reads the assigned name back via LTStr("page.name$").
+    fake_origin.LTStr = lambda name: "MyGrid" if name == "page.name$" else ""
+    out = json.loads(
+        worksheet_to_matrix("Book1", "Sheet1", 1, 2, 3, matrix_book="MyGrid")
+    )
+    assert out["name"] == "MyGrid"
+    assert out["requested_name"] == "MyGrid"
+    assert out["renamed"] is False
+    assert out["source"] == "[Book1]Sheet1"
+    assert out["rows"] == 20
+    assert out["cols"] == 20
+
+
+def test_worksheet_to_matrix_no_name_requested_is_null(fake_origin):
+    from origin_pro_mcp.tools.matrix import worksheet_to_matrix
+
+    fake_origin.LTStr = lambda name: "Matrix" if name == "page.name$" else ""
+    out = json.loads(worksheet_to_matrix("Book1", "Sheet1", 1, 2, 3))
+    assert out["name"] == "Matrix"
+    assert out["requested_name"] is None
+    assert out["renamed"] is False
+
+
 def test_create_matrix_plot_unknown_matrix(fake_origin):
     from origin_pro_mcp.tools.matrix import create_matrix_plot
 
     with pytest.raises(ValueError, match="not found"):
         create_matrix_plot("Ghost", plot_type="heatmap")
+
+
+def test_create_matrix_plot_returns_json_name(fake_origin):
+    from origin_pro_mcp.tools.matrix import create_matrix_plot
+
+    fake_origin.matrices = [FakeMatrix("Mtx")]
+    # No new graph appears in fake.graphs (plotm is a no-op Execute call), so
+    # the tool falls back to reading the active window name.
+    fake_origin.LTStr = lambda name: "Graph2" if name == "page.name$" else ""
+    out = json.loads(create_matrix_plot("Mtx", plot_type="heatmap"))
+    assert out["name"] == "Graph2"
+    assert out["requested_name"] is None
+    assert out["renamed"] is False
+    assert out["plot_type"] == "heatmap"
 
 
 def test_create_matrix_plot_rejects_bad_type(fake_origin):

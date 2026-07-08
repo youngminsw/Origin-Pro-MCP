@@ -42,6 +42,7 @@ from .daemon import (
     DISPATCH_KILL_GRACE_DEFAULT,
     DISPATCH_TIMEOUT_DEFAULT,
     default_lockfile_path,
+    iter_registered_tools,
     read_lockfile,
 )
 from .transport import FrameError
@@ -363,11 +364,16 @@ class ShimClient:
 
 
 def _real_registry() -> dict:
-    """The real FastMCP tool registry — ``{name: fn}`` for all 37 tools."""
+    """The real FastMCP tool registry — ``{name: fn}`` for all 37 tools.
+
+    Routes through :func:`~.daemon.iter_registered_tools` so a FastMCP internals
+    change fails LOUD (RuntimeError) here rather than silently building a shim
+    that forwards zero tools.
+    """
     from . import server  # noqa: F401 — importing registers every tool
     from .app import mcp as real_mcp
 
-    return {name: tool.fn for name, tool in real_mcp._tool_manager._tools.items()}
+    return iter_registered_tools(real_mcp)
 
 
 def _make_forwarder(tool_name: str, real_fn, client: ShimClient):

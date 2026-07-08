@@ -47,8 +47,13 @@ _STAT_NODES = {
 
 _TREE = "__mcpfit"
 
-# NLFit version of the linear fit, used when the fit curve must be drawn
+# NLFit version of the linear fit, used when the fit curve must be drawn.
+# Origin's built-in "Line" FDF is y = A + B*x (A=intercept, B=slope), the
+# same convention fitlr uses for fitlr.a/fitlr.b below — mapped back to
+# "intercept"/"slope" so callers see identical parameter keys regardless
+# of which fit path (fitlr vs NLFit) was used.
 _LINE_NLFIT = ("Line", ("A", "B"))
+_LINE_PARAM_MAP = {"A": "intercept", "B": "slope"}
 
 
 def _read_tree_value(node: str):
@@ -92,8 +97,17 @@ def curve_fit(
                        report sheets in the workbook.
 
     Returns:
-        JSON with fitted parameters (value + std_error) and statistics
-        (r_squared, sum_sq_residuals, reduced_chi_sq, dof)
+        JSON with fitted parameters and statistics. Parameter keys are
+        stable across calls for a given function (e.g. "line" always
+        reports "intercept"/"slope", never "A"/"B"). Each parameter has
+        a "value"; "std_error" is also present except for a "line" fit
+        with plot_on_graph="" (the fast fitlr path does not expose fit
+        std errors, only NLFit does). Statistics include r_squared always,
+        plus sum_sq_residuals/reduced_chi_sq/dof for all functions except
+        a "line" fit with plot_on_graph="". Special case: for
+        function="power", the result has NO "parameters" key — Origin
+        2020 cannot read the exponent back over COM, so only a
+        "parameters_note" string is returned instead.
     """
     safe_book = labtalk_name(data_book, "data_book")
     safe_sheet = labtalk_name(data_sheet, "data_sheet")
@@ -175,7 +189,8 @@ def curve_fit(
             std_error = _read_tree_value(f"e_{p}")
             if std_error is not None:
                 entry["std_error"] = std_error
-            params[p] = entry
+            key = _LINE_PARAM_MAP[p] if safe_function == "line" else p
+            params[key] = entry
         result["parameters"] = params
 
     if safe_target_graph:
@@ -210,10 +225,10 @@ def curve_fit(
                 curve_plots = get_plot_names(safe_target_graph)
                 if curve_plots:
                     fit_plot = curve_plots[-1]
-                    # muted brick red, distinct from the pastel palette
-                    execute_labtalk(f"set {fit_plot} -c color(170,68,80);")
-                    time.sleep(0.2)
-                    execute_labtalk(f"set {fit_plot} -w 400;")  # 2 pt
+                    # muted brick red, distinct from the pastel palette; both
+                    # flags in ONE `set` command so there's a single settle
+                    # instead of one per flag.
+                    execute_labtalk(f"set {fit_plot} -c color(170,68,80) -w 400;")  # 2 pt
                     time.sleep(0.2)
                 # Adding a plot rebuilds the legend with a new entry, which
                 # can push the box outside the frame — re-anchor it

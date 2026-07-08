@@ -149,10 +149,12 @@ def set_plot_style(
         plot_index: Data series index (1-based, order the datasets were
                     added; error-bar plots are not counted)
         line_width: Line width in points (default 2.5)
-        symbol_size: Symbol size (3-20, default 8)
+        symbol_size: Symbol size (default 8; not validated — Origin accepts any
+                     positive value, but roughly 3-20 is the readable range)
         symbol_shape: 0=auto, 1=square, 2=circle, 3=triangle-up,
                       4=diamond, 5=triangle-down, 6=hexagon
-        color: Color name (black, red, blue, green, orange, purple, cyan, magenta)
+        color: Color name (black, red, green, blue, cyan, magenta, yellow,
+               orange, purple, gray/grey)
         rgb: Explicit "r,g,b" (each 0-255), e.g. "128,0,200", for per-curve
              rainbow/gradient colors that named colors can't express. Overrides
              `color` when given.
@@ -174,8 +176,13 @@ def set_plot_style(
     data_plots = [p["name"] for p in infos if not p["is_error"]]
 
     idx = plot_index - 1
-    if idx >= len(data_plots):
-        return f"Plot index {plot_index} not found. Available data plots: {data_plots}"
+    if idx < 0 or idx >= len(data_plots):
+        valid = f"1-{len(data_plots)}" if data_plots else "(none)"
+        msg = (
+            f"Plot index {plot_index} not found on {safe_graph_name}. "
+            f"Valid range: {valid}. Data plots: {data_plots}"
+        )
+        raise ValueError(msg)
 
     pname = data_plots[idx]
     shape = symbol_shape if symbol_shape > 0 else SYMBOL_SHAPES.get(plot_index, 2)
@@ -197,27 +204,42 @@ def set_plot_style(
         c = f"color({r},{g},{b})"
     elif color:
         c = COLOR_MAP[labtalk_choice(color.lower(), COLOR_MAP, "color")]
-    # Each set command needs a small delay to avoid Origin COM rendering races.
-    if c is not None:
-        _set(f"-c {c}")
-        time.sleep(0.2)
 
+    # All flags for this plot are sent as ONE `set` command (LabTalk supports
+    # multiple -flags per call) so there is only one COM-render settle to wait
+    # for, instead of one per flag.
+    specs = []
+    if c is not None:
+        specs.append(f"-c {c}")
     lw = int(line_width * _WIDTH_UNITS_PER_POINT)
-    _set(f"-w {lw}")
-    time.sleep(0.2)
+    specs.append(f"-w {lw}")
 
     if _plot_has_symbols(pname):
-        _set(f"-k {shape}")
-        time.sleep(0.2)
-        _set(f"-z {symbol_size}")
-        time.sleep(0.2)
+        specs.append(f"-k {shape}")
+        specs.append(f"-z {symbol_size}")
         # Symbol interior: 1 = Open (hollow), 0 = Solid (verified on Origin 2020).
-        _set(f"-kf {1 if open_symbol else 0}")
+        specs.append(f"-kf {1 if open_symbol else 0}")
     elif c is not None:
         # bar/column-type plots: color the fill too
-        _set(f"-cf {c}")
+        specs.append(f"-cf {c}")
 
-    return f"Updated style for plot {plot_index} ({pname}) in {safe_graph_name}"
+    _set(" ".join(specs))
+    time.sleep(0.2)
+
+    grouping_note = ""
+    if len(data_plots) > 1:
+        # Can't reliably read Origin's group state over COM on this build, so
+        # this is a static caveat (not a live check) whenever more than one
+        # data plot exists — grouping only matters when there's more than one.
+        grouping_note = (
+            "; NOTE: if these plots are GROUPED, per-plot colors may be "
+            "overridden by the group — call ungroup_plots first if colors "
+            "don't look right"
+        )
+    return (
+        f"Updated style for plot {plot_index} ({pname}) in "
+        f"{safe_graph_name}{grouping_note}"
+    )
 
 
 
@@ -383,37 +405,38 @@ def apply_publication_style(
     # 7. Auto-style each data plot with a muted pastel palette + distinct
     # symbols. Error-bar plots only get the color of their data plot —
     # symbol/line commands would redraw them as connected lines.
-    # Each command needs delay to avoid Origin COM rendering races.
+    # Each plot's flags are sent as ONE `set` command (LabTalk supports
+    # multiple -flags per call) with a single post-command settle, instead of
+    # one Execute + sleep per flag — cuts an 8-plot graph from ~24 sleeps to 8.
     import time
     data_index = 0
     current_color = _rgb(PASTEL_RGB[0])
     for info in plot_infos:
         pname = info["name"]
         if info["is_error"]:
-            execute_labtalk(f"set {pname} -c {current_color};")
-            time.sleep(0.2)
-            execute_labtalk(f"set {pname} -erw {_PUB_ERROR_BAR_WIDTH_PT};")  # error-bar line width (pt)
-            time.sleep(0.2)
-            execute_labtalk(f"set {pname} -erwc {_PUB_ERROR_CAP_WIDTH};")  # cap width ~ symbol
+            execute_labtalk(
+                f"set {pname} -c {current_color} "
+                f"-erw {_PUB_ERROR_BAR_WIDTH_PT} -erwc {_PUB_ERROR_CAP_WIDTH};"
+            )
             time.sleep(0.2)
             continue
         current_color = _rgb(PASTEL_RGB[data_index % len(PASTEL_RGB)])
         shape = SYMBOL_SHAPES.get(data_index + 1, 2)
         data_index += 1
 
-        execute_labtalk(f"set {pname} -c {current_color};")
-        time.sleep(0.2)
-        execute_labtalk(f"set {pname} -w {int(_PUB_LINE_WIDTH_PT * _WIDTH_UNITS_PER_POINT)};")  # data lines
-        time.sleep(0.2)
+        line_width_units = int(_PUB_LINE_WIDTH_PT * _WIDTH_UNITS_PER_POINT)
         if _plot_has_symbols(pname):
-            execute_labtalk(f"set {pname} -k {shape};")
-            time.sleep(0.2)
-            execute_labtalk(f"set {pname} -z {_PUB_SYMBOL_SIZE};")
-            time.sleep(0.2)
+            execute_labtalk(
+                f"set {pname} -c {current_color} -w {line_width_units} "
+                f"-k {shape} -z {_PUB_SYMBOL_SIZE};"
+            )
         else:
             # bar/column/area-type plots: color the fill instead
-            execute_labtalk(f"set {pname} -cf {current_color};")
-            time.sleep(0.2)
+            execute_labtalk(
+                f"set {pname} -c {current_color} -w {line_width_units} "
+                f"-cf {current_color};"
+            )
+        time.sleep(0.2)
 
     # 8. Legend — reconstruct, then customize: bold entries, no border
     execute_labtalk(f"win -a {safe_graph_name}; legend -r;")
@@ -441,11 +464,22 @@ def apply_publication_style(
     placement = place_legend_avoiding_data(safe_graph_name, safe_legend_position)
 
     moved_out = " — moved outside the frame to avoid the data" if placement.startswith("outside") else ""
+    grouping_note = ""
+    if data_index > 1:
+        # Can't reliably read Origin's group state over COM on this build, so
+        # this is a static caveat (not a live check) whenever more than one
+        # data plot was styled — grouping only matters when there's more than
+        # one plot, and a grouped layer overrides the per-plot palette below.
+        grouping_note = (
+            "; NOTE: if these plots are GROUPED, per-plot colors may be "
+            "overridden by the group — call ungroup_plots first if the "
+            "palette doesn't look right"
+        )
     return (
         f"Publication style applied to {safe_graph_name}: "
         f"{data_index} data plots styled (pastel palette, {_PUB_LINE_WIDTH_PT} pt lines), "
         f"Arial bold labels, inward ticks, closed frame, no grid, "
-        f"borderless bold legend ({placement}){moved_out}"
+        f"borderless bold legend ({placement}){moved_out}{grouping_note}"
     )
 
 
@@ -493,22 +527,34 @@ def set_graph_font(
     # objects (only tick labels expose `layer.x.label.bold`). Bolding a title
     # is done by wrapping its text in the `\b(...)` rich-text markup.
     if safe_target in ("all", "axes"):
-        execute_labtalk(f"xb.font$ = {safe_font_name}; xb.fsize = {safe_font_size};")
-        execute_labtalk(f"yl.font$ = {safe_font_name}; yl.fsize = {safe_font_size};")
+        if not execute_labtalk(f"xb.font$ = {safe_font_name}; xb.fsize = {safe_font_size};"):
+            msg = f"Could not set the x-axis title font on {safe_graph_name}."
+            raise ValueError(msg)
+        if not execute_labtalk(f"yl.font$ = {safe_font_name}; yl.fsize = {safe_font_size};"):
+            msg = f"Could not set the y-axis title font on {safe_graph_name}."
+            raise ValueError(msg)
         if bold:
             _bold_text_object("xb")
             _bold_text_object("yl")
 
     if safe_target in ("all", "tick"):
         tick_size = max(safe_font_size - 4, 16)
-        graph_layer_execute(safe_graph_name, f"layer.x.label.pt = {tick_size}; layer.y.label.pt = {tick_size};")
-        graph_layer_execute(safe_graph_name, "layer.x.label.bold = 1; layer.y.label.bold = 1;")
+        if not graph_layer_execute(safe_graph_name, f"layer.x.label.pt = {tick_size}; layer.y.label.pt = {tick_size};"):
+            msg = f"Could not set tick label font size on {safe_graph_name}."
+            raise ValueError(msg)
+        if not graph_layer_execute(safe_graph_name, "layer.x.label.bold = 1; layer.y.label.bold = 1;"):
+            msg = f"Could not bold tick labels on {safe_graph_name}."
+            raise ValueError(msg)
 
     if safe_target in ("all", "legend"):
-        execute_labtalk(f"legend.font$ = {safe_font_name}; legend.fsize = {max(safe_font_size - 4, 16)};")
+        if not execute_labtalk(f"legend.font$ = {safe_font_name}; legend.fsize = {max(safe_font_size - 4, 16)};"):
+            msg = f"Could not set the legend font on {safe_graph_name}."
+            raise ValueError(msg)
 
     if safe_target == "title":
-        execute_labtalk(f"title.font$ = {safe_font_name}; title.fsize = {safe_font_size};")
+        if not execute_labtalk(f"title.font$ = {safe_font_name}; title.fsize = {safe_font_size};"):
+            msg = f"Could not set the title font on {safe_graph_name}."
+            raise ValueError(msg)
         if bold:
             _bold_text_object("title")
 
@@ -539,7 +585,9 @@ def set_legend(
     activate_window(safe_graph_name, "graph_name")
 
     if not visible:
-        execute_labtalk("legend.show = 0;")
+        if not execute_labtalk("legend.show = 0;"):
+            msg = f"Could not hide the legend on {safe_graph_name}."
+            raise ValueError(msg)
         return f"Legend hidden for {safe_graph_name}"
 
     execute_labtalk("legend -r;")
@@ -559,6 +607,7 @@ def set_legend(
 
 def _set_tick_style_impl(
     graph_name: str,
+    axis: str = "both",
     tick_direction: str = "in",
     major_length: int = 8,
     minor_count: int = 4,
@@ -568,6 +617,7 @@ def _set_tick_style_impl(
 
     Args:
         graph_name: Graph name
+        axis: "x", "y", or "both" (default "both")
         tick_direction: "in", "out", or "both"
         major_length: Major tick length in points (default 8)
         minor_count: Number of minor ticks between major ticks (default 4)
@@ -578,19 +628,24 @@ def _set_tick_style_impl(
     """
     safe_graph_name = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph_name)
+    safe_axis = labtalk_choice(axis.lower(), {"x", "y", "both"}, "axis")
     dir_map = {"in": 1, "out": 2, "both": 3}
     safe_tick_direction = labtalk_choice(tick_direction, dir_map, "tick_direction")
     d = dir_map[safe_tick_direction]
 
     minor = minor_count if show_minor else 0
 
-    graph_layer_execute(safe_graph_name,
-        f"layer.x.ticks = {d}; layer.y.ticks = {d}; "
-        f"layer.x.minor = {minor}; layer.y.minor = {minor}; "
-        f"layer.x.majorLen = {major_length}; layer.y.majorLen = {major_length};"
+    axes = ["x", "y"] if safe_axis == "both" else [safe_axis]
+    cmds = " ".join(
+        f"layer.{a}.ticks = {d}; layer.{a}.minor = {minor}; "
+        f"layer.{a}.majorLen = {major_length};"
+        for a in axes
     )
+    if not graph_layer_execute(safe_graph_name, cmds):
+        msg = f"Could not update {safe_axis} tick style for {safe_graph_name}."
+        raise ValueError(msg)
 
-    return f"Updated tick style for {safe_graph_name}"
+    return f"Updated {safe_axis} tick style for {safe_graph_name}"
 
 
 # layer.axis.label.numFormat codes (verified against OriginLab docs).
@@ -646,5 +701,7 @@ def set_tick_labels(
         changed.append("bold")
     if decimal_places is not None:
         changed.append("decimal_places")
-    graph_layer_execute(safe_graph, " ".join(cmds))
+    if not graph_layer_execute(safe_graph, " ".join(cmds)):
+        msg = f"Could not update tick labels ({', '.join(changed)}) for {safe_graph}."
+        raise ValueError(msg)
     return f"Updated {safe_axis} tick labels for {safe_graph}: {', '.join(changed)}"

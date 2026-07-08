@@ -69,9 +69,8 @@ If unspecified, choose a conservative manuscript default: line+symbol for ordere
   column, bar, area, pie, histogram (single Y), box (single Y),
   contour and 3d_scatter (need `z_col`). Matrix plots — 3D surface,
   contour, heatmap, image — use `create_matrix_plot`. Colormapped plots
-  take `apply_color_map`/`set_colormap_levels`. Annotate with
-  `add_text_annotation`, `add_line`, and `add_arrow`; save reusable
-  layouts with `save_graph_template`.
+  take `colormap(...)`. Annotate with `annotate(kind="text"/"line"/"arrow"/
+  "reference_line", ...)`; save reusable layouts with `save_graph_template`.
 
 ## 3D and Colormap Design Defaults
 
@@ -83,7 +82,7 @@ heatmaps, and 3D scatter.
   Use a perceptually-uniform, colorblind- and grayscale-safe map. The server
   **bundles the gold-standard scientific colormaps** (viridis/cividis were
   added to Origin only after 2020, so they ship with the MCP and load by name
-  via `apply_color_map`): `Viridis` (default, best general sequential),
+  via `colormap(graph_name, palette=...)`): `Viridis` (default, best general sequential),
   `Cividis` (optimized for red-green CVD), `Plasma`/`Inferno`/`Magma`
   (high-contrast sequential). Origin's own colorblind-safe built-ins also
   work: `Heatmap4ColorBlind`, `GrayScale` (print-safe), `RedWhiteBlue`
@@ -115,7 +114,7 @@ heatmaps, and 3D scatter.
   `layer.cmap.colorAbove=color(254,243,146); layer.cmap.colorBelow=color(162,128,170);`.
   Bold the scale title with the `\b(...)` escape (a plain `.title$` is not
   bold): `Spectrum1.title$="\b(Intensity (a.u.))";`.
-- **Set the Z range honestly** with `set_colormap_levels(z_min, z_max)` to
+- **Set the Z range honestly** with `colormap(graph_name, z_min=, z_max=)` to
   the real data range; don't clip features into saturation just to boost
   contrast, and state the range.
 - **Label every axis with units, including Z — and make EVERY text element
@@ -127,7 +126,7 @@ heatmaps, and 3D scatter.
   `layer.x.label.bold=1; layer.y.label.bold=1; layer.z.label.bold=1;`. The
   matrix long name (set via `create_matrix_plot(..., z_label=)`) still seeds
   both the Z-axis title and the color-scale title; X/Y titles also via
-  `set_axis_labels`.
+  `axis(graph_name, op="labels", axis="x"/"y", label=...)`.
 - **Prefer a 2D contour or heatmap over a 3D surface when exact values
   matter** — a top-down colormap is easier to read off than a tilted
   surface. Use the 3D surface for shape/intuition, the contour for
@@ -144,8 +143,8 @@ heatmaps, and 3D scatter.
   axis titles come from the source column long names, so name the columns with
   units up front (e.g. `column_names="X (mm),Y (mm),Signal (a.u.)"`).
 - **Match the rest of the figure set:** same fonts, same export pixel size
-  (`export_graph_sized`), same labeling conventions as the 2D panels so a
-  mixed figure looks like one family.
+  (`export_graph(..., sized=True, width=...)`), same labeling conventions
+  as the 2D panels so a mixed figure looks like one family.
 - **Keep the 3D box honest and uncrowded.** Give X and Y the *same* range and
   origin so the floor reads as a square grid (e.g. both 0→10); a matrix's
   default 1→N coordinates look lopsided, so set them with
@@ -173,15 +172,17 @@ heatmaps, and 3D scatter.
 - Export once, inspect, then adjust colormap, Z range, viewing angle, and
   label sizes — exactly the 2D "export and inspect" loop.
 
-Verified colormap-surface recipe (Origin 2020):
+Verified colormap-surface recipe (Origin 2020). `"Matrix"`/`"Graph1"` below
+are example names — in practice read the actual `"name"` from the JSON that
+`worksheet_to_matrix` and `create_matrix_plot` return (Origin may rename):
 
 ```text
 worksheet_to_matrix(data_book="D", data_sheet="Sheet1", x_col=1, y_col=2, z_col=3)
 create_matrix_plot(matrix_book="Matrix", plot_type="surface", z_label="Intensity (a.u.)")
-apply_color_map(graph_name="Graph1", palette="Viridis")
-set_colormap_levels(graph_name="Graph1", z_min=0, z_max=1)
-set_axis_labels(graph_name="Graph1", x_label="X (mm)", y_label="Y (mm)")
-export_graph_sized(graph_name="Graph1", file_path="C:\\fig\\surface.png", width=1600)
+colormap(graph_name="Graph1", palette="Viridis", z_min=0, z_max=1)
+axis(graph_name="Graph1", op="labels", axis="x", label="X (mm)")
+axis(graph_name="Graph1", op="labels", axis="y", label="Y (mm)")
+export_graph(graph_name="Graph1", file_path="C:\\fig\\surface.png", sized=True, width=1600)
 ```
 
 This yields a Z-colored surface with bold X/Y/Z titles, a labeled color
@@ -202,6 +203,11 @@ get_worksheet_data(book_name="Data", sheet_name="Sheet1")
 
 Use existing worksheets when available. For direct arrays:
 
+> `create_worksheet`, `create_matrix`, `create_graph`, `create_matrix_plot`,
+> `import_data`, and `worksheet_to_matrix` return a JSON string with the
+> actual assigned name (Origin may rename on collision) — read `"name"`
+> from the result for subsequent calls, not the requested name.
+
 ```text
 create_worksheet(book_name="Data")
 set_worksheet_data(
@@ -215,7 +221,7 @@ set_worksheet_data(
 For CSV files:
 
 ```text
-import_csv_to_worksheet(file_path="C:\\Users\\name\\data.csv")
+import_data(file_path="C:\\Users\\name\\data.csv")
 ```
 
 ### 2. Build The Plot
@@ -271,7 +277,8 @@ Then fine-tune only what the exported image shows needs work:
 ```text
 set_plot_style(graph_name="Fig1", plot_index=1, color="blue", line_width=2.0, symbol_size=10)
 set_plot_style(graph_name="Fig1", plot_index=2, color="orange", line_width=2.0, symbol_size=10)
-set_axis_range(graph_name="Fig1", x_min=280, x_max=620, y_min=0, y_max=2.2)
+axis(graph_name="Fig1", op="range", axis="x", range_min=280, range_max=620)
+axis(graph_name="Fig1", op="range", axis="y", range_min=0, range_max=2.2)
 set_legend(graph_name="Fig1", visible=True, position="top-right", entries="Pristine,Annealed")
 ```
 
@@ -319,8 +326,9 @@ After export, inspect whether labels are readable, legends avoid data, axis rang
 
 ## Extended Toolkit (beyond 2D line plots)
 
-The server exposes 56 tools. Reach for these when a figure needs more
-than a styled XY plot.
+The server exposes 45 tools, several of them dispatchers (one tool name,
+an `op`/`kind`/`method` argument selecting the action). Reach for these
+when a figure needs more than a styled XY plot.
 
 ### Surfaces, contours, heatmaps
 
@@ -330,8 +338,7 @@ first, then plot:
 ```text
 worksheet_to_matrix(data_book="D", data_sheet="Sheet1", x_col=1, y_col=2, z_col=3)
 create_matrix_plot(matrix_book="Matrix", plot_type="surface")   # or contour, heatmap, image
-apply_color_map(graph_name="Graph1", palette="Viridis")        # Viridis, Cividis, Plasma, Inferno, Magma, GrayScale, ...
-set_colormap_levels(graph_name="Graph1", z_min=0, z_max=1)
+colormap(graph_name="Graph1", palette="Viridis", z_min=0, z_max=1)   # Viridis, Cividis, Plasma, Inferno, Magma, GrayScale, ...
 ```
 
 For a quick 2D contour or a 3D scatter straight from XYZ columns, use
@@ -340,20 +347,21 @@ For a quick 2D contour or a 3D scatter straight from XYZ columns, use
 ### Statistical / distribution figures
 
 - `create_graph(..., plot_type="box")` and `plot_type="histogram"` (single Y column).
-- `column_statistics`, `compare_means` (two-sample t-test), `frequency_count`
-  return JSON — put the numbers in the caption, don't just draw bars.
+- `stats(op="column")` (descriptive stats), `stats(op="compare_means")`
+  (two-sample t-test), `stats(op="frequency")` (binned counts) all return
+  JSON — put the numbers in the caption, don't just draw bars.
 
 ### Signal / spectra workflows
 
-`smooth`, `differentiate`, `integrate`, `interpolate`, `fft`, `find_peaks`
-write result columns or return JSON. Typical Raman/XRD flow: smooth →
+`transform(method="smooth"/"differentiate"/"integrate"/"interpolate"/"fft"/"find_peaks")`
+writes result columns or returns JSON. Typical Raman/XRD flow: smooth →
 find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
 
 ### Multi-panel and axis control
 
-- `set_axis_scale(graph, axis, "log10")` for decades-spanning data. It now
-  auto-rescales the axis to the data (range bounds are ACTUAL values, not
-  exponents) so a log switch no longer leaves garbage ticks.
+- `axis(graph, op="scale", axis="x"/"y", scale="log10")` for decades-spanning
+  data. It auto-rescales the axis to the data (range bounds are ACTUAL
+  values, not exponents) so a log switch no longer leaves garbage ticks.
 - `axis(graph, op="frame", frame="closed")` draws the top+right border axes.
 - `set_tick_labels(graph, axis, format="scientific"|"decimal", bold=, decimal_places=)`
   for tick-label number format. Log axes already render 10^n by default.
@@ -362,8 +370,9 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
 - `set_graph_font(graph, target="axes", bold=True)` bolds axis titles via
   `\b(...)` markup (there is no `xb.bold` on Origin 2020).
 - `add_second_y_axis` / `add_layer` for dual-axis or stacked panels.
-- `add_reference_line` (threshold/baseline), `add_line`, `add_arrow` (callouts),
-  `add_text_annotation` (labels at data coordinates).
+- `annotate(graph, kind="reference_line", orientation=, value=)` (threshold/
+  baseline), `kind="line"` / `kind="arrow"` (callouts), `kind="text"`
+  (labels at data coordinates).
 
 ### Error bars and plot cleanup
 
@@ -383,18 +392,18 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
 
 ### Worksheet prep and IO
 
-`set_column_formula`, `sort_worksheet`, `set_column_properties` (units/long
-name), `add_columns`/`delete_columns`, `transpose_worksheet`, `import_excel`,
-`export_worksheet`.
+`manage_columns(op="formula"/"add"/"delete"/"properties")` (column formulas,
+add/delete columns, units/long name/designation), `sort_worksheet`,
+`transpose_worksheet`, `import_data` (CSV/text or Excel), `export_worksheet`.
 
 ### Reuse and sized export
 
 - `save_graph_template(graph, path)` captures a finished layout as `.otpu`
   to reuse across figures.
-- `export_graph_sized(graph, path, width=1600)` exports at an exact pixel
-  width (vs. `export_graph`, which exports at ~1200px wide). Both write the
-  file directly via expGraph with no clipboard, so the user's clipboard is
-  preserved.
+- `export_graph(graph, path, sized=True, width=1600)` exports at an exact
+  pixel width (vs. the default, which exports at ~1200px wide). Both write
+  the file directly via expGraph with no clipboard, so the user's clipboard
+  is preserved.
 
 ## Origin COM Notes
 
@@ -406,10 +415,10 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | `%C` plot shortcuts can fail through COM | Use plot names from `FindGraphLayer().DataPlots`; MCP style tools do this |
 | Legend text is awkward through COM | Set worksheet Long Names, rebuild with `legend -r`, then position |
 | Legend overlaps a dense plot with no clear corner | Handled automatically: the legend is moved outside the frame (right of the plot, vertically centered) with the plot shrunk — `place_legend_avoiding_data` returns `outside-right`. Origin clamps `legend.left` back inside the frame on the first assignment, so the tool sets it TWICE (with `legend.attach = 1`); the second assignment escapes the clamp |
-| `expGraph` needs a directory `path:=` + `filename:=` and `overwrite:=replace` (a full file path or missing args opens a dialog) | `export_graph` (expGraph, ~1200px wide) and `export_graph_sized` (expGraph, `tr1.unit:=2 tr1.width:=` pixels) both write the file directly with no clipboard |
-| Graphic-object arrowheads use `arrowEndShape`/`arrowBeginShape` (1=filled, 2=chevron), not `arrowEnd`/`arrowEndType` | `add_arrow` draws the line and sets `arrowEndShape`; the begin/end length/width are `arrowEndLength`/`arrowEndWidth` |
+| `expGraph` needs a directory `path:=` + `filename:=` and `overwrite:=replace` (a full file path or missing args opens a dialog) | `export_graph` (expGraph, ~1200px wide by default, or `sized=True` with `tr1.unit:=2 tr1.width:=` pixels) writes the file directly with no clipboard |
+| Graphic-object arrowheads use `arrowEndShape`/`arrowBeginShape` (1=filled, 2=chevron), not `arrowEnd`/`arrowEndType` | `annotate(kind="arrow")` draws the line and sets `arrowEndShape`; the begin/end length/width are `arrowEndLength`/`arrowEndWidth` |
 | Save a graph template with `save -t <window> <fullpath.otpu>` (or `-tj` for `.otp`) — both window and full path+extension are required or a dialog opens | `save_graph_template` supplies both, so it never opens a dialog |
-| Colormap palettes load via `layer.cmap.load(<name>.pal); layer.cmap.updateScale()` (the `()` matters) | `apply_color_map` / `set_colormap_levels` wrap this |
+| Colormap palettes load via `layer.cmap.load(<name>.pal); layer.cmap.updateScale()` (the `()` matters) | `colormap` wraps this |
 | Fit statistics can reset after `nlend` | Read statistics before ending the nonlinear fit session |
 | Error-bar plots appear as separate entries in `DataPlots` | MCP styling tools detect them via the column's Y-Error designation and only color-match them — symbol/line commands would redraw error bars as connected lines |
 | Error-bar `set -erw`/`-erwc` use POINTS, unlike the data line's `-w` (~200 units/pt) | Set `-erw` (error-bar line width) and `-erwc` (cap/whisker width) in points. Passing a `-w`-scale value (e.g. 550) into `-erw` makes bars explode — that was a units mistake, not an Origin bug. MCP tools set `-erw` in points and scale `-erwc` to the symbol size |

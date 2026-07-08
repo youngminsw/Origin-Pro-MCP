@@ -305,3 +305,23 @@ def test_concurrent_forwards_with_heartbeats_correlate(in_process_daemon):
             assert r.endswith(f"hb{i} = {i};"), (i, r)
     finally:
         client.close()
+
+
+# --------------------------------------------------------------------------- #
+# ROBUSTNESS — the shim routes its registry through the guarded accessor       #
+# --------------------------------------------------------------------------- #
+
+
+def test_shim_registry_fails_loud_on_renamed_internals(monkeypatch):
+    """shim._real_registry must raise (not return {}) if FastMCP relocates its
+    private tool registry, so the shim never comes up forwarding zero tools."""
+    import origin_pro_mcp.app as app_mod
+    import origin_pro_mcp.shim as shim_mod
+
+    class RenamedInternals:  # no ``_tool_manager``
+        pass
+
+    # _real_registry re-imports app.mcp at call time, so patching it here takes.
+    monkeypatch.setattr(app_mod, "mcp", RenamedInternals())
+    with pytest.raises(RuntimeError):
+        shim_mod._real_registry()

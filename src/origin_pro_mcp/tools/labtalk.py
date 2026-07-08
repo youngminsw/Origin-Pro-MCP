@@ -69,19 +69,39 @@ def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = 
 def get_labtalk_variable(name: str) -> str:
     """Get the value of a LabTalk variable.
 
-    Gotchas: numeric variables that don't exist read as 0, and variables
-    declared with a type (e.g. `int x = 5`) are script-local — they vanish
-    when the script ends. Use untyped assignment (`x = 5`) in run_labtalk
-    if you want to read the value back later.
+    Gotcha: a variable declared with a type (e.g. `int x = 5`) is
+    script-local — it vanishes when the script ends. Use untyped assignment
+    (`x = 5`) in run_labtalk if you want to read the value back later.
 
     Args:
         name: Variable name. Use $ suffix for strings (e.g., 'str$')
 
     Returns:
         Variable value as string
+
+    Raises:
+        ValueError: if a numeric variable is not defined (checked via
+            LabTalk's `exist()`, since an undefined numeric variable would
+            otherwise read back as an indistinguishable 0).
+
+    Note:
+        The `exist()` guard above only applies to numeric variables. For a
+        string variable ($ suffix), an undefined variable reads back as ""
+        — indistinguishable from a defined-but-empty string.
     """
     safe_name = labtalk_variable(name, "name")
     if safe_name.endswith("$"):
         return get_lt_str(safe_name)
-    else:
-        return str(get_lt_var(safe_name))
+    if not execute_labtalk(f"_opm_lt_exist = exist({safe_name});"):
+        msg = f"Could not check whether LabTalk variable '{safe_name}' exists."
+        raise ValueError(msg)
+    if get_lt_var("_opm_lt_exist") == 0:
+        msg = (
+            f"LabTalk variable '{safe_name}' is not defined. Note: a "
+            "variable declared with a type (e.g. `int x = 5`) is "
+            "script-local and vanishes when the script ends — use untyped "
+            "assignment (`x = 5`) in run_labtalk if you want to read it "
+            "back later."
+        )
+        raise ValueError(msg)
+    return str(get_lt_var(safe_name))

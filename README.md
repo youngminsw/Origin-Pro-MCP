@@ -10,7 +10,7 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 - **Graph Layers & Axes** — Log scales, dual Y axis, panels, reference lines, text annotations
 - **Plot Styling** — Colors, symbols, line width, publication-ready formatting in one call
 - **Analysis** — Curve fitting, FFT, smoothing, integration, differentiation, interpolation, peak finding
-- **Statistics** — Descriptive stats, two-sample t-test, frequency counts
+- **Statistics** — Descriptive stats, two-sample t-test, frequency counts (via the `stats` and `transform` tools)
 - **Project Management** — New/save/load projects, export all graphs (with pixel-size control)
 - **LabTalk Scripting** — Direct LabTalk execution with destructive/file-overwrite commands blocked
 
@@ -246,31 +246,38 @@ cd src && /mnt/c/.../python.exe -m origin_pro_mcp.cli list_worksheets
 The CLI reflects over the same tool registry as the MCP server, so it
 always exposes exactly the tools listed below.
 
-## Available Tools (56 total)
+## Available Tools (45 total)
+
+Several tools are **dispatchers**: one tool name with an `op`/`kind`/`method`
+argument that selects the specific action, so a handful of tools cover what
+used to be many single-purpose ones.
 
 ### Project Management
 | Tool | Description |
 |------|-------------|
 | `new_project` | Create new empty Origin project |
-| `save_graph_template` | Save a graph as a reusable .otpu/.otp template |
 | `save_project` | Save project to .opju file |
 | `load_project` | Open existing .opj/.opju file |
+| `export_all_graphs` | Export every graph in the project to image files |
+| `save_graph_template` | Save a graph as a reusable .otpu/.otp template |
+
+> **Note**: `create_worksheet`, `create_matrix`, `create_graph`,
+> `create_matrix_plot`, `import_data`, and `worksheet_to_matrix` return a
+> JSON string (not a sentence) with the actual assigned name — Origin may
+> rename on collision, so read `"name"` from the result rather than assuming
+> the requested name was used.
 
 ### Worksheet Data
 | Tool | Description |
 |------|-------------|
 | `create_worksheet` | Create new workbook |
 | `set_worksheet_data` | Write column data (JSON arrays) |
-| `get_worksheet_data` | Read worksheet data as JSON |
-| `import_csv_to_worksheet` | Import CSV/text file |
-| `import_excel` | Import an .xls/.xlsx file |
+| `get_worksheet_data` | Read worksheet data as JSON (empty cells → null) |
+| `import_data` | Import a CSV/text or Excel file (`format="auto"/"csv"/"excel"`) |
 | `export_worksheet` | Export a worksheet to CSV/text |
 | `list_worksheets` | List open workbooks, graphs, and matrices |
-| `set_column_formula` | Fill a column from a formula of other columns |
-| `set_column_properties` | Set long name, units, comment, designation |
-| `set_column_designation` | Set a column's plot role (x/y/z/yerr/xerr/label) by name |
+| `manage_columns` | Add, delete, or edit columns — `op="add"/"delete"/"properties"/"formula"` |
 | `sort_worksheet` | Sort rows by a column (asc/desc) |
-| `add_columns` / `delete_columns` | Add or remove columns |
 | `transpose_worksheet` | Transpose rows and columns |
 
 ### Matrix
@@ -287,26 +294,16 @@ always exposes exactly the tools listed below.
 | `create_graph` | Create graph (scatter, line, line+symbol, column, bar, area, pie, histogram, box, contour, 3d_scatter) |
 | `add_plot_to_graph` | Add another dataset to an existing graph |
 | `delete_graph` | Delete a graph window |
-| `remove_plot` | Remove one data plot from a graph (uses `layer -d`, actually deletes) |
+| `remove_plot` | Remove one data plot from a graph (uses `layer -e` + `layer -ie`, actually deletes; `layer -d` would delete the whole layer) |
 | `set_error_bars` | Attach Y/X error bars to an existing plot from an error column (no duplicate) |
 | `set_layer_geometry` | Set a layer's panel position/size (left/top/width/height) |
 | `add_second_y_axis` | Add a right-Y layer and plot on it |
-| `add_layer` | Add a panel/axis layer (right-y, top-x, inset) |
-| `set_axis_labels` | Set X/Y axis labels and title |
-| `set_axis_range` | Set axis min/max values |
-| `set_axis_scale` | Linear / log10 / ln / log2 scale (auto-rescales range to data) |
-| `add_reference_line` | Horizontal/vertical line at a value |
-| `add_line` | Straight line between two data points |
-| `add_arrow` | Single/double-headed arrow between two points |
-| `apply_color_map` | Apply a colormap; bundles viridis/cividis/plasma/inferno/magma (colorblind-safe) plus Origin built-ins |
-| `set_colormap_levels` | Set the Z color-scale range |
-| `add_text_annotation` | Place a text label at data coordinates |
-| `export_graph` | Export via clipboard (page size) |
-| `export_graph_sized` | Export at a chosen pixel width/height |
-| `export_all_graphs` | Export every graph in the project |
-
-> `export_graph` uses Origin's clipboard copy (size follows the page
-> setup). `export_graph_sized` uses `expGraph` for direct pixel control.
+| `add_layer` | Add a panel/axis layer (right-y, top-x, inset, independent) |
+| `axis` | Configure axes — `op="labels"/"range"/"scale"/"tick"/"frame"` |
+| `annotate` | Add an annotation — `kind="reference_line"/"text"/"line"/"arrow"` |
+| `colormap` | Apply a palette and/or set the Z color-scale range on a colormapped graph |
+| `export_graph` | Export to an image file; `sized=True` for an exact pixel width/height (default ~1200px wide) |
+| `ungroup_plots` | Break a plot group so each curve can be colored independently |
 
 ### Styling
 | Tool | Description |
@@ -315,7 +312,6 @@ always exposes exactly the tools listed below.
 | `set_plot_style` | Set color, line width, symbol shape/size, and open/solid marker |
 | `set_graph_font` | Set font family, size, and optional bold |
 | `set_legend` | Configure legend text and position |
-| `set_tick_style` | Set tick direction and length |
 | `set_tick_labels` | Tick-label numeric format (decimal/scientific/engineering), bold, decimal places |
 
 ### Analysis
@@ -323,25 +319,20 @@ always exposes exactly the tools listed below.
 |------|-------------|
 | `curve_fit` | Curve fitting: parameters ± std errors, R², SSR, reduced χ²; optional `plot_on_graph` |
 | `list_fitting_functions` | Show available fit functions |
-| `integrate` | Area under the curve |
-| `differentiate` | Derivative dY/dX into a new column |
-| `smooth` | Savitzky-Golay / adjacent / binomial smoothing |
-| `interpolate` | Resample onto evenly spaced X (linear/spline/bspline/akima) |
-| `fft` | Forward FFT + dominant frequency |
-| `find_peaks` | Peak positions and heights |
-
-### Statistics
-| Tool | Description |
-|------|-------------|
-| `column_statistics` | mean, sd, se, variance, median, min, max, sum, n |
-| `compare_means` | Two-sample t-test (t, df, p, means) |
-| `frequency_count` | Binned histogram counts |
+| `transform` | Numerical transform on an XY curve — `method="integrate"/"differentiate"/"smooth"/"interpolate"/"fft"/"find_peaks"` |
+| `stats` | Statistics on worksheet columns — `op="column"/"compare_means"/"frequency"` |
 
 ### Advanced
 | Tool | Description |
 |------|-------------|
 | `run_labtalk` | Execute LabTalk with destructive/file-writing commands blocked; optional `capture` reads variables back |
 | `get_labtalk_variable` | Read a LabTalk variable value |
+
+### Skills
+| Tool | Description |
+|------|-------------|
+| `list_skills` | List bundled skills (name, title, when to use) |
+| `get_skill` | Load a skill's full markdown instructions by name |
 
 ## Example: Publication-Quality Figure
 
@@ -389,7 +380,7 @@ This server ships a **bundled skill** (`src/origin_pro_mcp/skills/publication-fi
 
 When you ask Claude to "make a publication figure", it can autonomously pull this skill and follow its workflow:
    - Ask about data source, figure type, target journal
-   - Use colorblind-safe color palette (blue → red → green → orange → purple → cyan)
+   - Use colorblind-safe color palette (steel blue → rose → teal → amber → purple → gray cyan; see the Color Palette table below)
    - Apply proper typography (Arial, bold, correct sizes)
    - Follow a pre-export checklist
 
@@ -416,7 +407,7 @@ Pull the skill with `get_skill("publication-figure")` (or copy `src/origin_pro_m
 | `legend.text$` doesn't support multiline via COM | Set column Long Names, then `legend -r` |
 | `legend.x/y` uses data coordinates, not % | Calculate from `layer.x.from/to` |
 | `%C` notation fails via COM | Use actual plot names from `DataPlots` |
-| `expGraph` doesn't produce files via COM | Use `CopyPage` + Pillow clipboard |
+| `expGraph` needs `path:=`/`filename:=`/`overwrite:=replace` (a full path or missing args opens a dialog) | `export_graph` writes the file directly via `expGraph`, no clipboard involved |
 | `nlr.r2` returns 0 after `nlend` | Read statistics BEFORE `nlend` |
 | Plot styling commands can conflict | Add 0.2s delay between `set` commands |
 | `[Book]Sheet!col(n).type = ...` silently ignored | Activate the sheet, then use `wks.col(n).type` |
@@ -454,10 +445,12 @@ Pull the skill with `get_skill("publication-figure")` (or copy `src/origin_pro_m
 | Other | `power`, `sine` |
 
 `curve_fit` returns the fitted parameter values with standard errors plus
-R², SSR, reduced χ², and DoF. Exception: `power` fits and draws the curve,
+R², SSR, reduced χ², and DoF. Exceptions: `power` fits and draws the curve,
 but Origin 2020 does not expose its parameter values over COM, so only the
-statistics are returned. Use `list_fitting_functions` to see the parameter
-names for each function.
+statistics are returned; and a `line` fit *without* `plot_on_graph` uses the
+fast `fitlr` path, which returns intercept/slope values and R² only (no
+standard errors, SSR, χ², or DoF — pass `plot_on_graph` to get them). Use
+`list_fitting_functions` to see the parameter names for each function.
 
 ## Color Palette
 
@@ -484,7 +477,7 @@ by `curve_fit(plot_on_graph=...)` uses a muted brick red (170, 68, 80).
 |---------|----------|
 | "Could not connect to Origin via COM" | Check that Origin/OriginPro is installed and licensed; if it is, run Origin once as administrator to re-register the Automation Server |
 | Tools timeout | Origin may be showing a dialog — check the Origin window |
-| Export fails with a clipboard error | The server already polls the clipboard for up to 5 s; check that the Origin window is not minimized and no other app holds the clipboard |
+| "Export failed: ... was not created" | `export_graph` writes the file directly via `expGraph` (no clipboard); this means Origin (Windows) could not write to that path — use a Windows path (`C:\...`) or `/mnt/<drive>/...` instead of a WSL/Linux path |
 | "Window 'X' not found" errors | The error lists every open workbook/graph — use one of those names (Origin may have renamed the window if the name was taken) |
 | Legend missing after styling | Legend uses data coordinates — verify axis range is set before positioning |
 | Symbols appear hollow | Do NOT use `set -d` flag (it's for dash patterns, not fill) |

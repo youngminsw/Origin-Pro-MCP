@@ -142,6 +142,34 @@ def test_create_graph_box_designates_y(fake_origin):
     assert any("plot:=206" in s for s in fake_origin.executed)
 
 
+def test_create_graph_returns_parseable_json(fake_origin):
+    """create_graph must return the actual graph name as structured JSON,
+    not buried in a sentence — Origin uniquifies names on collision, so
+    callers need "name" to be machine-readable."""
+    import json
+    from origin_pro_mcp.tools.graph import create_graph
+
+    out = create_graph("MyGraph", "Book1", "Sheet1", 1, 2, plot_type="scatter")
+    data = json.loads(out)
+    assert data == {
+        "name": "MyGraph",
+        "requested_name": "MyGraph",
+        "renamed": False,
+        "plot_type": "scatter",
+    }
+
+
+def test_axis_tick_x_only_leaves_y_untouched(fake_origin):
+    """axis(op="tick", axis="x") must restyle only the X ticks — previously
+    the `axis` argument was silently ignored and both axes were changed."""
+    from origin_pro_mcp.tools.graph import axis
+
+    axis("Graph1", op="tick", axis="x", major_length=6)
+    layer = fake_origin.FindGraphLayer("[Graph1]Layer1")
+    assert any("layer.x.majorLen = 6" in s for s in layer.executed)
+    assert not any("layer.y" in s for s in layer.executed)
+
+
 def test_add_arrow_sets_arrowhead(fake_origin):
     from origin_pro_mcp.tools.graph import annotate
 
@@ -242,8 +270,8 @@ def test_remove_plot_uses_layer_erase(fake_origin):
 def test_remove_plot_out_of_range(fake_origin):
     from origin_pro_mcp.tools.graph import remove_plot
 
-    msg = remove_plot("Graph1", plot_index=1)  # default Graph1 has no plots
-    assert "not found" in msg
+    with pytest.raises(ValueError, match="not found"):
+        remove_plot("Graph1", plot_index=1)  # default Graph1 has no plots
     assert not any("layer -e" in s for s in fake_origin.executed)
 
 
@@ -252,3 +280,29 @@ def test_remove_plot_unknown_graph(fake_origin):
 
     with pytest.raises(ValueError, match="not found"):
         remove_plot("Ghost", plot_index=1)
+
+
+# --- setter execute-result checks (consistency with raise-on-failure) -------
+
+def test_set_axis_labels_raises_on_execute_failure(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    fake_origin.execute_results["xb.text$"] = False
+    with pytest.raises(ValueError, match="x-axis label"):
+        axis("Graph1", op="labels", axis="x", label="Temperature")
+
+
+def test_set_axis_range_raises_on_execute_failure(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    fake_origin.execute_results["layer.x.from"] = False
+    with pytest.raises(ValueError, match="x-axis minimum"):
+        axis("Graph1", op="range", axis="x", range_min=0.0, range_max=10.0)
+
+
+def test_set_axis_frame_raises_on_execute_failure(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    fake_origin.execute_results["layer.x.opposite"] = False
+    with pytest.raises(ValueError, match="frame of Graph1"):
+        axis("Graph1", op="frame", frame="closed")

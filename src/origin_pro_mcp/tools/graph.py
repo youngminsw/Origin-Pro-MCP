@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import tempfile
@@ -101,7 +102,10 @@ def create_graph(
         title: Optional graph title
 
     Returns:
-        Created graph name (may differ from graph_name if it was taken)
+        JSON string: {"name": <actual graph name>, "requested_name": <name
+        passed in>, "renamed": <bool, True if Origin uniquified the name>,
+        "plot_type": <plot type used>}. Use "name" for subsequent calls —
+        Origin renames on collision, so it may differ from requested_name.
     """
     o = get_origin()
     safe_graph_name = labtalk_name(graph_name, "graph_name")
@@ -157,7 +161,12 @@ def create_graph(
                 )
                 raise ValueError(msg)
         _set_title()
-        return f"Created graph: {name} ({safe_plot_type})"
+        return json.dumps({
+            "name": name,
+            "requested_name": safe_graph_name,
+            "renamed": name != safe_graph_name,
+            "plot_type": safe_plot_type,
+        })
 
     # --- 2D plots (plotxy) ---
     if safe_plot_type in _Y_ONLY_TYPES:
@@ -186,7 +195,12 @@ def create_graph(
         raise ValueError(msg)
 
     _set_title()
-    return f"Created graph: {name} ({safe_plot_type})"
+    return json.dumps({
+        "name": name,
+        "requested_name": safe_graph_name,
+        "renamed": name != safe_graph_name,
+        "plot_type": safe_plot_type,
+    })
 
 @mcp.tool()
 def add_plot_to_graph(
@@ -264,7 +278,10 @@ def remove_plot(graph_name: str, plot_index: int = 1) -> str:
 
     Use this to delete a stray/duplicate/dead-guide curve without touching the
     others. Unlike `range r; delete r;` (which reports success but leaves the
-    plot on the layer), this uses `layer -d`, which actually removes it.
+    plot on the layer), this selects the plot's dataset with `layer -e` and
+    then purges it with `layer -ie` (delete-selected), which actually removes
+    it. (`layer -d` deletes the entire LAYER, not a single plot — do not use it
+    for this.)
 
     Args:
         graph_name: Graph name
@@ -283,10 +300,12 @@ def remove_plot(graph_name: str, plot_index: int = 1) -> str:
     data_names = [p["name"] for p in infos if not p["is_error"]]
     idx = plot_index - 1
     if idx < 0 or idx >= len(data_names):
-        return (
-            f"Plot index {plot_index} not found. "
-            f"{safe_graph} has {len(data_names)} data plot(s)."
+        valid = f"1-{len(data_names)}" if data_names else "(none)"
+        msg = (
+            f"Plot index {plot_index} not found on {safe_graph}. "
+            f"Valid range: {valid}. Data plots: {data_names}"
         )
+        raise ValueError(msg)
     pname = data_names[idx]
     # `layer -e <dataset>` removes the dataset from the layer; `layer -ie`
     # then purges the now-unused style holder (which is what leaves a "dead
@@ -436,11 +455,17 @@ def _set_axis_labels_impl(
     safe_graph_name = labtalk_name(graph_name, "graph_name")
     activate_window(safe_graph_name, "graph_name")
     if x_label:
-        execute_labtalk(f"xb.text$ = {labtalk_text(x_label, 'x_label')};")
+        if not execute_labtalk(f"xb.text$ = {labtalk_text(x_label, 'x_label')};"):
+            msg = f"Could not set the x-axis label on {safe_graph_name}."
+            raise ValueError(msg)
     if y_label:
-        execute_labtalk(f"yl.text$ = {labtalk_text(y_label, 'y_label')};")
+        if not execute_labtalk(f"yl.text$ = {labtalk_text(y_label, 'y_label')};"):
+            msg = f"Could not set the y-axis label on {safe_graph_name}."
+            raise ValueError(msg)
     if title:
-        execute_labtalk(f"label -n title -s {labtalk_text(title, 'title')}; title.x = 50; title.y = 95;")
+        if not execute_labtalk(f"label -n title -s {labtalk_text(title, 'title')}; title.x = 50; title.y = 95;"):
+            msg = f"Could not set the title on {safe_graph_name}."
+            raise ValueError(msg)
     return f"Updated labels for {safe_graph_name}"
 
 def _set_axis_range_impl(
@@ -465,13 +490,21 @@ def _set_axis_range_impl(
     safe_graph_name = labtalk_name(graph_name, "graph_name")
     activate_window(safe_graph_name, "graph_name")
     if x_min is not None:
-        execute_labtalk(f"layer.x.from = {x_min};")
+        if not execute_labtalk(f"layer.x.from = {x_min};"):
+            msg = f"Could not set x-axis minimum on {safe_graph_name}."
+            raise ValueError(msg)
     if x_max is not None:
-        execute_labtalk(f"layer.x.to = {x_max};")
+        if not execute_labtalk(f"layer.x.to = {x_max};"):
+            msg = f"Could not set x-axis maximum on {safe_graph_name}."
+            raise ValueError(msg)
     if y_min is not None:
-        execute_labtalk(f"layer.y.from = {y_min};")
+        if not execute_labtalk(f"layer.y.from = {y_min};"):
+            msg = f"Could not set y-axis minimum on {safe_graph_name}."
+            raise ValueError(msg)
     if y_max is not None:
-        execute_labtalk(f"layer.y.to = {y_max};")
+        if not execute_labtalk(f"layer.y.to = {y_max};"):
+            msg = f"Could not set y-axis maximum on {safe_graph_name}."
+            raise ValueError(msg)
     return f"Set axis range for {safe_graph_name}"
 
 def _export_graph_impl(
@@ -510,7 +543,20 @@ def _export_graph_impl(
 
     out = export_graph_to_file(graph_name, path, format=safe_format)
     size = os.path.getsize(out)
-    return f"Exported to: {out} ({size} bytes)"
+    ignored = []
+    if width != 600:
+        ignored.append(f"width={width}")
+    if height != 400:
+        ignored.append(f"height={height}")
+    if dpi != 300:
+        ignored.append(f"dpi={dpi}")
+    note = ""
+    if ignored:
+        note = (
+            f" (IGNORED: {', '.join(ignored)} — exported at ~1200px wide, "
+            "aspect ratio kept; pass sized=True to control pixel size)"
+        )
+    return f"Exported to: {out} ({size} bytes){note}"
 
 
 # Origin axis scale type codes (layer.x/y.type).
@@ -590,7 +636,9 @@ def _set_axis_frame_impl(graph_name: str, frame: str = "closed") -> str:
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
     opposite = 1 if safe_frame == "closed" else 0
-    execute_labtalk(f"layer.x.opposite = {opposite}; layer.y.opposite = {opposite};")
+    if not execute_labtalk(f"layer.x.opposite = {opposite}; layer.y.opposite = {opposite};"):
+        msg = f"Could not set the frame of {safe_graph} to {safe_frame}."
+        raise ValueError(msg)
     return f"Set frame of {safe_graph} to {safe_frame}"
 
 @mcp.tool()
@@ -1017,9 +1065,10 @@ def axis(
               (linear, log10, ln, log2). By default the axis range is reset to
               the data extent after the change (pass rescale=False to keep the
               current range); range bounds are ACTUAL values, not exponents.
-            - "tick": set tick-mark style. Uses `tick_direction` (in/out/both,
-              default in), `major_length` (default 8), `minor_count`
-              (default 4), `show_minor` (default True).
+            - "tick": set tick-mark style. Uses `axis` ("x", "y", or "both",
+              default "both"), `tick_direction` (in/out/both, default in),
+              `major_length` (default 8), `minor_count` (default 4),
+              `show_minor` (default True).
             - "frame": close/open the frame (top+right border axes). Uses
               `frame` ("closed" or "open", default "closed").
         axis: Target axis ("x", "y", or "both"; default "both").
@@ -1057,12 +1106,22 @@ def axis(
         if scale is None:
             msg = "axis op 'scale' requires scale."
             raise ValueError(msg)
-        # scale targets a single axis; the documented/old default is "y".
-        # Treat the dispatcher's "both" default (or unset) as "y" so a
-        # default call succeeds instead of hitting the impl's x/y guard.
-        scale_axis = "y" if axis in (None, "both") else axis
+        # _set_axis_scale_impl only takes a single axis ("x" or "y"); apply
+        # to both when the caller asked for "both" (or left it unset) instead
+        # of silently narrowing to Y and leaving X untouched.
+        safe_scale_axis = labtalk_choice(
+            (axis or "both").lower(), {"x", "y", "both"}, "axis"
+        )
+        if safe_scale_axis == "both":
+            x_msg = _set_axis_scale_impl(
+                graph_name, axis="x", scale=scale, rescale=rescale
+            )
+            y_msg = _set_axis_scale_impl(
+                graph_name, axis="y", scale=scale, rescale=rescale
+            )
+            return f"{x_msg}. {y_msg}"
         return _set_axis_scale_impl(
-            graph_name, axis=scale_axis, scale=scale, rescale=rescale
+            graph_name, axis=safe_scale_axis, scale=scale, rescale=rescale
         )
     if safe_op == "frame":
         return _set_axis_frame_impl(
@@ -1070,8 +1129,10 @@ def axis(
         )
     # tick
     from .style import _set_tick_style_impl
+    safe_tick_axis = labtalk_choice(axis.lower(), {"x", "y", "both"}, "axis")
     return _set_tick_style_impl(
         graph_name,
+        axis=safe_tick_axis,
         tick_direction=tick_direction if tick_direction is not None else "in",
         major_length=major_length if major_length is not None else 8,
         minor_count=minor_count if minor_count is not None else 4,

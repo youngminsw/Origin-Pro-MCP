@@ -53,9 +53,9 @@ def test_windows_path_converts_wsl_style():
 def test_get_worksheet_data_handles_hresult_return(fake_origin):
     from origin_pro_mcp.tools.worksheet import get_worksheet_data
 
-    result = json.loads(get_worksheet_data("NoBook", "NoSheet"))
-    assert "not found" in result["error"]
-    assert "Book1" in result["error"]
+    with pytest.raises(ValueError, match="not found") as exc_info:
+        get_worksheet_data("NoBook", "NoSheet")
+    assert "Book1" in str(exc_info.value)
 
 
 def test_set_worksheet_data_rejects_bad_json(fake_origin):

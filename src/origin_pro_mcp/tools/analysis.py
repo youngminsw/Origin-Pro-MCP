@@ -407,7 +407,8 @@ def transform(
               (default 100) and interp_method (linear/spline/bspline/akima,
               default linear). Returns JSON {sheet, x, y}.
             - "fft": forward FFT spectrum. Returns JSON {spectrum_sheet,
-              dominant_frequency}.
+              dominant_frequency} (dominant_frequency is null when the
+              spectrum columns cannot be read back).
             - "find_peaks": local-maximum peak search; uses direction
               (positive/negative/both, default positive) and local_points
               (neighborhood size, default 10). Returns JSON {peaks, count}.
