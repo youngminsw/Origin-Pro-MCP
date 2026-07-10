@@ -633,13 +633,19 @@ def _set_axis_scale_impl(
 _FRAME_MODES = {"closed", "open"}
 
 
-def _set_axis_frame_impl(graph_name: str, frame: str = "closed") -> str:
+def _set_axis_frame_impl(
+    graph_name: str, frame: str = "closed", frame_width: float | None = None
+) -> str:
     """Close or open a graph's frame — the top (opposite X) and right
-    (opposite Y) border axes.
+    (opposite Y) border axes — and/or set the frame LINE width.
 
     Args:
         graph_name: Graph name
         frame: "closed" (draw top+right border axes) or "open" (hide them)
+        frame_width: Frame line width in points, applied to all 4 sides
+                     (x/y/x2/y2.thickness — probe-confirmed on Origin 2020:
+                     0.5 is hairline, 2 is a typical publication frame, 8 is
+                     very heavy). None = leave the current width unchanged.
 
     Returns:
         Success message
@@ -652,7 +658,17 @@ def _set_axis_frame_impl(graph_name: str, frame: str = "closed") -> str:
     if not graph_layer_execute(safe_graph, f"layer.x.opposite = {opposite}; layer.y.opposite = {opposite};"):
         msg = f"Could not set the frame of {safe_graph} to {safe_frame}."
         raise ValueError(msg)
-    return f"Set frame of {safe_graph} to {safe_frame}"
+    width_note = ""
+    if frame_width is not None:
+        w = float(frame_width)
+        for axis_prop in ("layer.x.thickness", "layer.y.thickness",
+                           "layer.x2.thickness", "layer.y2.thickness"):
+            if not graph_layer_execute(safe_graph, f"{axis_prop} = {w};"):
+                msg = f"Could not set {axis_prop} on {safe_graph}."
+                raise ValueError(msg)
+        verify_layer_value(safe_graph, "layer.x.thickness", w, "frame_width")
+        width_note = f", frame_width {w}pt"
+    return f"Set frame of {safe_graph} to {safe_frame}{width_note}"
 
 @mcp.tool()
 def add_second_y_axis(
@@ -1063,6 +1079,7 @@ def axis(
     show_minor: bool | None = None,
     rescale: bool = True,
     frame: str | None = None,
+    frame_width: float | None = None,
 ) -> str:
     """Configure a graph's axes.
 
@@ -1078,13 +1095,20 @@ def axis(
               (linear, log10, ln, log2). By default the axis range is reset to
               the data extent after the change (pass rescale=False to keep the
               current range); range bounds are ACTUAL values, not exponents.
-            - "tick": set tick-mark style. Uses `axis` ("x", "y", or "both",
-              default "both"), `tick_direction` (in/out/both, default in),
+            - "tick": set tick-mark style. Uses `axis` ("x", "y", "both",
+              "top", or "right" — "top"/"right" target ONLY the opposite-side
+              border axis (x2/y2), e.g. to strip its tick marks without
+              touching the bottom/left axis), `tick_direction` (in/out/both/
+              none, default in — "none" removes that side's tick MARKS while
+              leaving its number labels alone; NEVER emits `majorTicks`,
+              which probe-confirmed wipes ALL axes' number labels), plus
               `major_length` (default 8), `minor_count` (default 4),
               `show_minor` (default True).
-            - "frame": close/open the frame (top+right border axes). Uses
-              `frame` ("closed" or "open", default "closed").
-        axis: Target axis ("x", "y", or "both"; default "both").
+            - "frame": close/open the frame (top+right border axes) and/or
+              set the frame LINE width. Uses `frame` ("closed" or "open",
+              default "closed") and `frame_width` (points, applied to all 4
+              sides; None = leave unchanged).
+        axis: Target axis ("x", "y", "both", "top", or "right"; default "both").
         label: Axis label text (op="labels").
         range_min, range_max: Axis range bounds (op="range").
         scale: Axis scale type (op="scale").
@@ -1092,6 +1116,8 @@ def axis(
             (op="tick").
         rescale: For op="scale", auto-rescale to the data extent (default True).
         frame: For op="frame", "closed" or "open" (default "closed").
+        frame_width: For op="frame", frame line width in points (None = leave
+            unchanged).
 
     Returns:
         Success message for the selected operation.
@@ -1138,11 +1164,15 @@ def axis(
         )
     if safe_op == "frame":
         return _set_axis_frame_impl(
-            graph_name, frame=frame if frame is not None else "closed"
+            graph_name,
+            frame=frame if frame is not None else "closed",
+            frame_width=frame_width,
         )
     # tick
     from .style import _set_tick_style_impl
-    safe_tick_axis = labtalk_choice(axis.lower(), {"x", "y", "both"}, "axis")
+    safe_tick_axis = labtalk_choice(
+        axis.lower(), {"x", "y", "both", "top", "right"}, "axis"
+    )
     return _set_tick_style_impl(
         graph_name,
         axis=safe_tick_axis,

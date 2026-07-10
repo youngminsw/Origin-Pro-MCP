@@ -142,3 +142,63 @@ def test_set_plot_style_error_bar_width_and_cap_change_pixels(tmp_path, live_ori
 
     with open(baseline, "rb") as f1, open(after, "rb") as f2:
         assert f1.read() != f2.read()
+
+
+# --- Task 2: frame width + per-side tick control ----------------------------
+
+def test_axis_frame_width_changes_render_and_reads_back(tmp_path, live_origin):
+    """frame_width visibly thickens the frame (P1-confirmed knob) and reads
+    back the value that was set."""
+    from origin_pro_mcp.tools.graph import axis, export_graph_to_file
+    from origin_pro_mcp.tools.style_helpers import read_layer_value
+
+    g, _book, _sheet = _build_line_symbol_with_error(y_error=False)
+    axis(g, op="frame", frame="closed", frame_width=0.5)
+    thin = str(tmp_path / "frame_thin.png")
+    export_graph_to_file(g, thin)
+
+    axis(g, op="frame", frame="closed", frame_width=6.0)
+    thick = str(tmp_path / "frame_thick.png")
+    export_graph_to_file(g, thick)
+
+    with open(thin, "rb") as f1, open(thick, "rb") as f2:
+        assert f1.read() != f2.read()
+    assert read_layer_value(g, "layer.x.thickness") == pytest.approx(6.0, abs=0.01)
+
+
+def test_axis_tick_top_none_removes_marks_keeps_bottom_labels(tmp_path, live_origin):
+    """axis(op="tick", axis="top", tick_direction="none") changes the render
+    (top tick marks removed) while the bottom/left number labels stay intact
+    — cropping the bottom-label strip and asserting it is non-blank and
+    unchanged vs baseline."""
+    from PIL import Image
+
+    from origin_pro_mcp.tools.graph import axis, export_graph_to_file
+
+    g, _book, _sheet = _build_line_symbol_with_error(y_error=False)
+    axis(g, op="frame", frame="closed")
+    baseline = str(tmp_path / "tick_baseline.png")
+    export_graph_to_file(g, baseline)
+
+    axis(g, op="tick", axis="top", tick_direction="none")
+    axis(g, op="tick", axis="right", tick_direction="none")
+    after = str(tmp_path / "tick_after.png")
+    export_graph_to_file(g, after)
+
+    with open(baseline, "rb") as f1, open(after, "rb") as f2:
+        assert f1.read() != f2.read()  # the top/right tick change rendered
+
+    def bottom_strip_nonblank(path):
+        im = Image.open(path).convert("L")
+        w, h = im.size
+        strip = im.crop((0, int(h * 0.85), w, h))
+        px = strip.load()
+        sw, sh = strip.size
+        return sum(1 for y in range(0, sh, 2) for x in range(0, sw, 2) if px[x, y] < 200)
+
+    before_count = bottom_strip_nonblank(baseline)
+    after_count = bottom_strip_nonblank(after)
+    assert before_count > 0
+    assert after_count > 0
+    # Bottom/left labels must survive — never touched by op="tick" axis="top"/"right".
+    assert abs(after_count - before_count) < max(20, before_count * 0.1)

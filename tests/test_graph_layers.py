@@ -170,6 +170,73 @@ def test_axis_tick_x_only_leaves_y_untouched(fake_origin):
     assert not any("layer.y" in s for s in layer.executed)
 
 
+# --- Task 2: frame width + per-side (top/right) tick control ---------------
+
+def test_axis_frame_width_sets_all_four_thickness(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    msg = axis("Graph1", op="frame", frame_width=2.5)
+    layer = fake_origin.FindGraphLayer("[Graph1]Layer1")
+    joined = " ".join(layer.executed)
+    for prop in ("layer.x.thickness", "layer.y.thickness",
+                 "layer.x2.thickness", "layer.y2.thickness"):
+        assert f"{prop} = 2.5" in joined
+    assert "2.5pt" in msg
+
+
+def test_axis_frame_width_none_leaves_thickness_untouched(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    axis("Graph1", op="frame", frame="open")
+    layer = fake_origin.FindGraphLayer("[Graph1]Layer1")
+    assert not any("thickness" in s for s in layer.executed)
+
+
+def test_axis_tick_top_targets_x2_only(fake_origin):
+    """axis(op="tick", axis="top") must target ONLY the opposite-side x2
+    axis — the bottom/left x axis's ticks/labels are untouched."""
+    from origin_pro_mcp.tools.graph import axis
+
+    axis("Graph1", op="tick", axis="top", tick_direction="none")
+    layer = fake_origin.FindGraphLayer("[Graph1]Layer1")
+    joined = " ".join(layer.executed)
+    assert "layer.x2.ticks = 0" in joined
+    assert "layer.x.ticks" not in joined
+
+
+def test_axis_tick_right_targets_y2_only(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    axis("Graph1", op="tick", axis="right", tick_direction="none")
+    layer = fake_origin.FindGraphLayer("[Graph1]Layer1")
+    joined = " ".join(layer.executed)
+    assert "layer.y2.ticks = 0" in joined
+    assert "layer.y.ticks" not in joined
+
+
+def test_axis_tick_never_emits_major_ticks(fake_origin):
+    """Regression guard (P2, probe-confirmed): `majorTicks` wipes ALL axes'
+    number labels on Origin 2020 — the tick op must never emit it, for any
+    axis/direction combination."""
+    from origin_pro_mcp.tools.graph import axis
+
+    for ax in ("x", "y", "both", "top", "right"):
+        for direction in ("in", "out", "both", "none"):
+            axis("Graph1", op="tick", axis=ax, tick_direction=direction)
+    layer = fake_origin.FindGraphLayer("[Graph1]Layer1")
+    assert not any("majorTicks" in s for s in layer.executed)
+
+
+def test_axis_tick_none_direction_emits_zero(fake_origin):
+    from origin_pro_mcp.tools.graph import axis
+
+    axis("Graph1", op="tick", axis="both", tick_direction="none")
+    layer = fake_origin.FindGraphLayer("[Graph1]Layer1")
+    joined = " ".join(layer.executed)
+    assert "layer.x.ticks = 0" in joined
+    assert "layer.y.ticks = 0" in joined
+
+
 def test_add_arrow_sets_arrowhead(fake_origin):
     from origin_pro_mcp.tools.graph import annotate
 

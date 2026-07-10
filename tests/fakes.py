@@ -59,11 +59,12 @@ class FakePlot:
         self.activated = True
 
 
-# Match `layer.<x|y>.<from|to> = <number>` writes and `__var = layer.<x|y>.<from|to>`
-# reads so the fake can model the loaded-graph freeze (writes ignored) and the
-# read-back verification path (verify_layer_value).
-_LAYER_WRITE_RE = re.compile(r"layer\.([xy])\.(from|to)\s*=\s*(-?[0-9.eE+]+)")
-_LAYER_READ_RE = re.compile(r"^\s*(__\w+)\s*=\s*layer\.([xy])\.(from|to)\s*;?\s*$")
+# Match `layer.<x|y|x2|y2>.<from|to|thickness> = <number>` writes and
+# `__var = layer.<x|y|x2|y2>.<from|to|thickness>` reads so the fake can model
+# the loaded-graph freeze (writes ignored) and the read-back verification path
+# (verify_layer_value).
+_LAYER_WRITE_RE = re.compile(r"layer\.([xy]2?)\.(from|to|thickness)\s*=\s*(-?[0-9.eE+]+)")
+_LAYER_READ_RE = re.compile(r"^\s*(__\w+)\s*=\s*layer\.([xy]2?)\.(from|to|thickness)\s*;?\s*$")
 
 
 class FakeLayer:

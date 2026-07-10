@@ -724,6 +724,12 @@ def set_legend(
     return f"Updated legend for {safe_graph_name}: placed {placement}{moved_out}"
 
 
+# axis -> LabTalk axis-property prefix. "top"/"right" target ONLY the
+# opposite-side border axis (x2/y2) — e.g. to strip its tick MARKS without
+# touching the bottom/left axis's marks or number labels.
+_TICK_AXIS_PREFIXES = {"x": ["x"], "y": ["y"], "both": ["x", "y"], "top": ["x2"], "right": ["y2"]}
+
+
 def _set_tick_style_impl(
     graph_name: str,
     axis: str = "both",
@@ -736,8 +742,13 @@ def _set_tick_style_impl(
 
     Args:
         graph_name: Graph name
-        axis: "x", "y", or "both" (default "both")
-        tick_direction: "in", "out", or "both"
+        axis: "x", "y", "both" (default), "top", or "right" ("top"/"right"
+              target only the opposite-side border axis, x2/y2)
+        tick_direction: "in", "out", "both", or "none" ("none" removes that
+              side's tick MARKS while leaving its number labels intact — this
+              uses `layer.<ax>.ticks = 0`, NEVER `layer.<ax>.majorTicks`,
+              which probe-confirmed wipes ALL axes' number labels on Origin
+              2020)
         major_length: Major tick length in points (default 8)
         minor_count: Number of minor ticks between major ticks (default 4)
         show_minor: Whether to show minor ticks
@@ -747,14 +758,19 @@ def _set_tick_style_impl(
     """
     safe_graph_name = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph_name)
-    safe_axis = labtalk_choice(axis.lower(), {"x", "y", "both"}, "axis")
-    dir_map = {"in": 1, "out": 2, "both": 3}
+    safe_axis = labtalk_choice(
+        axis.lower(), {"x", "y", "both", "top", "right"}, "axis"
+    )
+    dir_map = {"in": 1, "out": 2, "both": 3, "none": 0}
     safe_tick_direction = labtalk_choice(tick_direction, dir_map, "tick_direction")
     d = dir_map[safe_tick_direction]
 
     minor = minor_count if show_minor else 0
 
-    axes = ["x", "y"] if safe_axis == "both" else [safe_axis]
+    axes = _TICK_AXIS_PREFIXES[safe_axis]
+    # NEVER emit `majorTicks` here — probe-confirmed on Origin 2020 to wipe
+    # the NUMBER LABELS of all four axes. `ticks` is the label-safe knob for
+    # tick-mark direction/removal.
     cmds = " ".join(
         f"layer.{a}.ticks = {d}; layer.{a}.minor = {minor}; "
         f"layer.{a}.majorLen = {major_length};"
