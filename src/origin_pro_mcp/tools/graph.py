@@ -22,7 +22,7 @@ from ..labtalk_safe import (
     positive_int,
     windows_path,
 )
-from .style_helpers import graph_layer_execute, verify_layer_value
+from .style_helpers import graph_layer_execute, settle_new_plots, verify_layer_value
 
 # Plot type IDs verified against OriginLab's "Plot Type IDs" reference and
 # tested live on Origin Pro 2020. The earlier values for area/bar/box/
@@ -150,6 +150,7 @@ def create_graph(
                 f"win -r {name} {safe_graph_name};"
             ):
                 name = safe_graph_name
+            settle_new_plots(name, expected_min_plots=1)
         else:
             name = o.CreatePage(3, safe_graph_name, "origin")
             if not execute_labtalk(
@@ -161,6 +162,7 @@ def create_graph(
                     f"{safe_x_col}, {safe_y_col}, {safe_z_col} contain data."
                 )
                 raise ValueError(msg)
+            settle_new_plots(name, expected_min_plots=1)
         _set_title()
         return json.dumps({
             "name": name,
@@ -194,6 +196,7 @@ def create_graph(
             f"data, and that plot_type '{safe_plot_type}' suits this data."
         )
         raise ValueError(msg)
+    settle_new_plots(name, expected_min_plots=1)
 
     _set_title()
     return json.dumps({
@@ -242,6 +245,8 @@ def add_plot_to_graph(
     ptype = PLOT_TYPES[safe_plot_type]
     require_graph(safe_graph_name)
     require_worksheet(safe_book, safe_sheet)
+    from .style_helpers import get_plot_info
+    prior_count = len(get_plot_info(safe_graph_name))
     data_ref = f"[{safe_book}]{safe_sheet}!({safe_x_col},{safe_y_col})"
     if y_error_col > 0:
         safe_error_col = positive_column(y_error_col, "y_error_col")
@@ -254,6 +259,7 @@ def add_plot_to_graph(
             f"columns {safe_x_col} and {safe_y_col} exist and contain data."
         )
         raise ValueError(msg)
+    settle_new_plots(safe_graph_name, expected_min_plots=prior_count + 1)
     return f"Added {safe_plot_type} plot to {safe_graph_name}"
 
 @mcp.tool()

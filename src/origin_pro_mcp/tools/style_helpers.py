@@ -173,6 +173,43 @@ def find_plot_column(plot_name: str):
     return found[3] if found is not None else None
 
 
+def settle_new_plots(graph_name: str, expected_min_plots: int, timeout_s: float = 4.0) -> None:
+    """Settle barrier for a freshly-plotted graph page.
+
+    A graph page immediately after ``CreatePage``/``plotxy``/
+    ``add_plot_to_graph`` can silently ignore or partially apply the FIRST
+    styling/read/export command issued against it — no exception, just a
+    no-op (probe-confirmed; distinct from the loaded-.opju freeze that
+    ``require_data_plots`` guards). Polls ``get_plot_info`` until at least
+    ``expected_min_plots`` plots enumerate (cheap/instant against fakes, so
+    this never slows the WSL test suite), then adds a short fixed settle
+    tail. The tail is SKIPPED when the plots were already there on the very
+    first poll (the page was already settled) to keep the common case cheap.
+    Call this once, right after building/rebuilding a page's plots, before
+    the first styling command touches it.
+    """
+    import time
+
+    start = time.monotonic()
+    first = True
+    while True:
+        try:
+            infos = get_plot_info(graph_name)
+        except Exception:
+            # Graph not resolvable at all — not a timing issue, so polling
+            # longer won't help (this is what a freshly CreatePage'd page
+            # unknown to a test double hits; a real graph always resolves).
+            return
+        if len(infos) >= expected_min_plots:
+            if not first:
+                time.sleep(0.3)
+            return
+        first = False
+        if time.monotonic() - start >= timeout_s:
+            return
+        time.sleep(0.1)
+
+
 def get_plot_info(graph_name: str) -> list:
     """[{"name", "is_error"}] for each plot in Layer1, in plot order.
 

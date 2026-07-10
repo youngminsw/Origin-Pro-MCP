@@ -15,6 +15,7 @@ from .style_helpers import (
     place_legend_avoiding_data,
     require_data_plots,
     set_legend_entries,
+    settle_new_plots,
 )
 
 # Symbol shapes for different datasets
@@ -307,6 +308,8 @@ def ungroup_plots(graph_name: str, plot_type: str = "line") -> str:
             f"plotxy iy:={name} plot:={ptype} ogl:=[{safe_graph}]Layer1;",
         ):
             rebuilt += 1
+    if rebuilt:
+        settle_new_plots(safe_graph, expected_min_plots=rebuilt)
     note = (" Error-bar plots were dropped — re-add them with set_error_bars."
             if has_error else "")
     return (f"Ungrouped {safe_graph}: rebuilt {rebuilt} independent {plot_type} "
