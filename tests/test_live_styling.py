@@ -99,3 +99,46 @@ def test_settle_barrier_immediate_color_set_takes_effect(tmp_path, live_origin):
     out = str(tmp_path / "settle_regress.png")
     export_graph_to_file(g, out)
     assert _red_pixel_count(out) > 100
+
+
+# --- Task 1: set_plot_style partial styling + error-bar knobs ---------------
+
+def test_set_plot_style_line_width_preserves_color(tmp_path, live_origin):
+    """Coloring plot 1 red, then only changing line_width, must change pixels
+    (the width did apply) while the red color survives (partial styling must
+    not reset other aspects — the None-defaults fix)."""
+    from origin_pro_mcp.tools.graph import export_graph_to_file
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    g, _book, _sheet = _build_line_symbol_with_error(y_error=True)
+    set_plot_style(g, plot_index=1, rgb="255,0,0")
+    before = str(tmp_path / "lw_before.png")
+    export_graph_to_file(g, before)
+    before_red = _red_pixel_count(before)
+    assert before_red > 100
+
+    set_plot_style(g, plot_index=1, line_width=6.0)
+    after = str(tmp_path / "lw_after.png")
+    export_graph_to_file(g, after)
+    after_red = _red_pixel_count(after)
+
+    with open(before, "rb") as f1, open(after, "rb") as f2:
+        assert f1.read() != f2.read()  # line width visibly changed the render
+    assert after_red > 100  # color survived the partial line_width-only call
+
+
+def test_set_plot_style_error_bar_width_and_cap_change_pixels(tmp_path, live_origin):
+    """error_bar_width/error_cap_width actually change the rendered export."""
+    from origin_pro_mcp.tools.graph import export_graph_to_file
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    g, _book, _sheet = _build_line_symbol_with_error(y_error=True)
+    baseline = str(tmp_path / "eb_baseline.png")
+    export_graph_to_file(g, baseline)
+
+    set_plot_style(g, plot_index=1, error_bar_width=4.0, error_cap_width=16)
+    after = str(tmp_path / "eb_after.png")
+    export_graph_to_file(g, after)
+
+    with open(baseline, "rb") as f1, open(after, "rb") as f2:
+        assert f1.read() != f2.read()

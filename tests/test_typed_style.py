@@ -78,16 +78,110 @@ def test_set_plot_style_open_symbol(fake_origin):
     assert any("-kf 1" in s for s in layer.executed)
 
 
-def test_set_plot_style_solid_symbol_default(fake_origin):
+def test_set_plot_style_solid_symbol_explicit(fake_origin):
     from fakes import FakeGraph
     from origin_pro_mcp import origin_connection
     from origin_pro_mcp.tools.style import set_plot_style
 
     fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B"])]
     fake_origin.lt_vars["__mcpk"] = 1
-    set_plot_style("Graph1", plot_index=1)
+    set_plot_style("Graph1", plot_index=1, open_symbol=False)
     layer = origin_connection.get_origin()._graph_layers["[Graph1]Layer1"]
     assert any("-kf 0" in s for s in layer.executed)
+
+
+def test_set_plot_style_nothing_requested_raises(fake_origin):
+    from fakes import FakeGraph
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B"])]
+    with pytest.raises(ValueError, match="nothing to change"):
+        set_plot_style("Graph1", plot_index=1)
+
+
+# --- set_plot_style: None-defaults + P8 one-flag-per-call rule ---------------
+
+def test_set_plot_style_line_width_only_emits_only_dash_w(fake_origin):
+    """(a) line_width alone must emit ONLY `-w`; no -k/-z/-kf leak in from
+    stale defaults."""
+    from fakes import FakeGraph
+    from origin_pro_mcp import origin_connection
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B"])]
+    fake_origin.lt_vars["__mcpk"] = 1  # this IS a symbol plot
+    set_plot_style("Graph1", plot_index=1, line_width=5)
+    layer = origin_connection.get_origin()._graph_layers["[Graph1]Layer1"]
+    assert any("set Book1_B -w 1000;" == s for s in layer.executed)
+    assert not any("-k " in s or "-z " in s or "-kf " in s for s in layer.executed)
+
+
+def test_set_plot_style_rgb_sends_c_and_cf_as_separate_calls(fake_origin):
+    """(b) P8 hard rule: -c and -cf must be two SEPARATE `set` commands, never
+    combined in one string (combining wipes the plot to black on Origin 2020)."""
+    from fakes import FakeGraph
+    from origin_pro_mcp import origin_connection
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B"])]
+    fake_origin.lt_vars["__mcpk"] = 1
+    set_plot_style("Graph1", plot_index=1, rgb="255,0,0")
+    layer = origin_connection.get_origin()._graph_layers["[Graph1]Layer1"]
+    assert any("-c color(255,0,0)" in s for s in layer.executed)
+    assert any("-cf color(255,0,0)" in s for s in layer.executed)
+    assert not any("-c " in s and "-cf " in s for s in layer.executed)
+
+
+# --- set_plot_style: error-bar width/cap -------------------------------------
+
+def _eb_graph(fake, plot_names, columns):
+    from fakes import FakeBook, FakeColumn, FakeGraph, FakeSheet
+
+    fake.books = [FakeBook("EB", sheets=[FakeSheet("Sheet1", columns=columns)])]
+    fake.graphs = [FakeGraph("EB", plot_names=plot_names)]
+
+
+def test_set_plot_style_error_bar_width_adjacent(fake_origin):
+    """(d) error_bar_width/error_cap_width target the error plot immediately
+    following the data plot in get_plot_info order (P6-confirmed adjacency)."""
+    from fakes import FakeColumn
+    from origin_pro_mcp import origin_connection
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    _eb_graph(fake_origin, ["EB_B", "EB_C"], [
+        FakeColumn("A"), FakeColumn("B"), FakeColumn("C", col_type=2),
+    ])
+    set_plot_style("EB", plot_index=1, error_bar_width=2.5, error_cap_width=12)
+    layer = origin_connection.get_origin()._graph_layers["[EB]Layer1"]
+    assert any("set EB_C -erw 2.5;" == s for s in layer.executed)
+    assert any("set EB_C -erwc 12;" == s for s in layer.executed)
+
+
+def test_set_plot_style_error_bar_falls_back_when_not_adjacent(fake_origin):
+    """When no error plot is directly adjacent, fall back to ALL error plots
+    on the layer and note it in the return message."""
+    from fakes import FakeColumn
+    from origin_pro_mcp import origin_connection
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    _eb_graph(fake_origin, ["EB_B", "EB_D", "EB_C"], [
+        FakeColumn("A"), FakeColumn("B"), FakeColumn("C", col_type=2), FakeColumn("D"),
+    ])
+    msg = set_plot_style("EB", plot_index=1, error_bar_width=3.0)
+    layer = origin_connection.get_origin()._graph_layers["[EB]Layer1"]
+    assert any("set EB_C -erw 3.0;" == s for s in layer.executed)
+    assert "not directly adjacent" in msg or "ALL error plots" in msg
+
+
+def test_set_plot_style_error_bar_requires_error_plots(fake_origin):
+    """(e) error_bar_width/error_cap_width on a graph with NO error bars must
+    raise, naming set_error_bars/y_error_col."""
+    from fakes import FakeColumn
+    from origin_pro_mcp.tools.style import set_plot_style
+
+    _eb_graph(fake_origin, ["EB_B"], [FakeColumn("A"), FakeColumn("B")])
+    with pytest.raises(ValueError, match="set_error_bars|y_error_col"):
+        set_plot_style("EB", plot_index=1, error_bar_width=2.0)
 
 # --- set_graph_font bold -----------------------------------------------------
 

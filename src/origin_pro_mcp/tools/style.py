@@ -137,39 +137,63 @@ def _tight_axis_cmds(
 def set_plot_style(
     graph_name: str,
     plot_index: int = 1,
-    line_width: float = 2.5,
-    symbol_size: int = 8,
-    symbol_shape: int = 0,
+    line_width: float | None = None,
+    symbol_size: int | None = None,
+    symbol_shape: int | None = None,
     color: str = "",
     rgb: str = "",
-    open_symbol: bool = False,
+    open_symbol: bool | None = None,
+    error_bar_width: float | None = None,
+    error_cap_width: float | None = None,
 ) -> str:
-    """Set line/symbol style for a data plot.
+    """Set line/symbol/error-bar style for a data plot. Only the aspects you
+    pass are touched — everything else on that curve is left exactly as it
+    was.
 
     Args:
         graph_name: Graph name
         plot_index: Data series index (1-based, order the datasets were
                     added; error-bar plots are not counted)
-        line_width: Line width in points (default 2.5)
-        symbol_size: Symbol size (default 8; not validated — Origin accepts any
-                     positive value, but roughly 3-20 is the readable range)
-        symbol_shape: 0=auto, 1=square, 2=circle, 3=triangle-up,
-                      4=diamond, 5=triangle-down, 6=hexagon
+        line_width: Line width in points (None = leave unchanged)
+        symbol_size: Symbol size (None = leave unchanged; not validated —
+                     Origin accepts any positive value, roughly 3-20 is the
+                     readable range)
+        symbol_shape: 0=auto, 1=square, 2=circle, 3=triangle-up, 4=diamond,
+                      5=triangle-down, 6=hexagon (None = leave unchanged). See
+                      SYMBOL_SHAPES / this module's docstring notes for which
+                      `-k` codes are confirmed on Origin 2020.
         color: Color name (black, red, green, blue, cyan, magenta, yellow,
-               orange, purple, gray/grey)
+               orange, purple, gray/grey). "" = leave unchanged.
         rgb: Explicit "r,g,b" (each 0-255), e.g. "128,0,200", for per-curve
              rainbow/gradient colors that named colors can't express. Overrides
-             `color` when given.
+             `color` when given. "" = leave unchanged.
         open_symbol: True = open/hollow marker interior (publication standard),
-                     False = solid fill (LabTalk `set -kf 1` vs `0`).
+                     False = solid fill (LabTalk `set -kf 1` vs `0`). None =
+                     leave unchanged.
+        error_bar_width: Error-bar LINE width in POINTS (LabTalk `-erw`, NOT
+                     the same unit scale as `line_width`'s `-w`). None = leave
+                     unchanged. Requires the plot to have an adjacent error
+                     bar (from y_error_col or set_error_bars).
+        error_cap_width: Error-bar CAP (whisker) width (LabTalk `-erwc`). None
+                     = leave unchanged. Same adjacency requirement as above.
 
-    NOTE: color applies only on UNGROUPED plots. create_graph + add_plot_to_graph
-    build ungrouped plots (fine). For a grouped multi-curve plot (loaded project
-    or a single multi-Y plot), the group's color increment overrides this — call
-    ungroup_plots(graph_name) first. (line_width/symbol still apply while grouped.)
+    GOTCHA (probe-verified, Origin 2020): every LabTalk flag below is sent as
+    its OWN `set <ds> -flag val;` call — combining e.g. `-c` and `-cf` (or
+    `-k`+`-kf`+`-z`) into ONE `set` command silently resets the plot to BLACK
+    or blanks the symbol. Never batch flags yourself via run_labtalk either.
+
+    NOTE on grouping: per-curve color/width/symbol/fill ALL apply only on
+    UNGROUPED plots (probe-confirmed — the earlier claim that line_width/
+    symbol still apply while grouped was WRONG). create_graph +
+    add_plot_to_graph build ungrouped plots (fine). A grouped multi-curve plot
+    (loaded project, or a single multi-Y plotxy) shares one color/style
+    increment that overrides ALL of this — call ungroup_plots(graph_name)
+    first, then re-style.
 
     Returns:
-        Success message
+        Success message. Raises ValueError if no aspect was given, or if
+        plot_index is out of range, or if error_bar_width/error_cap_width is
+        requested but the plot has no error bars.
     """
     import time
     safe_graph_name = labtalk_name(graph_name, "graph_name")
@@ -190,17 +214,6 @@ def set_plot_style(
         raise ValueError(msg)
 
     pname = data_plots[idx]
-    shape = symbol_shape if symbol_shape > 0 else SYMBOL_SHAPES.get(plot_index, 2)
-    # Target the EXACT plot by its DATASET NAME (`set <name> ...`) run on the
-    # graph's Layer1 COM object (graph_layer_execute -> gl.Execute). Verified on
-    # Origin 2020 (isolated instance, export pixel-checked) to color each plot of
-    # an ungrouped multi-curve graph independently. This deliberately avoids two
-    # dead ends: `layer -s <N>; set %C` only ever selects plot 1 (N>=2 no-ops),
-    # and global execute_labtalk needs `win -a`, which fails on .opju-loaded
-    # graphs and froze all styling there. gl.Execute + the dataset name needs
-    # neither an active window nor plot selection.
-    def _set(spec: str) -> None:
-        graph_layer_execute(safe_graph_name, f"set {pname} {spec};")
 
     # Resolve the color expression: explicit rgb overrides a named color.
     c = None
@@ -210,26 +223,65 @@ def set_plot_style(
     elif color:
         c = COLOR_MAP[labtalk_choice(color.lower(), COLOR_MAP, "color")]
 
-    # All flags for this plot are sent as ONE `set` command (LabTalk supports
-    # multiple -flags per call) so there is only one COM-render settle to wait
-    # for, instead of one per flag.
-    specs = []
+    touch_symbols = (
+        symbol_shape is not None or symbol_size is not None or open_symbol is not None
+    )
+    nothing_requested = (
+        c is None and line_width is None and not touch_symbols
+        and error_bar_width is None and error_cap_width is None
+    )
+    if nothing_requested:
+        msg = (
+            "set_plot_style: nothing to change — pass at least one of "
+            "line_width, symbol_size, symbol_shape, color, rgb, open_symbol, "
+            "error_bar_width, or error_cap_width."
+        )
+        raise ValueError(msg)
+
+    # Target the EXACT plot by its DATASET NAME (`set <name> ...`) run on the
+    # graph's Layer1 COM object (graph_layer_execute -> gl.Execute). Verified on
+    # Origin 2020 (isolated instance, export pixel-checked) to color each plot of
+    # an ungrouped multi-curve graph independently. This deliberately avoids two
+    # dead ends: `layer -s <N>; set %C` only ever selects plot 1 (N>=2 no-ops),
+    # and global execute_labtalk needs `win -a`, which fails on .opju-loaded
+    # graphs and froze all styling there. gl.Execute + the dataset name needs
+    # neither an active window nor plot selection.
+    def _set(dataset: str, spec: str) -> None:
+        graph_layer_execute(safe_graph_name, f"set {dataset} {spec};")
+
+    # P8 HARD RULE (probe-verified): one flag per `set` call. Combining `-c` +
+    # `-cf` in one command wipes the plot to black; `-k`+`-kf`+`-z` combined
+    # can blank the symbol entirely. Never join these into one string.
+    flags: list[str] = []
     if c is not None:
-        specs.append(f"-c {c}")
-    lw = int(line_width * _WIDTH_UNITS_PER_POINT)
-    specs.append(f"-w {lw}")
+        flags.append(f"-c {c}")
+    if line_width is not None:
+        flags.append(f"-w {int(line_width * _WIDTH_UNITS_PER_POINT)}")
+    has_symbols = _plot_has_symbols(pname)
+    if touch_symbols and has_symbols:
+        if symbol_shape is not None:
+            shape = symbol_shape if symbol_shape > 0 else SYMBOL_SHAPES.get(plot_index, 2)
+            flags.append(f"-k {shape}")
+        if symbol_size is not None:
+            flags.append(f"-z {symbol_size}")
+        if open_symbol is not None:
+            # Symbol interior: 1 = Open (hollow), 0 = Solid (Origin 2020).
+            flags.append(f"-kf {1 if open_symbol else 0}")
+    if c is not None:
+        # Symbol interior fill / bar fill follows the curve color — sent as
+        # its OWN call (P8), never combined with the `-c` flag above.
+        flags.append(f"-cf {c}")
 
-    if _plot_has_symbols(pname):
-        specs.append(f"-k {shape}")
-        specs.append(f"-z {symbol_size}")
-        # Symbol interior: 1 = Open (hollow), 0 = Solid (verified on Origin 2020).
-        specs.append(f"-kf {1 if open_symbol else 0}")
-    elif c is not None:
-        # bar/column-type plots: color the fill too
-        specs.append(f"-cf {c}")
+    for flag in flags:
+        _set(pname, flag)
+    if flags:
+        time.sleep(0.2)
 
-    _set(" ".join(specs))
-    time.sleep(0.2)
+    error_note = ""
+    if error_bar_width is not None or error_cap_width is not None:
+        error_note = _apply_error_bar_style(
+            safe_graph_name, infos, pname, error_bar_width, error_cap_width
+        )
 
     grouping_note = ""
     if len(data_plots) > 1:
@@ -237,13 +289,61 @@ def set_plot_style(
         # this is a static caveat (not a live check) whenever more than one
         # data plot exists — grouping only matters when there's more than one.
         grouping_note = (
-            "; NOTE: if these plots are GROUPED, per-plot colors may be "
-            "overridden by the group — call ungroup_plots first if colors "
-            "don't look right"
+            "; NOTE: if these plots are GROUPED, per-plot color/width/symbol "
+            "changes may be overridden by the group — call ungroup_plots "
+            "first if the style doesn't look right"
         )
     return (
         f"Updated style for plot {plot_index} ({pname}) in "
-        f"{safe_graph_name}{grouping_note}"
+        f"{safe_graph_name}{error_note}{grouping_note}"
+    )
+
+
+def _apply_error_bar_style(
+    safe_graph_name: str,
+    infos: list,
+    pname: str,
+    error_bar_width: float | None,
+    error_cap_width: float | None,
+) -> str:
+    """Apply -erw/-erwc to the error plot(s) adjacent to `pname` in `infos`
+    order (P6-confirmed: error plots are adjacent to their data plot for both
+    the y_error_col and set_error_bars construction routes). Falls back to
+    ALL error plots on the layer when none are adjacent. Raises ValueError
+    when the graph has no error plots at all. Returns a note to append to the
+    caller's return message."""
+    pos = next((i for i, p in enumerate(infos) if p["name"] == pname), None)
+    adjacent = []
+    if pos is not None:
+        i = pos + 1
+        while i < len(infos) and infos[i]["is_error"]:
+            adjacent.append(infos[i]["name"])
+            i += 1
+
+    all_errors = [p["name"] for p in infos if p["is_error"]]
+    if not all_errors:
+        msg = (
+            f"error_bar_width/error_cap_width requested but {safe_graph_name} "
+            f"plot {pname} has no error bars — attach them first with "
+            "set_error_bars or create_graph(..., y_error_col=...)."
+        )
+        raise ValueError(msg)
+
+    targets = adjacent if adjacent else all_errors
+    for err_name in targets:
+        if error_bar_width is not None:
+            graph_layer_execute(safe_graph_name, f"set {err_name} -erw {error_bar_width};")
+        if error_cap_width is not None:
+            graph_layer_execute(safe_graph_name, f"set {err_name} -erwc {error_cap_width};")
+    import time
+    time.sleep(0.2)
+
+    if adjacent:
+        return ""
+    return (
+        f"; NOTE: no error plot was directly adjacent to {pname} in plot "
+        f"order, so error_bar_width/error_cap_width were applied to ALL "
+        f"error plots on the layer ({', '.join(targets)})"
     )
 
 
