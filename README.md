@@ -241,6 +241,11 @@ This is an accident-prevention guard, not a security sandbox for untrusted code.
   (combining flags in ONE command) silently wipes the plot to black; the same
   applies to `-k`/`-kf`/`-z` combined (can blank the symbol). Send each flag
   as its own `set <ds> -flag val;` call.
+- **Tick-label offset is `layer.<ax>.label.offsetV` / `.offsetH`** (vertical for
+  the x axis, horizontal for y), in % of the tick-label font size, positive =
+  toward the axis. The plausible-looking names `.offset`, `.voff`, `.hoff`,
+  `.offsetX`/`.offsetY`, `.xOffset`/`.yOffset` are all silent no-ops (they "read
+  back" a value but never move the labels). Use `set_tick_labels(offset_pct=)`.
 - **Never write `layer.x2.majorTicks` / `layer.y2.majorTicks`.** Setting it
   to 0 wipes the number labels on ALL FOUR axes, not just the opposite side.
   Use `layer.<ax>.ticks = 0` (or `axis(op="tick", axis="top"/"right",
@@ -373,7 +378,7 @@ used to be many single-purpose ones.
 | `set_plot_style` | Set color, line width, symbol shape/size, and open/solid marker |
 | `set_graph_font` | Set font family, size, and optional bold |
 | `set_legend` | Configure legend text and position |
-| `set_tick_labels` | Tick-label numeric format (decimal/scientific/engineering), bold, decimal places |
+| `set_tick_labels` | Tick-label numeric format (decimal/scientific/engineering), bold, decimal places, axis→label offset (`offset_pct`, % of font; +toward axis) |
 
 ### Analysis
 | Tool | Description |

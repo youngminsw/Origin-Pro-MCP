@@ -798,6 +798,14 @@ def _set_tick_style_impl(
 # layer.axis.label.numFormat codes (verified against OriginLab docs).
 _TICK_LABEL_FORMATS = {"decimal": 1, "scientific": 2, "engineering": 3}
 
+# The perpendicular "distance from the axis" knob differs by axis orientation:
+# the x (bottom) axis moves its labels VERTICALLY, the y (left) axis moves them
+# HORIZONTALLY. Both are `layer.<ax>.label.offset<H|V>`, in % of the tick-label
+# font size (the GUI's Axis dialog ▸ Tick Labels ▸ Format ▸ "Offset in % Point
+# Size"), default 0. Probe-verified on Origin 2020: POSITIVE pulls the labels
+# TOWARD the axis (shrinking the axis→label gap), negative pushes them away.
+_TICK_LABEL_OFFSET_PROP = {"x": "offsetV", "y": "offsetH"}
+
 
 @mcp.tool()
 def set_tick_labels(
@@ -806,8 +814,9 @@ def set_tick_labels(
     format: str | None = None,
     bold: bool | None = None,
     decimal_places: int | None = None,
+    offset_pct: int | None = None,
 ) -> str:
-    """Format an axis's tick labels: numeric format, bold, decimal places.
+    """Format an axis's tick labels: numeric format, bold, decimal places, offset.
 
     For a log axis Origin already renders ticks as powers of ten (10^n) by
     default — set the scale with axis(op="scale", scale="log10"); there is no
@@ -820,6 +829,14 @@ def set_tick_labels(
         format: "decimal", "scientific", or "engineering" (None = leave)
         bold: True/False to bold/unbold tick labels (None = leave)
         decimal_places: Number of decimals to show, or -1 for auto (None = leave)
+        offset_pct: Perpendicular distance of the tick labels from the axis, in
+            % of the tick-label font size (the GUI's "Offset in % Point Size").
+            POSITIVE pulls the labels TOWARD the axis (smaller gap); negative
+            pushes them away; 0 is Origin's default. Applied to each axis's
+            perpendicular direction (x → vertical, y → horizontal), so it is the
+            single knob for the axis→tick-label gap. None = leave untouched. Use
+            a positive value to tighten Origin's default gap toward a
+            matplotlib-style look.
 
     Returns:
         Success message
@@ -828,8 +845,8 @@ def set_tick_labels(
     safe_axis = labtalk_choice(axis.lower(), {"x", "y", "both"}, "axis")
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
-    if format is None and bold is None and decimal_places is None:
-        msg = "Provide at least one of format, bold, or decimal_places."
+    if format is None and bold is None and decimal_places is None and offset_pct is None:
+        msg = "Provide at least one of format, bold, decimal_places, or offset_pct."
         raise ValueError(msg)
     axes = ["x", "y"] if safe_axis == "both" else [safe_axis]
     changed = []
@@ -842,12 +859,17 @@ def set_tick_labels(
             cmds.append(f"layer.{a}.label.bold = {1 if bold else 0};")
         if decimal_places is not None:
             cmds.append(f"layer.{a}.label.decPlaces = {int(decimal_places)};")
+        if offset_pct is not None:
+            prop = _TICK_LABEL_OFFSET_PROP[a]
+            cmds.append(f"layer.{a}.label.{prop} = {int(offset_pct)};")
     if format is not None:
         changed.append("format")
     if bold is not None:
         changed.append("bold")
     if decimal_places is not None:
         changed.append("decimal_places")
+    if offset_pct is not None:
+        changed.append("offset")
     if not graph_layer_execute(safe_graph, " ".join(cmds)):
         msg = f"Could not update tick labels ({', '.join(changed)}) for {safe_graph}."
         raise ValueError(msg)

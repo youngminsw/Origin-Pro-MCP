@@ -265,6 +265,47 @@ def test_set_tick_labels_bad_format(fake_origin):
         set_tick_labels("Graph1", format="hex")
 
 
+def test_set_tick_labels_offset_x_uses_offsetV(fake_origin, monkeypatch):
+    """The x (bottom) axis's perpendicular gap knob is the VERTICAL offset."""
+    from origin_pro_mcp.tools.style import set_tick_labels
+
+    sink = _capture_layer(monkeypatch)
+    set_tick_labels("Graph1", axis="x", offset_pct=150)
+    joined = " ".join(sink)
+    assert "layer.x.label.offsetV = 150" in joined
+    assert "offsetH" not in joined
+
+
+def test_set_tick_labels_offset_y_uses_offsetH(fake_origin, monkeypatch):
+    """The y (left) axis's perpendicular gap knob is the HORIZONTAL offset."""
+    from origin_pro_mcp.tools.style import set_tick_labels
+
+    sink = _capture_layer(monkeypatch)
+    set_tick_labels("Graph1", axis="y", offset_pct=150)
+    joined = " ".join(sink)
+    assert "layer.y.label.offsetH = 150" in joined
+    assert "offsetV" not in joined
+
+
+def test_set_tick_labels_offset_both_and_negative(fake_origin, monkeypatch):
+    from origin_pro_mcp.tools.style import set_tick_labels
+
+    sink = _capture_layer(monkeypatch)
+    set_tick_labels("Graph1", axis="both", offset_pct=-100)
+    joined = " ".join(sink)
+    assert "layer.x.label.offsetV = -100" in joined
+    assert "layer.y.label.offsetH = -100" in joined
+
+
+def test_set_tick_labels_offset_alone_satisfies_guard(fake_origin, monkeypatch):
+    """offset_pct on its own is a valid edit (no 'provide at least one' raise)."""
+    from origin_pro_mcp.tools.style import set_tick_labels
+
+    _capture_layer(monkeypatch)
+    msg = set_tick_labels("Graph1", axis="x", offset_pct=0)
+    assert "offset" in msg
+
+
 # --- set_layer_geometry ------------------------------------------------------
 
 def test_set_layer_geometry_sets_fields(fake_origin):

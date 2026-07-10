@@ -310,3 +310,84 @@ def test_export_graph_bare_posix_path_lands_on_wsl_side(monkeypatch, live_origin
     g, _book, _sheet = _build_line_symbol_with_error(y_error=False)
     out = export_graph_to_file(g, "/tmp/live_wsl_export_check.png")
     assert out == "\\\\wsl.localhost\\Ubuntu\\tmp\\live_wsl_export_check.png"
+
+
+# --- Issue #14: tick-label offset (frame->label gap) -------------------------
+
+def _xlabel_gap(path: str) -> float:
+    """Pixel gap between the bottom frame line and the x tick-label glyphs.
+
+    Finds the bottom frame row (the row with the most dark pixels across the
+    central band), then returns the vertical centroid of the tick-label ink
+    below it — excluding the outward tick marks right under the frame and the
+    centered axis title. Larger = labels farther from the axis.
+    """
+    from PIL import Image
+
+    im = Image.open(path).convert("L")
+    w, h = im.size
+    px = im.load()
+    x0, x1 = int(w * 0.20), int(w * 0.80)
+    frame_row, frame_cnt = None, 0
+    for y in range(int(h * 0.35), int(h * 0.95)):
+        cnt = sum(1 for x in range(x0, x1) if px[x, y] < 100)
+        if cnt > frame_cnt:
+            frame_cnt, frame_row = cnt, y
+    tot = wsum = 0
+    for y in range(frame_row + 6, min(frame_row + 140, h)):
+        for x in range(x0, x1):
+            if 0.42 * w < x < 0.58 * w:  # skip the centered axis title
+                continue
+            if px[x, y] < 100:
+                tot += 1
+                wsum += y - frame_row
+    return wsum / tot if tot else 0.0
+
+
+def test_tick_label_offset_moves_x_labels_toward_and_away(tmp_path, live_origin):
+    """set_tick_labels(offset_pct=...) must move the x tick labels perpendicular
+    to the axis by a MEASURABLE gap, in the documented direction: a large
+    negative offset pushes them far from the frame, a positive offset pulls them
+    close. Pixel-measured, not just bytes-differ."""
+    from origin_pro_mcp.tools.graph import axis, export_graph_to_file
+    from origin_pro_mcp.tools.style import set_tick_labels
+
+    g, _book, _sheet = _build_line_symbol_with_error(y_error=False)
+    axis(g, op="frame", frame="closed")
+
+    set_tick_labels(g, axis="x", offset_pct=-150)  # push labels far from axis
+    far = str(tmp_path / "tlo_far.png")
+    export_graph_to_file(g, far)
+    gap_far = _xlabel_gap(far)
+
+    set_tick_labels(g, axis="x", offset_pct=100)  # pull labels toward axis
+    near = str(tmp_path / "tlo_near.png")
+    export_graph_to_file(g, near)
+    gap_near = _xlabel_gap(near)
+
+    with open(far, "rb") as f1, open(near, "rb") as f2:
+        assert f1.read() != f2.read()  # the offset visibly changed the render
+    # Direction + magnitude: far offset keeps labels clearly lower than near.
+    assert gap_far - gap_near > 15, f"gap_far={gap_far:.1f} gap_near={gap_near:.1f}"
+
+
+def test_tick_label_offset_y_axis_changes_render(tmp_path, live_origin):
+    """The y (left) axis routes offset_pct to the HORIZONTAL offset; a positive
+    vs negative value must produce different renders (the offsetH path works on
+    real Origin, not just in the fake-test emission check)."""
+    from origin_pro_mcp.tools.graph import axis, export_graph_to_file
+    from origin_pro_mcp.tools.style import set_tick_labels
+
+    g, _book, _sheet = _build_line_symbol_with_error(y_error=False)
+    axis(g, op="frame", frame="closed")
+
+    set_tick_labels(g, axis="y", offset_pct=-150)
+    left = str(tmp_path / "tlo_y_left.png")
+    export_graph_to_file(g, left)
+
+    set_tick_labels(g, axis="y", offset_pct=80)
+    right = str(tmp_path / "tlo_y_right.png")
+    export_graph_to_file(g, right)
+
+    with open(left, "rb") as f1, open(right, "rb") as f2:
+        assert f1.read() != f2.read()

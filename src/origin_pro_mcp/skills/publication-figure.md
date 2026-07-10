@@ -373,6 +373,13 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
 - `axis(graph, op="frame", frame="closed")` draws the top+right border axes.
 - `set_tick_labels(graph, axis, format="scientific"|"decimal", bold=, decimal_places=)`
   for tick-label number format. Log axes already render 10^n by default.
+- `set_tick_labels(graph, axis, offset_pct=)` tightens/loosens the gap between the
+  axis and its tick labels (Origin's default sits farther out than matplotlib's).
+  Units are % of the tick-label font size; POSITIVE pulls the labels TOWARD the
+  axis (smaller gap), negative pushes them away. Applied perpendicular to each
+  axis (x moves vertically, y horizontally), so one value is the gap knob — e.g.
+  `set_tick_labels(graph, axis="x", offset_pct=80)` to match a matplotlib-style
+  tight bottom-axis gap.
 - `set_layer_geometry(graph, left=, top=, width=, height=)` (percent of page)
   when an axis title is clipped or panels must line up.
 - `set_graph_font(graph, target="axes", bold=True)` bolds axis titles via
