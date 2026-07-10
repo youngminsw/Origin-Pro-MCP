@@ -355,6 +355,28 @@ def test_apply_publication_style_skips_axis_when_data_unreadable(fake_origin, mo
     assert "layer.y.from" not in joined
 
 
+def test_apply_publication_style_never_combines_flags_in_one_set_call(fake_origin):
+    """P8 hard rule regression guard: apply_publication_style used to batch
+    multiple `-flag`s into ONE `set` command (its own version of the issue #6
+    color-wipe bug) — every flag must now be its own `set <ds> -flag val;`
+    call, so no single executed string may combine -c/-cf or -k/-kf/-z."""
+    from origin_pro_mcp.tools.style import apply_publication_style
+
+    fake_origin.books = [FakeBook("PB", sheets=[FakeSheet("Sheet1", columns=[
+        FakeColumn("A"), FakeColumn("B"), FakeColumn("C", col_type=2),
+    ])])]
+    fake_origin.graphs = [FakeGraph("PB", plot_names=["PB_B", "PB_C"])]
+    fake_origin.lt_vars["__mcpk"] = 1  # PB_B reports as a symbol plot
+
+    apply_publication_style("PB")
+    layer = origin_connection.get_origin()._graph_layers["[PB]Layer1"]
+    set_cmds = [s for s in layer.executed if s.strip().startswith("set ")]
+    assert set_cmds  # sanity: styling commands were actually issued
+    for cmd in set_cmds:
+        flag_count = cmd.count(" -")
+        assert flag_count <= 1, f"multiple flags in one `set` call: {cmd!r}"
+
+
 def test_delete_graph_closes_window(fake_origin):
     from origin_pro_mcp.tools.graph import delete_graph
 

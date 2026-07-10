@@ -86,6 +86,35 @@ def _build_line_symbol_with_error(book="SMOKE", y_error=True):
     return g, b, sheet
 
 
+def _build_multiseries_with_error(book="PUB", n_series=2):
+    """A worksheet with n_series (X, Y, Yerr) triples, each plotted as its own
+    line+symbol series with y-error bars — the reporter's issue #7 repro
+    shape (multi-series + error cols, ungrouped since built via create_graph +
+    add_plot_to_graph)."""
+    from origin_pro_mcp.tools.graph import add_plot_to_graph, create_graph
+    from origin_pro_mcp.tools.worksheet import create_worksheet, set_worksheet_data
+
+    made = json.loads(create_worksheet(book))
+    b, sheet = made["name"], made["sheet"]
+    x = [1, 2, 3, 4, 5]
+    cols = [x]
+    for i in range(n_series):
+        cols.append([v * (i + 1) for v in [1, 4, 9, 16, 25]])
+        cols.append([0.5] * 5)
+    set_worksheet_data(b, sheet, json.dumps(cols))
+
+    g = _name(create_graph(
+        "PubG", b, sheet, 1, 2, plot_type="line+symbol", y_error_col=3,
+    ))
+    for i in range(1, n_series):
+        y_col = 2 + i * 2
+        err_col = y_col + 1
+        add_plot_to_graph(
+            g, b, sheet, 1, y_col, plot_type="line+symbol", y_error_col=err_col,
+        )
+    return g, b, sheet
+
+
 def test_settle_barrier_immediate_color_set_takes_effect(tmp_path, live_origin):
     """Task 0.5 regression: setting a curve's color IMMEDIATELY after
     create_graph must actually render (no silent no-op from the new-page
@@ -202,3 +231,44 @@ def test_axis_tick_top_none_removes_marks_keeps_bottom_labels(tmp_path, live_ori
     assert after_count > 0
     # Bottom/left labels must survive — never touched by op="tick" axis="top"/"right".
     assert abs(after_count - before_count) < max(20, before_count * 0.1)
+
+
+# --- Task 3: apply_publication_style integrity (#7) + grouped-fill truth (#8) --
+
+def test_apply_publication_style_reporter_repro(tmp_path, live_origin):
+    """Reporter's minimal issue #7 repro, rerun clean with the Task 0.5 settle
+    fix in place: 2-series line+symbol + error cols, custom colors via
+    set_plot_style, then apply_publication_style (which overwrites them with
+    the pastel palette — documented behavior), then set_plot_style(
+    open_symbol=False) on each plot to prove shapes/plots stay individually
+    addressable (not corrupted/merged) after the publication pass."""
+    from origin_pro_mcp.tools.graph import export_graph_to_file
+    from origin_pro_mcp.tools.style import apply_publication_style, set_plot_style
+
+    g, _book, _sheet = _build_multiseries_with_error(n_series=2)
+
+    # Precondition: custom colors actually apply (Task 0.5 fix verified).
+    set_plot_style(g, plot_index=1, rgb="0,0,255")
+    set_plot_style(g, plot_index=2, rgb="255,128,0")
+    precond = str(tmp_path / "repro_precondition.png")
+    export_graph_to_file(g, precond)
+    assert _red_pixel_count(precond, threshold_r=200, threshold_gb=150) > 50  # orange-ish plot 2 rendered
+
+    msg = apply_publication_style(g, x_label="X", y_label="Y")
+    assert "2 data plots styled" in msg
+    styled = str(tmp_path / "repro_styled.png")
+    export_graph_to_file(g, styled)
+    with open(precond, "rb") as f1, open(styled, "rb") as f2:
+        assert f1.read() != f2.read()  # palette overwrote the custom colors
+
+    # Refill each plot open/solid — must not raise and must still resolve
+    # each plot independently (proves apply_publication_style did not merge
+    # or corrupt the per-plot addressability of an ungrouped multi-series graph).
+    msg1 = set_plot_style(g, plot_index=1, open_symbol=False)
+    msg2 = set_plot_style(g, plot_index=2, open_symbol=True)
+    assert "plot 1" in msg1
+    assert "plot 2" in msg2
+    final = str(tmp_path / "repro_refill.png")
+    export_graph_to_file(g, final)
+    with open(styled, "rb") as f1, open(final, "rb") as f2:
+        assert f1.read() != f2.read()  # the per-plot refill visibly changed plot 2

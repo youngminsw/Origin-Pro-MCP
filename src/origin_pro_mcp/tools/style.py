@@ -435,10 +435,11 @@ def apply_publication_style(
     bold legend all at once. Designed to minimize token usage — call this
     once instead of many separate tools.
 
-    NOTE: per-curve COLORS apply only on UNGROUPED plots. Graphs built with
-    create_graph + add_plot_to_graph are ungrouped (fine). A grouped multi-curve
-    plot (loaded from a project, or a single multi-Y plot) shares one color
-    increment that overrides per-curve colors, so the palette will NOT apply —
+    NOTE: per-curve COLOR, WIDTH, and SYMBOL all apply only on UNGROUPED plots
+    (probe-confirmed — a grouped plot's shared style increment overrides color
+    AND width AND symbol, not just color). Graphs built with create_graph +
+    add_plot_to_graph are ungrouped (fine). A grouped multi-curve plot (loaded
+    from a project, or a single multi-Y plotxy) will NOT take the palette —
     call ungroup_plots(graph_name) first, then this. Axes/frame/labels apply
     either way.
 
@@ -511,19 +512,21 @@ def apply_publication_style(
     # 7. Auto-style each data plot with a muted pastel palette + distinct
     # symbols. Error-bar plots only get the color of their data plot —
     # symbol/line commands would redraw them as connected lines.
-    # Each plot's flags are sent as ONE `set` command (LabTalk supports
-    # multiple -flags per call) with a single post-command settle, instead of
-    # one Execute + sleep per flag — cuts an 8-plot graph from ~24 sleeps to 8.
+    # P8 HARD RULE (probe-verified): every flag is its OWN `set <ds> -flag
+    # val;` call. The previous code batched multiple `-flag`s into ONE `set`
+    # command as a "settle" optimization — that batching is what silently
+    # wiped colors to black on Origin 2020 (combining -c/-cf, or -k/-kf/-z,
+    # in one command corrupts the plot). One settle after the LAST flag for
+    # each plot is enough; never combine flags across a single `set` call.
     import time
     data_index = 0
     current_color = _rgb(PASTEL_RGB[0])
     for info in plot_infos:
         pname = info["name"]
         if info["is_error"]:
-            execute_labtalk(
-                f"set {pname} -c {current_color} "
-                f"-erw {_PUB_ERROR_BAR_WIDTH_PT} -erwc {_PUB_ERROR_CAP_WIDTH};"
-            )
+            graph_layer_execute(safe_graph_name, f"set {pname} -c {current_color};")
+            graph_layer_execute(safe_graph_name, f"set {pname} -erw {_PUB_ERROR_BAR_WIDTH_PT};")
+            graph_layer_execute(safe_graph_name, f"set {pname} -erwc {_PUB_ERROR_CAP_WIDTH};")
             time.sleep(0.2)
             continue
         current_color = _rgb(PASTEL_RGB[data_index % len(PASTEL_RGB)])
@@ -531,17 +534,14 @@ def apply_publication_style(
         data_index += 1
 
         line_width_units = int(_PUB_LINE_WIDTH_PT * _WIDTH_UNITS_PER_POINT)
+        graph_layer_execute(safe_graph_name, f"set {pname} -c {current_color};")
+        graph_layer_execute(safe_graph_name, f"set {pname} -w {line_width_units};")
         if _plot_has_symbols(pname):
-            execute_labtalk(
-                f"set {pname} -c {current_color} -w {line_width_units} "
-                f"-k {shape} -z {_PUB_SYMBOL_SIZE};"
-            )
+            graph_layer_execute(safe_graph_name, f"set {pname} -k {shape};")
+            graph_layer_execute(safe_graph_name, f"set {pname} -z {_PUB_SYMBOL_SIZE};")
         else:
-            # bar/column/area-type plots: color the fill instead
-            execute_labtalk(
-                f"set {pname} -c {current_color} -w {line_width_units} "
-                f"-cf {current_color};"
-            )
+            # bar/column/area-type plots: color the fill too, as its own call.
+            graph_layer_execute(safe_graph_name, f"set {pname} -cf {current_color};")
         time.sleep(0.2)
 
     # 8. Legend — reconstruct, then customize: bold entries, no border
