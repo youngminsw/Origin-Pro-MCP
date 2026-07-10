@@ -49,6 +49,8 @@ def test_mcp_stdio_lists_tools_and_guards_labtalk() -> None:
                     "run_labtalk",
                     {"script": "doc -s;"},
                 )
-                assert "blocked by the safety guard" in blocked_result.content[0].text
+                guard_text = blocked_result.content[0].text
+                assert "NOT EXECUTED" in guard_text
+                assert "confirm=True" in guard_text
 
     asyncio.run(scenario())
