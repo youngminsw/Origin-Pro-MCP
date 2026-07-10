@@ -425,12 +425,18 @@ class Session:
             ok = _autosave.save_in_place(origin, remembered)
         except Exception:
             ok = False
-        if ok:
+        # Tri-state (issue #12 fix): True (saved) and None (nothing on disk to
+        # protect — empty/never-saved project) both PROCEED; only a real save
+        # FAILURE (False, meaning an on-disk file exists but the save failed)
+        # blocks a required preflight.
+        if ok or ok is None:
             return None
         if policy.required:
             return (f"Autosave before '{name}' failed, so the destructive "
                     "operation was NOT run (set ORIGIN_PRO_MCP_AUTOSAVE_REQUIRED=0 "
-                    "to proceed without saving). Save your project and retry.")
+                    "to proceed without saving, or ORIGIN_PRO_MCP_AUTOSAVE=off if "
+                    "this session must never write the project). Save your "
+                    "project and retry.")
         return None  # best-effort mode: proceed even though the save failed
 
     def _snapshot(self) -> None:

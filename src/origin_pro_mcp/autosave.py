@@ -176,7 +176,7 @@ class HasWorkTracker:
         self._has_work = False
 
 
-def save_in_place(origin, remembered_path: Optional[str] = None) -> bool:
+def save_in_place(origin, remembered_path: Optional[str] = None) -> Optional[bool]:
     """Save the project to ITS OWN file — in place, same name. NOT a copy.
 
     This is what "autosave" means: a plain Save of the open project, so the user
@@ -195,7 +195,16 @@ def save_in_place(origin, remembered_path: Optional[str] = None) -> bool:
     so we save to the project's actual full path: the remembered load/save path
     when known, else reconstructed from the ``%X`` (folder) + ``%G`` (name)
     LabTalk registers. Saving to the current path is in place — no rename, no
-    rebind. Returns True only when a save actually happened.
+    rebind.
+
+    Returns a TRI-STATE result (issue #12 fix — a caller must be able to tell
+    "nothing to protect" from "a real save attempt failed"):
+      * ``True``  — a save actually happened.
+      * ``None``  — nothing on disk to protect: an empty/blanked project, OR a
+        never-saved project with no on-disk file yet. Not a failure — there was
+        no in-place target to guard, so a preflight gate must PROCEED, not block.
+      * ``False`` — a real save attempt was made (an on-disk file exists) and it
+        failed. A REQUIRED preflight gate should block on this.
     """
     try:
         pages = (origin.WorksheetPages.Count + origin.GraphPages.Count
@@ -203,7 +212,7 @@ def save_in_place(origin, remembered_path: Optional[str] = None) -> bool:
     except Exception:
         pages = -1
     if pages <= 0:
-        return False  # empty/blanked project -> never overwrite a real file (N5)
+        return None  # empty/blanked project -> nothing to protect, never overwrite (N5)
     path = remembered_path
     if not path:
         try:
@@ -214,7 +223,7 @@ def save_in_place(origin, remembered_path: Optional[str] = None) -> bool:
         except Exception:
             path = None
     if not path or not os.path.isfile(path):
-        return False  # never-saved project -> no in-place target; do nothing
+        return None  # never-saved project -> no in-place target; nothing to protect
     try:
         return bool(origin.Save(path))
     except Exception:

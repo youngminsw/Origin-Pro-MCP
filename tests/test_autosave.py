@@ -146,9 +146,10 @@ def test_save_in_place_never_creates_a_differently_named_file(tmp_path):
 
 
 def test_save_in_place_skips_when_no_on_disk_file(tmp_path):
-    # never-saved project: no remembered path, LTStr("%X"/"%G") empty -> no-op
+    # never-saved project: no remembered path, LTStr("%X"/"%G") empty -> None
+    # (issue #12 tri-state fix: "nothing to protect", NOT a save failure).
     fake = FakeOrigin()
-    assert save_in_place(fake, None) is False
+    assert save_in_place(fake, None) is None
     assert fake.saved_paths == []
 
 
@@ -162,15 +163,18 @@ class _EmptyOrigin(FakeOrigin):
 
 def test_save_in_place_skips_empty_project(tmp_path):
     """N5: an EMPTY project (0 windows, e.g. after a flaky empty-load) must NEVER
-    overwrite a real file."""
+    overwrite a real file. Returns None ("nothing to protect"), not False —
+    an empty project is not a save FAILURE."""
     fake = _EmptyOrigin()
     proj = tmp_path / "study.opju"
     proj.write_text("real 579 KB stand-in")
-    assert save_in_place(fake, str(proj)) is False
+    assert save_in_place(fake, str(proj)) is None
     assert fake.saved_paths == []                    # real file untouched
 
 
 def test_save_in_place_reports_failure(tmp_path):
+    """A REAL save attempt (on-disk file exists) that fails must return
+    False, distinctly from the None ("nothing to protect") cases above."""
     fake = FakeOrigin()
     fake.save_result = False
     proj = tmp_path / "x.opju"
@@ -279,6 +283,45 @@ def test_daemon_autosave_required_failure_blocks_destructive(tmp_path):
         assert "Autosave before 'delete_graph' failed" in r["error"]
         # the destructive win -cd must NOT have run
         assert not any("win -cd" in s for s in origins[0].executed)
+    finally:
+        conn.close()
+        d.stop()
+
+
+def _start_daemon_never_saved(tmp_path, policy):
+    """A daemon whose Origin project has never been saved to disk (plain
+    FakeOrigin: LTStr("%X"/"%G") is "" and no remembered path) — the
+    never-saved-project half of the issue #12 fix."""
+    origins = []
+
+    def factory():
+        o = FakeOrigin()
+        origins.append(o)
+        return o
+
+    d = Daemon()
+    assert d.start(origin_factory=factory, registry=_registry(), max_size=3,
+                   host="127.0.0.1", port=0, get_pid=lambda i: 4242,
+                   autosave_policy=policy, monitor_tick=0.01, reconnect_grace=0.0,
+                   lockfile_path=str(tmp_path / "daemon.json"))
+    return d, origins
+
+
+def test_daemon_autosave_never_saved_project_does_not_block_delete(tmp_path):
+    """Issue #12: a never-saved project (no on-disk file, e.g. a fresh session
+    that only just created data) must NOT block a destructive op under a
+    REQUIRED autosave policy — there is nothing on disk to protect, so
+    save_in_place returns None and the preflight proceeds."""
+    policy = AutosavePolicy(enabled=True, required=True)
+    d, origins = _start_daemon_never_saved(tmp_path, policy)
+    conn = transport.connect(d.host, d.port, d.token, session_id="A")
+    conn.settimeout(5.0)
+    try:
+        _call(conn, "r1", "run_labtalk", {"script": "col(1)=1;"})  # has-work
+        r = _call(conn, "r2", "delete_graph", {"graph_name": "Graph1"})
+        assert r["ok"] is True
+        assert "Autosave" not in (r["error"] or "")
+        assert origins[0].saved_paths == []  # nothing to save to; not attempted
     finally:
         conn.close()
         d.stop()
