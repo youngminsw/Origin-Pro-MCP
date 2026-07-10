@@ -53,16 +53,69 @@ def test_windows_path_converts_wsl_style():
 def test_windows_path_rejects_bare_posix_on_windows(monkeypatch):
     # On the real (Windows) daemon a bare POSIX path resolves against the
     # current drive (C:\tmp\...) and would report success at a path the
-    # WSL-side agent can never see. It must be rejected upfront there.
+    # WSL-side agent can never see. It must be rejected upfront there
+    # (when no WSL distro is known to auto-map to \\wsl.localhost).
     import sys
 
     from origin_pro_mcp.labtalk_safe import windows_path
 
     monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("ORIGIN_PRO_MCP_WSL_DISTRO", raising=False)
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
     with pytest.raises(ValueError, match="Windows process"):
         windows_path("/tmp/fig.png", "p")
     # /mnt/<drive>/ paths keep translating fine on Windows too.
     assert windows_path("/mnt/d/out/fig.png", "p") == "D:\\out\\fig.png"
+
+
+def test_windows_path_translates_bare_posix_to_wsl_localhost_unc(monkeypatch):
+    """Issue #13 (P7 confirmed live: Origin's expGraph CAN write to
+    \\\\wsl.localhost\\<distro>\\... and the file genuinely lands on the WSL
+    side): a bare POSIX path is translated to that UNC form when a distro
+    name is known, instead of being rejected."""
+    from origin_pro_mcp.labtalk_safe import windows_path
+
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("ORIGIN_PRO_MCP_WSL_DISTRO", "Ubuntu")
+    assert windows_path("/tmp/fig.png", "p") == "\\\\wsl.localhost\\Ubuntu\\tmp\\fig.png"
+
+
+def test_windows_path_falls_back_to_inherited_wsl_distro_name(monkeypatch):
+    """When ORIGIN_PRO_MCP_WSL_DISTRO is not set, fall back to WSL_DISTRO_NAME
+    if the daemon happened to inherit it."""
+    import sys
+
+    from origin_pro_mcp.labtalk_safe import windows_path
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("ORIGIN_PRO_MCP_WSL_DISTRO", raising=False)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    assert windows_path("/home/me/fig.png", "p") == "\\\\wsl.localhost\\Ubuntu\\home\\me\\fig.png"
+
+
+def test_windows_path_explicit_distro_var_overrides_inherited(monkeypatch):
+    import sys
+
+    from origin_pro_mcp.labtalk_safe import windows_path
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("ORIGIN_PRO_MCP_WSL_DISTRO", "MyDistro")
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    assert windows_path("/tmp/fig.png", "p") == "\\\\wsl.localhost\\MyDistro\\tmp\\fig.png"
+
+
+def test_windows_path_rejection_hint_mentions_distro_env(monkeypatch):
+    import sys
+
+    from origin_pro_mcp.labtalk_safe import windows_path
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("ORIGIN_PRO_MCP_WSL_DISTRO", raising=False)
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    with pytest.raises(ValueError, match="ORIGIN_PRO_MCP_WSL_DISTRO"):
+        windows_path("/tmp/fig.png", "p")
 
 
 def test_get_worksheet_data_handles_hresult_return(fake_origin):

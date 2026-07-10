@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import sys
 from collections.abc import Iterable
@@ -105,11 +106,17 @@ def labtalk_variable(value: str, field: str) -> str:
 
 
 def windows_path(value: str, field: str) -> str:
-    """Normalize a user-supplied path to a Windows path.
+    """Normalize a user-supplied path to a Windows-writable path.
 
     Strips stray quotes/whitespace and converts WSL-style paths
     (/mnt/c/Users/...) to Windows form (C:\\Users\\...) so agents running
-    in WSL can pass their native paths.
+    in WSL can pass their native paths. A bare POSIX path outside /mnt (e.g.
+    /tmp/x, no drive letter available) is translated to the UNC form
+    \\\\wsl.localhost\\<distro>\\... (probe-confirmed on Origin 2020: expGraph
+    can write there and the file genuinely lands on the WSL side) when a
+    distro name is known via ORIGIN_PRO_MCP_WSL_DISTRO or (if the daemon
+    inherited it) WSL_DISTRO_NAME; otherwise it is rejected with a hint to set
+    that env var.
     """
     path = value.strip().strip('"').strip("'")
     if not path:
@@ -120,16 +127,24 @@ def windows_path(value: str, field: str) -> str:
         drive = match.group(1).upper()
         rest = (match.group(2) or "/").replace("/", "\\")
         path = f"{drive}:{rest}"
-    if path.startswith("/") and sys.platform == "win32":
+    elif path.startswith("/") and sys.platform == "win32":
         # On the Windows daemon a POSIX path like /tmp/x silently resolves
         # against the current drive (C:\tmp\x): Origin would "successfully"
-        # write somewhere the WSL-side agent can never see. Reject upfront.
-        msg = (
-            f"{field} is a Linux/WSL path ({path}) that Origin — a Windows "
-            "process — cannot access. Use a Windows path (C:\\...) or a "
-            "/mnt/<drive>/... path."
-        )
-        raise ValueError(msg)
+        # write somewhere the WSL-side agent can never see. Translate it to
+        # a \\wsl.localhost\<distro>\... UNC path when a distro name is known
+        # (this only matters on the real Windows daemon — on WSL/Linux itself
+        # the path is already directly accessible, so it is left untouched).
+        distro = os.environ.get("ORIGIN_PRO_MCP_WSL_DISTRO") or os.environ.get("WSL_DISTRO_NAME")
+        if distro:
+            path = f"\\\\wsl.localhost\\{distro}" + path.replace("/", "\\")
+        else:
+            msg = (
+                f"{field} is a Linux/WSL path ({path}) that Origin — a Windows "
+                "process — cannot access. Use a Windows path (C:\\...) or a "
+                "/mnt/<drive>/... path, or set ORIGIN_PRO_MCP_WSL_DISTRO=<distro> "
+                "to auto-map to \\\\wsl.localhost."
+            )
+            raise ValueError(msg)
     return path
 
 

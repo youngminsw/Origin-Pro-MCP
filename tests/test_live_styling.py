@@ -294,3 +294,19 @@ def test_run_labtalk_window_targets_the_named_graph(tmp_path, live_origin):
 
     from origin_pro_mcp.tools.style_helpers import read_layer_value
     assert read_layer_value(g, "layer.x.thickness") == pytest.approx(6.0, abs=0.01)
+
+
+# --- Task 6: WSL export path translation (#13) -------------------------------
+
+def test_export_graph_bare_posix_path_lands_on_wsl_side(monkeypatch, live_origin):
+    """Issue #13: a bare POSIX path (no /mnt/<drive> prefix) is translated to
+    \\\\wsl.localhost\\<distro>\\... and the export must actually succeed (no
+    "cannot access" rejection) when ORIGIN_PRO_MCP_WSL_DISTRO names a real
+    distro. The WSL-side file arrival itself is checked separately from the
+    WSL shell (P7 confirmed this live: the UNC write genuinely lands there)."""
+    monkeypatch.setenv("ORIGIN_PRO_MCP_WSL_DISTRO", "Ubuntu")
+    from origin_pro_mcp.tools.graph import export_graph_to_file
+
+    g, _book, _sheet = _build_line_symbol_with_error(y_error=False)
+    out = export_graph_to_file(g, "/tmp/live_wsl_export_check.png")
+    assert out == "\\\\wsl.localhost\\Ubuntu\\tmp\\live_wsl_export_check.png"
