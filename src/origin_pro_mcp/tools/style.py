@@ -755,10 +755,12 @@ def _set_tick_style_impl(
         axis: "x", "y", "both" (default), "top", or "right" ("top"/"right"
               target only the opposite-side border axis, x2/y2)
         tick_direction: "in", "out", "both", or "none" ("none" removes that
-              side's tick MARKS while leaving its number labels intact — this
-              uses `layer.<ax>.ticks = 0`, NEVER `layer.<ax>.majorTicks`,
-              which probe-confirmed wipes ALL axes' number labels on Origin
-              2020)
+              side's tick MARKS when present, while always leaving its number
+              labels intact — this uses `layer.<ax>.ticks = 0`, NEVER
+              `layer.<ax>.majorTicks`, which probe-confirmed wipes ALL axes'
+              number labels on Origin 2020. A default closed frame may already
+              show few/no marks on the opposite side, so the visible change can
+              be subtle)
         major_length: Major tick length in points (default 8)
         minor_count: Number of minor ticks between major ticks (default 4)
         show_minor: Whether to show minor ticks

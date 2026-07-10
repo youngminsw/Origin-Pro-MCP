@@ -1099,9 +1099,11 @@ def axis(
               "top", or "right" — "top"/"right" target ONLY the opposite-side
               border axis (x2/y2), e.g. to strip its tick marks without
               touching the bottom/left axis), `tick_direction` (in/out/both/
-              none, default in — "none" removes that side's tick MARKS while
-              leaving its number labels alone; NEVER emits `majorTicks`,
-              which probe-confirmed wipes ALL axes' number labels), plus
+              none, default in — "none" removes that side's tick MARKS when
+              present while always leaving its number labels alone (a default
+              closed frame may show few/no opposite-side marks, so the visible
+              change can be subtle); NEVER emits `majorTicks`, which
+              probe-confirmed wipes ALL axes' number labels), plus
               `major_length` (default 8), `minor_count` (default 4),
               `show_minor` (default True).
             - "frame": close/open the frame (top+right border axes) and/or

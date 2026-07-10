@@ -8,9 +8,13 @@ from ..labtalk_safe import (
 
 # Origin's numeric sentinel for a missing/unreadable property (observed on
 # opposite-axis x2/y2 reads as -1.23456789e-300, P9-confirmed) is a TINY
-# near-zero magnitude, not a huge negative number — no real `layer.*` value
-# is ever this close to zero, so this is a safe, specific detector. Translate
-# it to a readable string instead of leaking the raw float to callers.
+# near-zero magnitude, not a huge negative number. The threshold sits ~18
+# orders of magnitude below float64's normal minimum (~2.2e-308), i.e. deep in
+# the denormal/underflow regime, so any real captured quantity (axis props,
+# fit params, stats) is far larger — the only values it catches are Origin's
+# sentinels. It is a magnitude heuristic (not an exact-bit-pattern match), so
+# in principle a genuine sub-1e-290 result would also read as "missing"; no
+# such value arises in practice. Translate it instead of leaking the raw float.
 _MISSING_SENTINEL_ABS_MAX = 1e-290
 
 
