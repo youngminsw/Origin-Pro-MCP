@@ -272,3 +272,25 @@ def test_apply_publication_style_reporter_repro(tmp_path, live_origin):
     export_graph_to_file(g, final)
     with open(styled, "rb") as f1, open(final, "rb") as f2:
         assert f1.read() != f2.read()  # the per-plot refill visibly changed plot 2
+
+
+# --- Task 5: run_labtalk window param ----------------------------------------
+
+def test_run_labtalk_window_targets_the_named_graph(tmp_path, live_origin):
+    """run_labtalk(window=...) activates that window before executing, so a
+    `layer.*` write lands on the NAMED graph even when a different window is
+    currently active."""
+    from origin_pro_mcp.tools.graph import export_graph_to_file
+    from origin_pro_mcp.tools.labtalk import run_labtalk
+    from origin_pro_mcp.tools.worksheet import create_worksheet
+
+    g, _book, _sheet = _build_line_symbol_with_error(y_error=False)
+    # Make some OTHER window active first.
+    create_worksheet("OTHER")
+
+    run_labtalk("layer.x.thickness = 6;", window=g)
+    out = str(tmp_path / "window_param.png")
+    export_graph_to_file(g, out)
+
+    from origin_pro_mcp.tools.style_helpers import read_layer_value
+    assert read_layer_value(g, "layer.x.thickness") == pytest.approx(6.0, abs=0.01)

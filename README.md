@@ -235,6 +235,34 @@ The `run_labtalk` tool is available by default for styling, analysis, graph twea
 
 This is an accident-prevention guard, not a security sandbox for untrusted code.
 
+### LabTalk Gotchas (Origin 2020, styling-report fixes)
+
+- **One flag per `set` call.** `set <ds> -c color(255,0,0) -cf color(255,0,0);`
+  (combining flags in ONE command) silently wipes the plot to black; the same
+  applies to `-k`/`-kf`/`-z` combined (can blank the symbol). Send each flag
+  as its own `set <ds> -flag val;` call.
+- **Never write `layer.x2.majorTicks` / `layer.y2.majorTicks`.** Setting it
+  to 0 wipes the number labels on ALL FOUR axes, not just the opposite side.
+  Use `layer.<ax>.ticks = 0` (or `axis(op="tick", axis="top"/"right",
+  tick_direction="none")`) to remove tick marks instead.
+- **Units differ between line width and error-bar width.** `set -w` is
+  ~200 units per point (500 = 2.5pt); error bars use `-erw <points>` /
+  `-erwc <cap width>` directly in points — do not reuse the `-w` scale for
+  error bars, and never style them via a bare `set -w`/`-ew`.
+  `set_plot_style(error_bar_width=, error_cap_width=)` handles the units.
+- **The active window matters.** `layer.*`, `col()`, and `%C` all target
+  whatever window is currently active — pass `window=<name>` to `run_labtalk`
+  to activate it first, or prefer the typed tools (`graph_name`/`book_name`
+  params never depend on activation state).
+- **A freshly created page needs a moment before its FIRST styling/read/
+  export command** — `create_graph`/`add_plot_to_graph`/`ungroup_plots`
+  handle this internally now; a raw `run_labtalk` sequence right after
+  `CreatePage`/`plotxy` may still need its own settle.
+- **Symbol shape `-k` codes** (Origin 2020, re-verified live): 1=square,
+  2=circle, 3=triangle-up, 4=triangle-down, 5=diamond, 6=plus, 7=x/cross,
+  8=asterisk. Codes 9-12 render as a dash/vertical-bar/literal glyph, not
+  useful marker shapes.
+
 ## Architecture
 
 ```
@@ -442,7 +470,8 @@ Pull the skill with `get_skill("publication-figure")` (or copy `src/origin_pro_m
 | `%C` notation fails via COM | Use actual plot names from `DataPlots` |
 | `expGraph` needs `path:=`/`filename:=`/`overwrite:=replace` (a full path or missing args opens a dialog) | `export_graph` writes the file directly via `expGraph`, no clipboard involved |
 | `nlr.r2` returns 0 after `nlend` | Read statistics BEFORE `nlend` |
-| Plot styling commands can conflict | Add 0.2s delay between `set` commands |
+| Combining multiple `-flag`s in ONE `set` command corrupts the plot (color reset to black, or symbol blanked) | Send one `set <ds> -flag val;` call per flag, not a delay — see "LabTalk Gotchas" above |
+| `layer.x2.majorTicks`/`layer.y2.majorTicks` wipes ALL axes' number labels | Use `layer.<ax>.ticks = 0` instead |
 | `[Book]Sheet!col(n).type = ...` silently ignored | Activate the sheet, then use `wks.col(n).type` |
 | `set <plot>` fails when the graph isn't active | Run `win -a <graph>` before `set` commands |
 | Typed LabTalk locals (`int x = ...`) unreadable later | Use untyped assignment to read values back via COM |

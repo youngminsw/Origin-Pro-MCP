@@ -18,8 +18,16 @@ from .style_helpers import (
     settle_new_plots,
 )
 
-# Symbol shapes for different datasets
-SYMBOL_SHAPES = {1: 2, 2: 3, 3: 1, 4: 4, 5: 5, 6: 6}  # circle, triangle-up, square, diamond, triangle-down, hexagon
+# Per-plot-index default symbol shape, used when symbol_shape is 0/None (auto).
+# Codes are Origin 2020's LabTalk `set <ds> -k <n>` symbol-kind table, RE-VERIFIED
+# live (Task 5, single-flag `-k <n>` only, no `-kf`/`-z` combined, on a settled
+# page): 1=square, 2=circle, 3=triangle-up, 4=triangle-down, 5=diamond, 6=plus,
+# 7=x/cross, 8=asterisk. (9=dash, 10=vertical-bar, 11/12=render as literal "1"/
+# "A" glyphs, not real marker shapes — excluded here as not useful defaults.)
+# The earlier table (1=circle,2=triangle-up,3=square,4=diamond,5=triangle-down,
+# 6=hexagon) was WRONG — a pre-settle-fix, flag-combination-corrupted reading;
+# do not resurrect it.
+SYMBOL_SHAPES = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}  # square, circle, tri-up, tri-down, diamond, plus
 
 # Default palette: muted/pastel RGB tones (no pure primaries — easier on
 # the eyes, survives grayscale, colorblind-distinguishable). Applied via
@@ -158,10 +166,12 @@ def set_plot_style(
         symbol_size: Symbol size (None = leave unchanged; not validated —
                      Origin accepts any positive value, roughly 3-20 is the
                      readable range)
-        symbol_shape: 0=auto, 1=square, 2=circle, 3=triangle-up, 4=diamond,
-                      5=triangle-down, 6=hexagon (None = leave unchanged). See
-                      SYMBOL_SHAPES / this module's docstring notes for which
-                      `-k` codes are confirmed on Origin 2020.
+        symbol_shape: 0=auto (uses SYMBOL_SHAPES's per-plot-index default), else
+                      the LabTalk `-k` code, RE-VERIFIED live on Origin 2020:
+                      1=square, 2=circle, 3=triangle-up, 4=triangle-down,
+                      5=diamond, 6=plus, 7=x/cross, 8=asterisk. (9-12 render as
+                      a dash/vertical-bar/literal digit-or-letter glyph, not
+                      useful marker shapes — avoid them.) None = leave unchanged.
         color: Color name (black, red, green, blue, cyan, magenta, yellow,
                orange, purple, gray/grey). "" = leave unchanged.
         rgb: Explicit "r,g,b" (each 0-255), e.g. "128,0,200", for per-curve

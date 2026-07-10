@@ -1,12 +1,31 @@
 import json
 
 from ..app import mcp
-from ..origin_connection import execute_labtalk, get_lt_var, get_lt_str
-from ..labtalk_safe import labtalk_variable, classify_labtalk_script, split_labtalk_statements
+from ..origin_connection import activate_window, execute_labtalk, get_lt_var, get_lt_str
+from ..labtalk_safe import (
+    labtalk_name, labtalk_variable, classify_labtalk_script, split_labtalk_statements,
+)
+
+# Origin's numeric sentinel for a missing/unreadable property (observed on
+# opposite-axis x2/y2 reads as -1.23456789e-300, P9-confirmed) is a TINY
+# near-zero magnitude, not a huge negative number — no real `layer.*` value
+# is ever this close to zero, so this is a safe, specific detector. Translate
+# it to a readable string instead of leaking the raw float to callers.
+_MISSING_SENTINEL_ABS_MAX = 1e-290
+
+
+def _translate_missing(value):
+    try:
+        if isinstance(value, (int, float)) and 0 < abs(value) < _MISSING_SENTINEL_ABS_MAX:
+            return "missing"
+    except TypeError:
+        pass
+    return value
+
 
 @mcp.tool()
 def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = None,
-                timeout: float = 0.0) -> str:
+                timeout: float = 0.0, window: str = "") -> str:
     """Execute a LabTalk script in Origin Pro — the universal escape hatch.
 
     Use this for any Origin operation not covered by other tools. LabTalk is
@@ -44,17 +63,52 @@ def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = 
     assignments (`layer.x.from=1`), but avoid batching non-idempotent
     statements (appends, increments) in one script.
 
+    GOTCHA — active window: `layer.*`, `col()`, `%C`, and similar unqualified
+    references all target the ACTIVE window, not necessarily the graph/sheet
+    you mean. Pass `window=<name>` to activate that window FIRST (uses the
+    same COM activation route that works on loaded graphs, unlike bare
+    `win -a`), or prefer the typed tools (they take `graph_name`/`book_name`
+    explicitly and never depend on window activation state).
+
+    LabTalk gotchas learned the hard way (Origin 2020, styling-report fixes):
+      * `set -w` (line width) units are ~200 per point (500 = 2.5pt) — NOT
+        the same scale as error-bar `-erw`, which is in POINTS directly.
+      * Error bars use `-erw <points>` (line width) / `-erwc <cap width>` —
+        NOT `-ew`/`-w`, which are silent no-ops or wrong-unit on an error plot.
+      * NEVER combine multiple `-flag`s in one `set` command (e.g. `-c` +
+        `-cf`, or `-k` + `-kf` + `-z`) — probe-confirmed to silently corrupt
+        the plot (wipes color to black, or blanks the symbol). Send one
+        `set <ds> -flag val;` per flag.
+      * NEVER write `layer.x2.majorTicks` / `layer.y2.majorTicks` — confirmed
+        to wipe the NUMBER LABELS on ALL FOUR axes, not just the opposite
+        side. Use `layer.<ax>.ticks = 0` to remove tick marks instead.
+      * Symbol shape `-k` codes (re-verified live): 1=square, 2=circle,
+        3=triangle-up, 4=triangle-down, 5=diamond, 6=plus, 7=x/cross,
+        8=asterisk; 9-12 render as a dash/vertical-bar/literal glyph, not
+        useful shapes.
+      * `layer.x/y.*` properties (from/to/inc/thickness/ticks/majorLen) read
+        back real values; `layer.x2/y2.*` (opposite-axis) reads more often
+        return Origin's "missing" sentinel — translated to the string
+        "missing" in this tool's `capture` output (see below).
+
     Args:
         script: LabTalk script to execute
         confirm: Set True to run a script that uses a gated command token
         capture: Optional list of LabTalk variable names to read back after
                  the script runs. When given, the result is a JSON object
-                 {"status", "script", "values"}.
+                 {"status", "script", "values"}. A numeric value Origin can't
+                 actually supply (its missing-property sentinel) is returned
+                 as the string "missing" instead of a raw unreadable float.
         timeout: Optional per-call dispatch budget in seconds for this one
                  script. 0 (default) uses the daemon's configured dispatch
                  timeout. A positive value bounds this call even when the
                  global dispatch timeout is off; on overrun the daemon force-
                  resets the wedged session and returns an actionable error.
+        window: Optional window name to activate before running the script —
+                use this when `script` relies on the active window (`layer.*`,
+                `col()`, `%C`, ...) and you are not sure it is already active.
+                "" (default) runs the script against whatever is currently
+                active, unchanged.
 
     Returns:
         Success/failure message, or an actionable not-executed message when a
@@ -64,6 +118,9 @@ def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = 
         statement-level retry report is appended to the message (or added as
         "statement_results" in the JSON when `capture` is given).
     """
+    if window:
+        safe_window = labtalk_name(window, "window")
+        activate_window(safe_window, "window")
     _ok, requires_confirm, reason = classify_labtalk_script(script)
     if requires_confirm and not confirm:
         return (
@@ -97,9 +154,10 @@ def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = 
     values: dict = {}
     for raw_name in capture:
         safe_name = labtalk_variable(raw_name, "capture")
-        values[safe_name] = (
-            get_lt_str(safe_name) if safe_name.endswith("$") else get_lt_var(safe_name)
-        )
+        if safe_name.endswith("$"):
+            values[safe_name] = get_lt_str(safe_name)
+        else:
+            values[safe_name] = _translate_missing(get_lt_var(safe_name))
     result = {"status": status, "script": script, "values": values}
     if statement_results:
         result["statement_results"] = statement_results

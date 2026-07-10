@@ -288,8 +288,16 @@ set_legend(graph_name="Fig1", visible=True, position="top-right", entries="Prist
   are not counted.
 - `color`: black, red, green, blue, cyan, magenta, yellow, orange,
   purple, gray.
-- `symbol_shape`: 0=auto, 1=square, 2=circle, 3=triangle-up, 4=diamond,
-  5=triangle-down, 6=hexagon.
+- `symbol_shape`: 0=auto, 1=square, 2=circle, 3=triangle-up, 4=triangle-down,
+  5=diamond, 6=plus, 7=x/cross, 8=asterisk (re-verified live on Origin 2020;
+  9-12 render as a dash/vertical-bar/literal glyph, not useful shapes).
+- `error_bar_width` / `error_cap_width`: error-bar line/cap width in POINTS
+  (LabTalk `-erw`/`-erwc`) — do NOT use `line_width`'s units for these, and
+  never style error bars via raw `set -w`/`-ew` (see the gotchas table).
+- `line_width`, `symbol_size`, `symbol_shape`, `color`/`rgb`, `open_symbol`,
+  `error_bar_width`, `error_cap_width` all default to `None`/`""` = "leave
+  this aspect unchanged" — pass only what you want to change; a partial call
+  never resets the rest of the curve's style.
 - `legend_position` (here and in `apply_publication_style`/`set_legend`):
   top-left, top-right, bottom-left, bottom-right — nothing else is valid.
 
@@ -428,6 +436,11 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | `set <plot>` silently fails when the graph window is not active | Run `win -a <graph>` first |
 | `[Book]Sheet!col(n).type = ...` is silently ignored | Activate the sheet and use `wks.col(n).type` instead |
 | A graph loaded from a `.opju` project file can report zero data plots over COM, so per-curve styling/ungrouping used to silently no-op | The core per-curve/axis/frame tools (`set_plot_style`, `ungroup_plots`, `remove_plot`, `axis` range/scale/tick) now activate the page and re-acquire a fresh layer handle before each call; axis-range calls also read the value back and raise if it didn't change. If plots are still zero, the tool raises an actionable error — recreate the graph in-session (`create_graph`/`plotxy`) rather than editing the loaded one. Text/font/legend tools (`set_graph_font`, `set_legend`) still go through plain LabTalk and can silently no-op on a loaded graph — verify those in the exported image |
+| A freshly created graph page can silently ignore or partially apply the FIRST styling/read/export command issued right after `create_graph`/`plotxy`/`add_plot_to_graph` (no exception, just no effect) | `create_graph`, `add_plot_to_graph`, and `ungroup_plots` now poll until the new plots enumerate and add a short settle before returning, so callers don't need to add their own delay |
+| Combining multiple `-flag`s in ONE `set <ds> ...` command (e.g. `-c` + `-cf`, or `-k` + `-kf` + `-z`) silently corrupts the plot — colors reset to black, or the symbol blanks out | Send exactly ONE flag per `set` call. `set_plot_style` and `apply_publication_style` both do this now; never batch flags yourself via `run_labtalk` |
+| `layer.x2.majorTicks` / `layer.y2.majorTicks` set to 0 wipes the NUMBER LABELS on ALL FOUR axes, not just the opposite side | Use `axis(op="tick", axis="top"/"right", tick_direction="none")`, which sets `layer.<ax>.ticks = 0` instead — never write `majorTicks` directly |
+| `layer.x/y.*` properties (from/to/inc/thickness/ticks/majorLen) read back real values, but `layer.x2/y2.*` (opposite-axis) reads more often return Origin's missing-property sentinel (a tiny near-zero float, e.g. `-1.23456789e-300`) | `run_labtalk`'s `capture` translates that sentinel to the string `"missing"` instead of leaking the raw float |
+| A never-saved project (no on-disk file yet) used to be treated the same as a failed autosave, blocking destructive ops (delete_graph, etc.) under a required autosave policy | Autosave now distinguishes "nothing on disk to protect" (proceeds) from "a real save attempt failed" (blocks when required) |
 
 ## Pre-Export Checklist
 

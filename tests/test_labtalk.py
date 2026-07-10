@@ -203,6 +203,56 @@ def test_run_labtalk_capture_rejects_bad_variable_name(fake_origin):
         run_labtalk("x = 1;", capture=["bad name; del all"])
 
 
+# --- capture sentinel translation (issue #11) --------------------------------
+
+def test_run_labtalk_capture_translates_missing_sentinel(fake_origin):
+    """Origin's -1.23456789e-300-style sentinel for an unreadable/missing
+    property must come back as the string "missing", not a raw float a
+    caller could mistake for a real value."""
+    import json
+
+    fake_origin.lt_vars["v"] = -1.23456789e-300
+    payload = json.loads(run_labtalk("v = layer.x2.majorTicks;", capture=["v"]))
+    assert payload["values"]["v"] == "missing"
+
+
+def test_run_labtalk_capture_leaves_real_values_alone(fake_origin):
+    import json
+
+    fake_origin.lt_vars["v"] = 2.0
+    payload = json.loads(run_labtalk("v = layer.x.thickness;", capture=["v"]))
+    assert payload["values"]["v"] == 2.0
+
+
+def test_run_labtalk_capture_string_vars_unaffected_by_sentinel_check(fake_origin):
+    import json
+
+    result = run_labtalk('name$ = "Graph1";', capture=["name$"])
+    payload = json.loads(result)
+    assert payload["values"]["name$"] == ""  # FakeOrigin.LTStr default
+
+
+# --- window param (issue #10) -------------------------------------------------
+
+def test_run_labtalk_window_activates_before_executing(fake_origin):
+    run_labtalk("layer.x.from = 0;", window="Graph1")
+    assert any(s.startswith("win -a Graph1") for s in fake_origin.executed)
+    # Activation happens BEFORE the script itself.
+    idx_activate = next(i for i, s in enumerate(fake_origin.executed) if s.startswith("win -a Graph1"))
+    idx_script = fake_origin.executed.index("layer.x.from = 0;")
+    assert idx_activate < idx_script
+
+
+def test_run_labtalk_no_window_does_not_activate(fake_origin):
+    run_labtalk("col(1) = 1;")
+    assert not any(s.startswith("win -a") for s in fake_origin.executed)
+
+
+def test_run_labtalk_window_rejects_bad_name(fake_origin):
+    with pytest.raises(ValueError):
+        run_labtalk("col(1) = 1;", window="bad name; del all")
+
+
 # --- get_labtalk_variable existence check ---
 
 
