@@ -284,11 +284,13 @@ def remove_plot(graph_name: str, plot_index: int = 1) -> str:
     """Remove a single data plot from a graph's first layer.
 
     Use this to delete a stray/duplicate/dead-guide curve without touching the
-    others. Unlike `range r; delete r;` (which reports success but leaves the
-    plot on the layer), this selects the plot's dataset with `layer -e` and
-    then purges it with `layer -ie` (delete-selected), which actually removes
-    it. (`layer -d` deletes the entire LAYER, not a single plot — do not use it
-    for this.)
+    others. Removes ONLY the plot at `plot_index` via the COM DataPlot's
+    `Destroy()` — so when the SAME dataset is plotted more than once, only the
+    indexed copy goes (the LabTalk `layer -e <dataset>` route removed EVERY plot
+    of that dataset, since it addresses by dataset NAME, not by plot; verified).
+    `Destroy()` is the only working per-index route on this build — the DataPlot
+    COM object has no `Remove`/`Delete`, and `range r; delete r` reports success
+    but leaves the plot on the layer.
 
     Args:
         graph_name: Graph name
@@ -296,33 +298,42 @@ def remove_plot(graph_name: str, plot_index: int = 1) -> str:
                     as set_plot_style; error-bar plots are not counted)
 
     Returns:
-        Confirmation message
+        Confirmation message naming the removed plot and the survivors.
     """
-    from .style_helpers import get_plot_info
+    from .style_helpers import acquire_graph_layer, get_plot_info
 
     safe_graph = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
     infos = get_plot_info(safe_graph)
-    data_names = [p["name"] for p in infos if not p["is_error"]]
+    # DataPlots.Item indexes over ALL plots (error bars included); map the
+    # 1-based DATA-plot index to its position in the full collection.
+    com_positions = [i for i, p in enumerate(infos) if not p["is_error"]]
     idx = plot_index - 1
-    if idx < 0 or idx >= len(data_names):
-        valid = f"1-{len(data_names)}" if data_names else "(none)"
+    if idx < 0 or idx >= len(com_positions):
+        n = len(com_positions)
+        valid = f"1-{n}" if n else "(none)"
+        data_names = [infos[i]["name"] for i in com_positions]
         msg = (
             f"Plot index {plot_index} not found on {safe_graph}. "
             f"Valid range: {valid}. Data plots: {data_names}"
         )
         raise ValueError(msg)
-    pname = data_names[idx]
-    # `layer -e <dataset>` removes the dataset from the layer; `layer -ie`
-    # then purges the now-unused style holder (which is what leaves a "dead
-    # guide" legend entry behind). `layer -d` would delete the whole LAYER.
-    # Run on a FRESH, activated layer handle (graph_layer_execute) so it works
-    # on graphs loaded from a .opju, not only in-session ones.
-    if not graph_layer_execute(safe_graph, f"layer -e {pname}; layer -ie;"):
-        msg = f"Origin could not remove plot {plot_index} ({pname}) from {safe_graph}."
-        raise ValueError(msg)
-    return f"Removed data plot {plot_index} ({pname}) from {safe_graph}."
+    com_index = com_positions[idx]
+    pname = infos[com_index]["name"]
+    # Fresh, activated layer handle so this works on graphs loaded from a .opju,
+    # not only in-session ones. Destroy() removes just this one DataPlot.
+    gl = acquire_graph_layer(safe_graph)
+    try:
+        gl.DataPlots.Item(com_index).Destroy()
+    except Exception as exc:  # noqa: BLE001 - surface any COM failure truthfully
+        msg = f"Origin could not remove plot {plot_index} ({pname}) from {safe_graph}: {exc}"
+        raise ValueError(msg) from exc
+    survivors = [p["name"] for p in get_plot_info(safe_graph)]
+    return (
+        f"Removed data plot {plot_index} ({pname}) from {safe_graph}. "
+        f"Remaining plots: {survivors}"
+    )
 
 
 # `set <err> -o <y>` error-bar flag + the LabTalk Yerr/Xerr column designation

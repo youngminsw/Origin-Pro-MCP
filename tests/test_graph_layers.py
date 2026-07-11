@@ -323,15 +323,45 @@ def test_axis_frame_bad_mode(fake_origin):
         axis("Graph1", op="frame", frame="halfopen")
 
 
-def test_remove_plot_uses_layer_erase(fake_origin):
+def test_remove_plot_destroys_only_indexed_duplicate(fake_origin):
+    """The SAME dataset plotted twice: removing index 1 must drop only ONE
+    copy (the old layer -e route removed every plot of that dataset)."""
+    from fakes import FakeGraph
+    from origin_pro_mcp.tools.graph import remove_plot
+    from origin_pro_mcp.tools.style_helpers import get_plot_names
+
+    fake_origin.graphs = [
+        FakeGraph("Graph1", plot_names=["Book1_B", "Book1_B", "Book1_C"])
+    ]
+    msg = remove_plot("Graph1", plot_index=1)
+    assert "Removed data plot 1 (Book1_B)" in msg
+    # Only one Book1_B removed; the second + Book1_C survive.
+    assert get_plot_names("Graph1") == ["Book1_B", "Book1_C"]
+    assert "Remaining plots: ['Book1_B', 'Book1_C']" in msg
+
+
+def test_remove_plot_indexes_over_data_plots_skipping_errors(fake_origin):
+    """plot_index counts DATA plots; the COM Destroy must target the right
+    position even when an error-bar plot precedes it."""
+    from unittest.mock import patch
+
     from fakes import FakeGraph
     from origin_pro_mcp.tools.graph import remove_plot
 
-    fake_origin.graphs = [FakeGraph("Graph1", plot_names=["Book1_B", "Book1_C"])]
-    msg = remove_plot("Graph1", plot_index=2)
-    assert "Removed data plot 2 (Book1_C)" in msg
-    # layer -e removes the dataset by name; layer -ie purges the dead style holder.
-    assert any("layer -e Book1_C" in s and "layer -ie" in s for s in fake_origin.executed)
+    fake_origin.graphs = [
+        FakeGraph("Graph1", plot_names=["Book1_B", "Book1_C", "Book1_D"])
+    ]
+    # Middle plot (position 1) is an error-bar plot, so data plots are B(0), D(2).
+    infos = [
+        {"name": "Book1_B", "is_error": False},
+        {"name": "Book1_C", "is_error": True},
+        {"name": "Book1_D", "is_error": False},
+    ]
+    with patch("origin_pro_mcp.tools.style_helpers.get_plot_info", return_value=infos):
+        msg = remove_plot("Graph1", plot_index=2)  # 2nd DATA plot = Book1_D at COM idx 2
+    assert "Removed data plot 2 (Book1_D)" in msg
+    # COM index 2 destroyed -> Book1_D gone from the underlying list.
+    assert fake_origin.graphs[0].plot_names == ["Book1_B", "Book1_C"]
 
 
 def test_remove_plot_out_of_range(fake_origin):

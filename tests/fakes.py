@@ -51,12 +51,21 @@ class FakeBook:
 
 
 class FakePlot:
-    def __init__(self, name):
+    def __init__(self, name, graph=None, index=None):
         self.Name = name
         self.activated = False
+        self._graph = graph
+        self._index = index
 
     def Activate(self):
         self.activated = True
+
+    def Destroy(self):
+        # Model the real DataPlot.Destroy(): remove ONLY this plot (by its
+        # position in the collection), so duplicate-dataset plots are removed
+        # one at a time rather than all-by-name.
+        if self._graph is not None and self._index is not None:
+            del self._graph.plot_names[self._index]
 
 
 # Match `layer.<x|y|x2|y2>.<from|to|thickness> = <number>` writes and
@@ -88,7 +97,7 @@ class FakeLayer:
     @property
     def DataPlots(self):
         names = self._graph.visible_plot_names() if self._graph is not None else []
-        return FakePages([FakePlot(n) for n in names])
+        return FakePages([FakePlot(n, self._graph, i) for i, n in enumerate(names)])
 
     def Execute(self, script):
         self.executed.append(script)
