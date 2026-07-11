@@ -677,7 +677,8 @@ def add_second_y_axis(
     data_sheet: str,
     x_col: int,
     y_col: int,
-    plot_type: str = "line+symbol"
+    plot_type: str = "line+symbol",
+    color: str = "",
 ) -> str:
     """Add a right-side Y axis layer and plot a second dataset on it.
 
@@ -686,27 +687,29 @@ def add_second_y_axis(
         data_book, data_sheet: Source data
         x_col, y_col: Columns for the right-axis series (1-based)
         plot_type: scatter, line, line+symbol, column, bar, area
+        color: Optional "r,g,b" (each 0-255). When given, the RIGHT axis LINE
+            (with its ticks) and the RIGHT tick-number LABELS are colored to
+            match — the dual-Y "right axis colored like its data" convention.
+            Leave empty to keep them black.
 
     Returns:
         Success message
 
-    Styling the right axis (Origin 2020, verified live): this tool builds the
-    layer/plot only — coloring the right axis to match its data takes the
-    LabTalk recipe below, run with the graph active (`win -a <graph_name>;
-    page.active=2;`):
+    Styling the right axis (Origin 2020, verified live). The visible right axis
+    is the SECOND layer's ``y2`` (positional right) axis — NOT its ``y`` (that
+    is layer 2's hidden LEFT axis, and writing ``layer.y.*`` there is a no-op,
+    which is the trap that made the axis look unreachable). Colored with the
+    graph active and layer 2 selected (``win -a <graph>; page.active=2;``):
+        layer.y2.color=color(214,96,77);        // right axis LINE + its ticks
+        layer.y2.label.color=color(214,96,77);  // right tick-NUMBER labels
+        doc -uw;
+    The ``color`` argument above emits exactly this. The right-axis TITLE is a
+    separate object, the ``YR`` text object (not ``yl``):
         yr.text$="\\b(Magnetization (emu/g))";  // title text + BOLD via \\b()
-        YR.color=color(214,96,77);              // title color
+        YR.color=color(214,96,77);              // title color (YR.bold=1 no-ops)
         YR.fsize=35;                             // title size
-    The visible right-axis TITLE is the `YR` text object, not `yl` (`yl`
-    targets layer 2's hidden LEFT title and does nothing to the right one).
-    `YR.bold=1` as a property is a no-op — use the `\\b(...)` text markup
-    instead. The right axis's tick-number labels and axis LINE color are NOT
-    reachable from LabTalk on this Origin build (`layer.y.color`,
-    `layer.y2.color`, `layer.y.label.color`, `layer.y.ticl.color` are all
-    no-ops there) — recolor those two elements in PPT/Illustrator if an
-    all-red right axis is required. The layer-1 LEFT axis title colors via
-    `YL.color=color(...)` (`layer.y.color` alone colors only layer 1's line +
-    ticks, not its title).
+    For layer 1, the LEFT title colors via ``YL.color=color(...)``
+    (``layer.y.color`` alone colors only layer 1's line + ticks, not its title).
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
     safe_book = labtalk_name(data_book, "data_book")
@@ -729,7 +732,25 @@ def add_second_y_axis(
     if not execute_labtalk(f"plotxy iy:={data_ref} plot:={ptype} ogl:=[{safe_graph}]{layer}!;"):
         msg = f"Added the right-Y layer but could not plot {data_ref} on it."
         raise ValueError(msg)
-    return f"Added right-Y axis (layer {layer}) to {safe_graph} with {safe_type} plot"
+    msg = f"Added right-Y axis (layer {layer}) to {safe_graph} with {safe_type} plot"
+    if color:
+        from .style import _parse_rgb
+        r, g, b = _parse_rgb(color)
+        col = f"color({r},{g},{b})"
+        # The right axis is layer 2's y2 (positional right). Select that layer,
+        # then color the LINE (y2.color) and the tick-NUMBER labels
+        # (y2.label.color). Issued as separate statements: Origin can fail a
+        # 3+ layer.* batch as a whole and apply nothing.
+        execute_labtalk(f"win -a {safe_graph};")
+        execute_labtalk(f"page.active={layer};")
+        ok_line = execute_labtalk(f"layer.y2.color={col};")
+        ok_label = execute_labtalk(f"layer.y2.label.color={col};")
+        execute_labtalk("doc -uw;")
+        if ok_line and ok_label:
+            msg += f"; colored right axis line + tick labels {col}"
+        else:
+            msg += f"; WARNING right-axis color {col} may not have applied"
+    return msg
 
 
 @mcp.tool()

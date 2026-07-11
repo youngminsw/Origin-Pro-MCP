@@ -349,6 +349,33 @@ def test_remove_plot_unknown_graph(fake_origin):
         remove_plot("Ghost", plot_index=1)
 
 
+# --- #16 add_second_y_axis right-axis color -------------------------------
+
+def test_add_second_y_axis_colors_right_axis(fake_origin):
+    from origin_pro_mcp.tools.graph import add_second_y_axis
+
+    msg = add_second_y_axis("Graph1", "Book1", "Sheet1", 1, 2, color="214,96,77")
+    # Right axis = layer 2's y2 (line + tick-number labels).
+    assert any("layer.y2.color=color(214,96,77)" in s for s in fake_origin.executed)
+    assert any("layer.y2.label.color=color(214,96,77)" in s for s in fake_origin.executed)
+    assert "colored right axis line + tick labels" in msg
+
+
+def test_add_second_y_axis_no_color_leaves_axis_black(fake_origin):
+    from origin_pro_mcp.tools.graph import add_second_y_axis
+
+    add_second_y_axis("Graph1", "Book1", "Sheet1", 1, 2)
+    assert not any("layer.y2.color" in s for s in fake_origin.executed)
+    assert not any("layer.y2.label.color" in s for s in fake_origin.executed)
+
+
+def test_add_second_y_axis_bad_color(fake_origin):
+    from origin_pro_mcp.tools.graph import add_second_y_axis
+
+    with pytest.raises(ValueError, match="rgb"):
+        add_second_y_axis("Graph1", "Book1", "Sheet1", 1, 2, color="300,0,0")
+
+
 # --- setter execute-result checks (consistency with raise-on-failure) -------
 
 def test_set_axis_labels_raises_on_execute_failure(fake_origin):
