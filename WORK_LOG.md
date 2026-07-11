@@ -1,5 +1,101 @@
 # Work Log
 
+## 2026-07-11 — heatmap level-count discrepancy reconciliation (agent: heatmap-levels)
+
+Scope: a field agent re-tested v0.3.0 and reported ONE item contradicting our
+own live-verified work — "level-count commands are pixel-identical, still 8
+bands" — plus a second contradiction: matrix.py claims every plot type incl.
+"image" carries a data-linked color scale, while the reporter says image plots
+have no colorbar. Reproduced both sides live and settled the truth. Base =
+`45cde38` (v0.3.0). Live: isolated `DispatchEx("Origin.Application")` only (never
+ApplicationSI), `Exit()` in finally, run from the `opm_dev` rsync (NOT the
+Origin-Pro-MCP clone). Origin64 baseline **6 before and 6 after** every run.
+Probes/receipts: `C:\Users\swym4\probe_heatlvl.py` / `probe_heatlvl2.py` →
+`C:\Users\swym4\probe_out\heatlvl\{heatlvl,cbar}.json` + PNGs.
+
+### Phase 1 — reproduce the reporter's heatmap, then run OUR tool on it (live)
+
+Built the reporter's OG8-style heatmap faithfully (40x36 smooth gradient 0..15,
+`create_matrix_plot(heatmap)`, `colormap(Viridis, z_min=0, z_max=15)`,
+y-inversion `layer.y.from=35;to=0`, `layer.y.inc=10`, layer-geometry reposition).
+Band metric = distinct quantized colors down a vertical CELL strip (>20 =
+continuous, ~8 = banded); every step exported + pixel-inspected.
+
+| step | order | numColors read-back | pixel bands | verdict |
+|---|---|---|---|---|
+| fresh heatmap | — | 8 | ~8 | banded (matches reporter) |
+| reporter recipe (palette+zrange+inv+inc+geom, **no levels**) | their order | 8 | ~8 | **still banded — exactly what the reporter saw** |
+| then `colormap(levels=32)` LAST | tool order | **32** | **~31** | **CONTINUOUS — the tool works on their exact graph** |
+| (A) levels=32 then `colormap(z_min,z_max)` | levels→zrange | 32 | ~29 | z-range does NOT reset levels |
+| (B) levels=32 then `colormap(palette=Cividis)` | levels→palette | 32 | ~29 | palette load does NOT reset levels |
+| (C) `colormap(palette,z_min,z_max,levels=32)` one call | all-in-one | 32 | ~30 | works |
+
+- **Read-back does NOT lie:** numColors=32 and pixels=~31 agree at every step
+  (hypothesis (d) negative). PNGs `hl_reporter.png` (8 Viridis bands + colorbar)
+  vs `hl_levels_last.png` (smooth gradient + fine colorbar) — visually confirmed.
+- **No ordering bug (hypotheses (a) negative):** the feared "palette/z-range
+  after levels resets the band count" does NOT happen; the tool also applies
+  levels LAST within a single call, so any order is safe. No re-apply fix needed.
+- **Plot type (hypothesis (b)):** the reporter's heatmap uses the SAME "HeatMap"
+  template (type 105) as our own test — levels bites identically. No template
+  dependence.
+
+**VERDICT on contradiction #1 — OUR side was right; the reporter never called the
+tool.** `colormap(levels=)` (shipped `2e2a65d`) turns the reporter's exact
+OG8-style heatmap from 8 bands into ~32 continuous levels, verified by both
+numColors read-back (8→32) AND pixel band-count (8→31). The reporter's #17b
+receipts exercised the DEAD `rp.colormap.*` range route and the
+`colormap(palette=, z_min, z_max)` tool (which does not touch levels) — never
+`colormap(levels=)`. This is exactly the stale-cache / wrong-route risk the
+reporter themselves flagged ("on any reconnect, call list_skills").
+
+### Phase 1b — image-plot colorbar (contradiction #2)
+
+`probe_heatlvl2.py`: heatmap `layer.cmap.numColors=8` and shows a visible
+colorbar; image plot `layer.cmap.numColors=256` (genuinely continuous — matches
+the reporter's "23 colors") but shows NO colorbar. Every add-a-colorbar path is
+a byte-identical no-op (export stays 8119 across all attempts): `layer.colorscale
+.visible=1`, `Colorscale.visible=1`, `layer -c`. PNG `cb_image.png` = smooth
+Viridis, no scale.
+
+**VERDICT on contradiction #2 — the REPORTER was right; matrix.py was wrong.** The
+"image" plot (type 220) is continuous but carries NO color scale and one cannot
+be scripted on. matrix.py's `_MATRIX_TEMPLATES` comment + the publication-figure
+skill both wrongly claimed EVERY type incl. image carries a data-linked scale
+"verified live". BUT the reporter's downstream conclusion — "continuous map +
+colorbar needs PPT compositing" — is ALSO wrong: a heatmap + `colormap(levels=64)`
+is continuous AND keeps its colorbar in one graph (Phase 1 `hl_levels_last.png`
+proves it). The image plot is unnecessary for that goal.
+
+### Phase 2 — fixes shipped
+
+- **`6a16adc`** (docs) — corrected the false "image carries a color scale" claim
+  in matrix.py (`_MATRIX_TEMPLATES` comment + `create_matrix_plot` body comment +
+  docstring) and the publication-figure skill; steered users to the real
+  continuous-map-with-colorbar route (heatmap + `colormap(levels=64)`, not image).
+- **`9a2135c`** (test) — new live pixel guard
+  `test_colormap_levels_makes_heatmap_continuous_live` (test_live_colormap.py):
+  builds a tall smooth-gradient heatmap, applies `colormap(levels=48)`, asserts
+  the distinct-cell-color count jumps from banded (~8) to continuous (>=24) down
+  a vertical cell strip — a future silent no-op (the reported failure) now FAILS
+  this test. (Caught + fixed a first-cut flaw: the shared 6x6 `_heatmap` helper
+  is too coarse for the strip metric; the test builds its own 40-row matrix.)
+
+No code-behavior change: the levels tool already works (Phase 1 proved it) and
+the image plot genuinely can't be given a colorbar (Phase 1b proved it), so both
+convictions are documentation/verification, not a functional bug.
+
+### Non-negotiables checked
+
+- WSL fake suite (`/tmp/opm_venv/bin/python3.11 -m pytest -q`): **660 passed, 59
+  skipped** (0 failed) — unchanged from base.
+- FULL live suite (`opm_dev`, `pytest -m requires_origin`): **60 passed, 660
+  deselected in 326s** (0 failed) — was 59 before; +1 = the new colormap test.
+- `ruff check` on `matrix.py` + `test_live_colormap.py`: clean.
+- Zero leftover Origin: Origin64 count **6 before, 6 after** every probe and the
+  full live suite; all isolated `DispatchEx` instances `.Exit()`'d. User/daemon
+  Origins (the 6 pre-existing PIDs) untouched. Did NOT push.
+
 ## 2026-07-11 — whole-product review Round D (docs coherence + agent-context diet) (agent: round-d)
 
 Scope: items 13-20, 32, and the Addendum from `docs/REVIEW-2026-07-11-whole-product.md`,
