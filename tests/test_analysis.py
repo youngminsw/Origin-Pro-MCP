@@ -39,6 +39,31 @@ def test_find_peaks_rejects_bad_direction(fake_origin):
         transform("Book1", "Sheet1", 1, 2, method="find_peaks", direction="up")
 
 
+def test_find_peaks_clamps_local_points_to_data_length(fake_origin):
+    """Item 28: local_points is clamped to (n-1)//2 so a default 10 doesn't
+    fail on a short spectrum; the used value is reported and the pkfind command
+    carries it."""
+    from origin_pro_mcp.tools.analysis import transform
+
+    # 11 rows (Y = col 2). max window = (11-2)//2 = 4, so 10 clamps to 4.
+    fake_origin.worksheet_data = tuple((float(i), float(i)) for i in range(11))
+    out = json.loads(
+        transform("Book1", "Sheet1", 1, 2, method="find_peaks", local_points=10)
+    )
+    assert out["local_points_used"] == 4
+    assert any("npts:=4" in s for s in fake_origin.executed)
+
+
+def test_find_peaks_raises_actionably_on_too_few_points(fake_origin):
+    """Item 28: fewer than 3 points gives an actionable error, not pkfind's
+    opaque failure."""
+    from origin_pro_mcp.tools.analysis import transform
+
+    fake_origin.worksheet_data = ((1.0, 2.0), (2.0, 4.0))  # only 2 rows
+    with pytest.raises(ValueError, match="at least 3 numeric points"):
+        transform("Book1", "Sheet1", 1, 2, method="find_peaks")
+
+
 def test_interpolate_rejects_bad_method(fake_origin):
     from origin_pro_mcp.tools.analysis import transform
 

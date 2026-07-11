@@ -268,6 +268,25 @@ def test_set_graph_font_no_bold_by_default(fake_origin):
     set_graph_font("Graph1", target="axes")
     # No title rewrap and no (nonexistent) .bold command on axis titles.
     assert not any(".text$ =" in s for s in fake_origin.executed)
+
+
+def test_set_graph_font_tick_honors_bold_false(fake_origin):
+    """Item 12: tick labels honor bold=False (previously always-bold)."""
+    from origin_pro_mcp.tools.style import set_graph_font
+
+    set_graph_font("Graph1", target="tick", bold=False)
+    joined = " ".join(fake_origin.executed)
+    assert "layer.x.label.bold = 0" in joined
+    assert "layer.y.label.bold = 0" in joined
+
+
+def test_set_graph_font_tick_bold_true(fake_origin):
+    """Item 12: bold=True still bolds tick labels."""
+    from origin_pro_mcp.tools.style import set_graph_font
+
+    set_graph_font("Graph1", target="tick", bold=True)
+    joined = " ".join(fake_origin.executed)
+    assert "layer.x.label.bold = 1" in joined
     assert not any("xb.bold" in s for s in fake_origin.executed)
 
 

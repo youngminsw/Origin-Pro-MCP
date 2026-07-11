@@ -726,9 +726,14 @@ def set_graph_font(
         font_name: Font family (e.g., Arial)
         font_size: Font size in points (default 24)
         target: "all", "axes", "title", "legend", "tick"
-        bold: When True, also bold the targeted element(s). Tick labels are
-              always bold (Origin publication default); this bolds axis titles
-              and the graph title via `\\b(...)` markup for the chosen target.
+        bold: Bold the targeted element(s). Axis titles and the graph title are
+              bolded via `\\b(...)` markup; tick labels honor this flag directly
+              (bold=False now leaves them un-bold, instead of the previous
+              always-bold behavior).
+
+    Note: for the "tick" (and "all") target, tick labels are sized at
+    max(font_size - 4, 16) — a step smaller than the axis titles, the usual
+    publication proportion; pass a larger font_size to enlarge them.
 
     Returns:
         Success message
@@ -759,8 +764,12 @@ def set_graph_font(
         if not graph_layer_execute(safe_graph_name, f"layer.x.label.pt = {tick_size}; layer.y.label.pt = {tick_size};"):
             msg = f"Could not set tick label font size on {safe_graph_name}."
             raise ValueError(msg)
-        if not graph_layer_execute(safe_graph_name, "layer.x.label.bold = 1; layer.y.label.bold = 1;"):
-            msg = f"Could not bold tick labels on {safe_graph_name}."
+        tick_bold = 1 if bold else 0
+        if not graph_layer_execute(
+            safe_graph_name,
+            f"layer.x.label.bold = {tick_bold}; layer.y.label.bold = {tick_bold};",
+        ):
+            msg = f"Could not set tick-label bold on {safe_graph_name}."
             raise ValueError(msg)
 
     if safe_target in ("all", "legend"):

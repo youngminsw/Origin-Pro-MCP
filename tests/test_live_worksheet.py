@@ -67,6 +67,26 @@ def test_set_worksheet_data_null_becomes_missing_value(live_origin):
     assert out["columns"] == [[1.0, 2.0, None, 4.0]]
 
 
+def test_find_peaks_on_short_gaussian_live(live_origin):
+    """Item 28: find_peaks with the default local_points=10 now finds the peak
+    of an 11-point Gaussian (clamped window) instead of failing."""
+    import math
+
+    from origin_pro_mcp.tools.analysis import transform
+    from origin_pro_mcp.tools.worksheet import create_worksheet, set_worksheet_data
+
+    made = json.loads(create_worksheet("PKS"))
+    book, sheet = made["name"], made["sheet"]
+    xs = list(range(11))
+    ys = [math.exp(-((x - 5) ** 2) / 2.0) for x in xs]  # peak at x=5
+    set_worksheet_data(book, sheet, json.dumps([xs, ys]))
+
+    out = json.loads(transform(book, sheet, 1, 2, method="find_peaks"))
+    assert out["count"] >= 1, out
+    assert out["local_points_used"] <= 5, out
+    assert any(abs(p["x"] - 5) < 1.5 for p in out["peaks"]), out
+
+
 def test_set_matrix_data_null_roundtrips_to_missing(live_origin):
     """Item 5: a null cell written into a matrix reads back as null (Origin's
     missing value), while surrounding real numbers are untouched."""

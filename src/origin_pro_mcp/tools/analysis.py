@@ -240,12 +240,27 @@ def _find_peaks_impl(
     safe_dir = labtalk_choice(direction.lower(), dir_map, "direction")
     safe_npts = positive_int(local_points, "local_points")
     _activate_sheet(safe_book, safe_sheet)
+    # Clamp the local-maximum window to the data length. pkfind's local-max test
+    # compares each point to `npts` neighbors, so on a short spectrum a default
+    # npts=10 leaves no point that can qualify — the search returns an
+    # unactionable failure. Live-probed on an 11-point Gaussian: npts up to
+    # (n-2)//2 (=4 here) find the peak; (n-1)//2 (=5) already fails — so clamp to
+    # (n-2)//2.
+    n_points = len(_read_column(safe_book, safe_sheet, sy))
+    if n_points < 3:
+        msg = (
+            f"find_peaks needs at least 3 numeric points in column {sy} of "
+            f"[{safe_book}]{safe_sheet}; found {n_points}."
+        )
+        raise ValueError(msg)
+    max_npts = max(1, (n_points - 2) // 2)
+    npts_used = min(safe_npts, max_npts)
     execute_labtalk(f"wks.col{sx}.type = 4; wks.col{sy}.type = 1;")
     cx = _ncols() + 1
     cy = cx + 1
     execute_labtalk("wks.addCol(); wks.addCol();")
     cmd = (
-        f"pkfind iy:=({sx},{sy}) dir:={dir_map[safe_dir]} method:=max npts:={safe_npts} "
+        f"pkfind iy:=({sx},{sy}) dir:={dir_map[safe_dir]} method:=max npts:={npts_used} "
         f"ocenter_x:=col({cx}) ocenter_y:=col({cy}) oleft:=<none> oright:=<none>;"
     )
     if not execute_labtalk(cmd):
@@ -254,7 +269,9 @@ def _find_peaks_impl(
     xs = _read_column(safe_book, safe_sheet, cx)
     ys = _read_column(safe_book, safe_sheet, cy)
     peaks = [{"x": x, "y": y} for x, y in zip(xs, ys)]
-    return json.dumps({"peaks": peaks, "count": len(peaks)})
+    return json.dumps(
+        {"peaks": peaks, "count": len(peaks), "local_points_used": npts_used}
+    )
 
 
 def _column_statistics_impl(data_book: str, data_sheet: str, col: int) -> str:
