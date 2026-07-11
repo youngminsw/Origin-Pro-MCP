@@ -98,3 +98,48 @@ def test_svg_is_rejected(live_origin):
     g = _build_graph()
     with pytest.raises(ValueError):
         export_graph(g, _win_tmp(".svg"), format="svg")
+
+
+def test_width_honored_without_sized_flag(live_origin):
+    """Item 10: an explicit width applies to the raster output with no
+    sized=True needed (no silent ignore). Height follows the aspect ratio,
+    which expGraph controls, not us."""
+    from PIL import Image
+
+    from origin_pro_mcp.tools.graph import export_graph
+
+    g = _build_graph()
+    path = _win_tmp(".png")
+    export_graph(g, path, format="png", width=1600)
+    with Image.open(path) as im:
+        w, _ = im.size
+    assert w == 1600, f"width not honored: got {w}"
+
+
+def test_export_tools_have_no_dead_params(live_origin):
+    """Item 10: dpi (unsupported by expGraph) and height (silently aspect-
+    locked) are gone from both export tools — nothing accepted-and-ignored."""
+    import inspect
+
+    from origin_pro_mcp.tools.graph import export_graph
+    from origin_pro_mcp.tools.project import export_all_graphs
+
+    for fn in (export_graph, export_all_graphs):
+        params = inspect.signature(fn).parameters
+        assert "dpi" not in params, f"{fn.__name__} still has dpi"
+        assert "height" not in params, f"{fn.__name__} still has height"
+
+
+def test_export_all_graphs_honors_width(live_origin):
+    """Item 10: export_all_graphs width flows through to each exported file."""
+    from PIL import Image
+
+    from origin_pro_mcp.tools.project import export_all_graphs
+
+    _build_graph("ALLG")
+    out_dir = r"C:\Users\swym4\probe_out\roundb_tests\all"
+    export_all_graphs(out_dir, format="png", width=900)
+    pngs = [f for f in os.listdir(out_dir) if f.lower().endswith(".png")]
+    assert pngs, "no graphs exported"
+    with Image.open(os.path.join(out_dir, pngs[0])) as im:
+        assert im.size[0] == 900, f"width not honored: {im.size}"

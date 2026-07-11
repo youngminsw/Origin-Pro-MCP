@@ -87,7 +87,7 @@ def export_graph_to_file(graph_name: str, file_path: str, format: str = "png") -
     friendly message on failure.
     """
     return _export_via_expgraph(
-        graph_name, file_path, width=1200, height=0, format=format
+        graph_name, file_path, width=1200, format=format
     )
 
 
@@ -612,16 +612,12 @@ def _export_graph_impl(
     graph_name: str,
     file_path: str,
     format: str = "png",
-    width: int = 600,
-    height: int = 400,
-    dpi: int = 300
 ) -> str:
-    """Export a graph to an image file.
+    """Export a graph at the default ~1200px-wide size (aspect ratio kept).
 
     Writes the file directly via Origin's expGraph X-Function (no clipboard),
-    so the user's clipboard is preserved. Exports at ~1200px wide with the
-    aspect ratio kept (width/height/dpi are accepted but have no effect here;
-    use export_graph(sized=True) for explicit pixel sizes).
+    so the user's clipboard is preserved. This is the no-explicit-size path;
+    export_graph routes an explicit width/height to the sized export instead.
 
     Args:
         graph_name: Graph name to export
@@ -630,9 +626,6 @@ def _export_graph_impl(
                    Missing directories are created.
         format: Output format. Raster: png, jpg, tif, bmp. Vector: pdf, eps,
                 emf. Used as the file extension when file_path has none.
-        width: Unused (kept for API compatibility; ~1200px wide is used)
-        height: Unused (kept for API compatibility)
-        dpi: Unused (kept for API compatibility)
 
     Returns:
         Path to exported file
@@ -644,20 +637,7 @@ def _export_graph_impl(
 
     out = export_graph_to_file(graph_name, path, format=safe_format)
     size = os.path.getsize(out)
-    ignored = []
-    if width != 600:
-        ignored.append(f"width={width}")
-    if height != 400:
-        ignored.append(f"height={height}")
-    if dpi != 300:
-        ignored.append(f"dpi={dpi}")
-    note = ""
-    if ignored:
-        note = (
-            f" (IGNORED: {', '.join(ignored)} — exported at ~1200px wide, "
-            "aspect ratio kept; pass sized=True to control pixel size)"
-        )
-    return f"Exported to: {out} ({size} bytes){note}"
+    return f"Exported to: {out} ({size} bytes)"
 
 
 # Origin axis scale type codes (layer.x/y.type).
@@ -940,15 +920,16 @@ def _export_via_expgraph(
     file_path: str,
     *,
     width: int,
-    height: int = 0,
     format: str = "png",
 ) -> str:
     """Export one graph directly to an image file via Origin's expGraph.
 
     Writes the file with NO clipboard (the user's clipboard is preserved).
-    Verified on Origin 2020: `tr1.unit:=2` selects pixels, `tr1.width`/
-    `tr1.height` set the size (height omitted = keep aspect ratio). Returns the
-    output path. Raises ValueError with a friendly message on failure.
+    Verified on Origin 2020: `tr1.unit:=2` selects pixels and `tr1.width` sets
+    the pixel width; the HEIGHT is always derived from the graph's aspect ratio
+    (probe-verified: `tr1.height` is silently ignored — 1600x1000 requested
+    yields 1600x1224), so only width is controllable. Returns the output path.
+    Raises ValueError with a friendly message on failure.
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
     safe_format = labtalk_choice(format.lower(), EXPORT_FORMATS, "format")
@@ -968,8 +949,6 @@ def _export_via_expgraph(
     if safe_format in EXPORT_RASTER_FORMATS:
         safe_width = positive_int(width, "width")
         size_opts = f" tr1.unit:=2 tr1.width:={safe_width}"
-        if height > 0:
-            size_opts += f" tr1.height:={positive_int(height, 'height')}"
     cmd = (
         f'expGraph type:={safe_format} path:="{out_dir}" filename:="{fname}" '
         f"overwrite:=replace{size_opts};"
@@ -993,28 +972,27 @@ def _export_graph_sized_impl(
     graph_name: str,
     file_path: str,
     width: int = 1200,
-    height: int = 0,
     format: str = "png"
 ) -> str:
-    """Export a graph to an image at a chosen pixel size (expGraph).
+    """Export a graph to an image at a chosen pixel WIDTH (expGraph).
 
     Like export_graph (also clipboard-free via expGraph), but controls the
-    output pixel width/height directly.
+    output pixel width directly. The height is always derived from the graph's
+    aspect ratio (Origin's expGraph ignores an explicit height on this build).
 
     Args:
         graph_name: Graph to export
         file_path: Output path (Windows or WSL style)
         width: Image width in pixels (default 1200; raster only)
-        height: Image height in pixels (0 = keep aspect ratio; raster only)
         format: Raster (png, jpg, tif, bmp) or vector (pdf, eps, emf). Vector
-                formats are resolution-independent and ignore width/height.
+                formats are resolution-independent and ignore width.
 
     Returns:
         Path and pixel/byte size of the exported file
     """
     safe_width = positive_int(width, "width")
     path = _export_via_expgraph(
-        graph_name, file_path, width=width, height=height, format=format
+        graph_name, file_path, width=width, format=format
     )
     return (
         f"Exported {labtalk_name(graph_name, 'graph_name')} to {path} "
@@ -1555,9 +1533,7 @@ def export_graph(
     graph_name: str,
     file_path: str,
     format: str = "png",
-    width: int = 600,
-    height: int = 400,
-    dpi: int = 300,
+    width: int = 0,
     sized: bool = False,
 ) -> str:
     """Export a graph to an image file.
@@ -1571,22 +1547,21 @@ def export_graph(
             are created.
         format: Output format. Raster: png, jpg, tif, bmp. Vector (journal
             submission): pdf, eps, emf. Vector formats are resolution-
-            independent and ignore width/height.
-        width: Output pixel width (only used when sized=True).
-        height: Output pixel height (only used when sized=True; 0 = keep
-            aspect ratio).
-        dpi: Unused (kept for API compatibility).
-        sized: When False (default), export at ~1200px wide with the aspect
-            ratio kept (width/height/dpi ignored). When True, export at the
-            chosen pixel width/height.
+            independent and ignore width.
+        width: Output raster pixel WIDTH. 0 (default) = auto ~1200px wide. Any
+            value > 0 is applied — no sized=True needed. The HEIGHT always
+            follows the graph's aspect ratio (Origin's expGraph cannot set an
+            independent pixel height on this build), so there is no height
+            parameter.
+        sized: Kept for compatibility. When True, force the sized export even
+            with the default width (~1200px wide). Redundant now that an
+            explicit width is always honored.
 
     Returns:
         Path to the exported file.
     """
-    if sized:
+    if sized or width > 0:
         return _export_graph_sized_impl(
-            graph_name, file_path, width=width, height=height, format=format
+            graph_name, file_path, width=width or 1200, format=format
         )
-    return _export_graph_impl(
-        graph_name, file_path, format=format, width=width, height=height, dpi=dpi
-    )
+    return _export_graph_impl(graph_name, file_path, format=format)

@@ -162,26 +162,26 @@ def load_project(file_path: str) -> str:
 def export_all_graphs(
     output_dir: str,
     format: str = "png",
-    dpi: int = 300,
-    width: int = 800,
-    height: int = 600
+    width: int = 0,
 ) -> str:
     """Export every graph in the project to image files (one per graph).
 
     Uses the same clipboard-free export as export_graph (Origin's expGraph
-    X-Function), so the user's clipboard is preserved. Each graph is exported
-    at ~1200px wide with the aspect ratio kept.
+    X-Function), so the user's clipboard is preserved.
 
     Args:
         output_dir: Output directory (Windows or WSL style). Created if missing.
         format: Output format. Raster: png, jpg, tif, bmp. Vector: pdf, eps, emf
-        dpi: Unused (kept for API compatibility; ~1200px wide is used)
-        width: Unused (kept for API compatibility)
-        height: Unused (kept for API compatibility)
+        width: Output raster pixel WIDTH. 0 (default) = auto ~1200px wide. Any
+            value > 0 is applied to every exported graph (height follows each
+            graph's aspect ratio; Origin's expGraph cannot set an independent
+            height). Ignored for vector formats (resolution-independent).
 
     Returns:
         Per-graph list of exported files
     """
+    from .graph import _export_via_expgraph
+
     safe_format = labtalk_choice(format.lower(), EXPORT_FORMATS, "format")
     out_dir = windows_path(output_dir, "output_dir")
     os.makedirs(out_dir, exist_ok=True)
@@ -195,7 +195,12 @@ def export_all_graphs(
     for name in names:
         path = os.path.join(out_dir, f"{name}.{safe_format}")
         try:
-            exported.append(export_graph_to_file(name, path, format=safe_format))
+            if width > 0:
+                exported.append(_export_via_expgraph(
+                    name, path, width=width, format=safe_format
+                ))
+            else:
+                exported.append(export_graph_to_file(name, path, format=safe_format))
         except (ValueError, RuntimeError) as exc:
             failed.append(f"{name}: {exc}")
 

@@ -392,6 +392,18 @@ def test_export_graph_raster_still_sizes(fake_origin, tmp_path, monkeypatch):
     assert "tr1.width" in cmds
 
 
+def test_export_graph_explicit_width_routes_to_sized(fake_origin, tmp_path, monkeypatch):
+    # Item 10: an explicit width (no sized=True) must reach the sized export
+    # and emit that pixel width — never silently ignored.
+    monkeypatch.setattr(G.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(G.os.path, "getsize", lambda _p: 999)
+    p = str(tmp_path / "fig.png")
+    fake_origin.executed.clear()
+    G.export_graph("Graph1", p, width=1600)
+    cmds = " ".join(fake_origin.executed)
+    assert "tr1.width:=1600" in cmds
+
+
 def test_export_graph_rejects_svg(fake_origin, tmp_path):
     # SVG proved out UNSUPPORTED on Origin 2020 — must be rejected up front.
     p = str(tmp_path / "fig.svg")
@@ -404,9 +416,8 @@ def test_export_graph_sized_equiv(fake_origin, tmp_path):
     _assert_equiv(fake_origin,
                   G._export_graph_sized_impl, ("Graph1", p),
                   G.export_graph, ("Graph1", p),
-                  impl_kw={"width": 1200, "height": 0, "format": "png"},
-                  disp_kw={"sized": True, "width": 1200, "height": 0,
-                           "format": "png"})
+                  impl_kw={"width": 1200, "format": "png"},
+                  disp_kw={"sized": True, "width": 1200, "format": "png"})
 
 
 # --- manage_columns: 4 op branches -------------------------------------------
