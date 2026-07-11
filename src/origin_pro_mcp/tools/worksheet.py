@@ -924,6 +924,9 @@ def import_data(
         "name"/"error", "ok"}, ...]} — partial failures are reported per file,
         not fatal. If more than 20 files match, only the first 20 are imported
         and a "note" says so.
+        Use the returned "name" (per-file "name" in batch mode) directly for
+        follow-up calls — it is already the actual workbook name, so there is
+        no need to call list_worksheets just to find out what Origin named it.
     """
     if _is_batch_target(file_path):
         return _import_batch_impl(file_path, format, delimiter, sparklines)

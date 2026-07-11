@@ -356,6 +356,11 @@ Heatmap tick spacing (`layer.y.inc = <n>` via `run_labtalk`) needs the graph
 window active first and a `doc -uw;` refresh after — see the Origin COM Notes
 table. If the colorbar overflows the page's right edge, shrink the plot
 LAYER (not the colorbar, which isn't directly addressable) — same table.
+`colormap(levels=)` raises the band count for a smoother-looking map, but
+level count and colorbar LABEL density are the same knob — a high `levels`
+(e.g. 64) can over-label the colorbar with more tick numbers than are
+readable; set `levels` for the smoothness you want in the plot and expect the
+colorbar's label density to follow it, tuning down if the labels crowd.
 
 ### Statistical / distribution figures
 
@@ -382,9 +387,10 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
   axis and its tick labels (Origin's default sits farther out than matplotlib's).
   Units are % of the tick-label font size; POSITIVE pulls the labels TOWARD the
   axis (smaller gap), negative pushes them away. Applied perpendicular to each
-  axis (x moves vertically, y horizontally), so one value is the gap knob — e.g.
-  `set_tick_labels(graph, axis="x", offset_pct=80)` to match a matplotlib-style
-  tight bottom-axis gap.
+  axis (x moves vertically, y horizontally), so one value is the gap knob.
+  Start modest — e.g. `offset_pct=20-30` — and tune from there against an
+  actual export; a live run found `offset_pct=80` pulls the labels far enough
+  in to collide with the axis's tick numbers on a typical layout.
 - `set_layer_geometry(graph, left=, top=, width=, height=)` (percent of page)
   when an axis title is clipped or panels must line up.
 - `set_graph_font(graph, target="axes", bold=True)` bolds axis titles via

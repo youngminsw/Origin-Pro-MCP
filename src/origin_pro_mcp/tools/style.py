@@ -226,10 +226,12 @@ def set_plot_style(
     NOTE on grouping: per-curve color/width/symbol/fill ALL apply only on
     UNGROUPED plots (probe-confirmed — the earlier claim that line_width/
     symbol still apply while grouped was WRONG). create_graph +
-    add_plot_to_graph build ungrouped plots (fine). A grouped multi-curve plot
-    (loaded project, or a single multi-Y plotxy) shares one color/style
-    increment that overrides ALL of this — call ungroup_plots(graph_name)
-    first, then re-style.
+    add_plot_to_graph build ungrouped plots (fine). If this call's result
+    looks right (the exported curve actually changed), the plot was already
+    ungrouped — no action needed. Only when a change here has NO visible
+    effect, on a grouped multi-curve plot (loaded project, or a single
+    multi-Y plotxy) that shares one color/style increment, call
+    ungroup_plots(graph_name) first, then re-style.
 
     Returns:
         Success message. Raises ValueError if no aspect was given, or if
