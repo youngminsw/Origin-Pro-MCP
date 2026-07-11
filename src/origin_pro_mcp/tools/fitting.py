@@ -225,10 +225,13 @@ def curve_fit(
                 curve_plots = get_plot_names(safe_target_graph)
                 if curve_plots:
                     fit_plot = curve_plots[-1]
-                    # muted brick red, distinct from the pastel palette; both
-                    # flags in ONE `set` command so there's a single settle
-                    # instead of one per flag.
-                    execute_labtalk(f"set {fit_plot} -c color(170,68,80) -w 400;")  # 2 pt
+                    # muted brick red, distinct from the pastel palette. P8
+                    # HARD RULE (probe-verified, Origin 2020): every flag is its
+                    # OWN `set <ds> -flag val;` call — combining `-c` and `-w`
+                    # (or any two flags) in one command silently corrupts the
+                    # plot (wipes the color to black). One settle after the last.
+                    execute_labtalk(f"set {fit_plot} -c color(170,68,80);")
+                    execute_labtalk(f"set {fit_plot} -w 400;")  # 2 pt
                     time.sleep(0.2)
                 # Adding a plot rebuilds the legend with a new entry, which
                 # can push the box outside the frame — re-anchor it
