@@ -264,9 +264,11 @@ def _import_csv_to_worksheet_impl(
         JSON object: {"name": <actual workbook name>, "requested_name":
         <book_name if given, else null>, "renamed": <bool, true if the
         actual name differs from the requested name>, "file": <file_path>,
-        "sparklines_suppressed": <bool, true if the ImpASC option call
-        succeeded>, "sparklines_deleted": <int, graph windows removed by the
-        post-import cleanup>}
+        "sparklines_suppressed": <bool, true when suppression actually worked —
+        the options.Sparklines:=0 import option ran AND left no sparkline graph
+        windows behind; cannot be true while sparklines_deleted > 0>,
+        "sparklines_deleted": <int, sparkline graph windows the post-import
+        cleanup still had to remove>}
     """
     o = get_origin()
     path = windows_path(file_path, "file_path")
@@ -296,22 +298,24 @@ def _import_csv_to_worksheet_impl(
         )
 
     graphs_before = set(graph_names()) if not sparklines else set()
-    sparklines_suppressed = False
+    sparklines_option_ok = False
     if sparklines:
         ok = execute_labtalk(f"impasc fname:={labtalk_path(path, 'file_path')} {delim_clause};")
     else:
-        # LIVE-UNVERIFIED: ImpASC's options tree is reported to include a
-        # Sparklines mode (0=No) alongside FileStruct.Delimiter, but the
-        # exact key has not been confirmed against a live Origin install. If
-        # it's wrong/unsupported, Origin fails the whole Execute (returns
-        # False) and we transparently retry without it — the post-import
-        # graph-window cleanup below is the reliable backstop either way.
+        # `options.Sparklines:=0` suppresses the per-column sparkline graph
+        # windows an ASCII import otherwise spawns (live-verified: a 12-column
+        # CSV spawns 12 graph windows unsuppressed, 0 with this key). The
+        # earlier `options.Miscellaneous.Sparklines:=0` was the WRONG key —
+        # Origin rejected it (Execute returned False), so suppression never ran
+        # at the source and only the cleanup below saved the project. If the
+        # key is ever rejected again we retry without it and the cleanup is the
+        # backstop.
         ok = execute_labtalk(
             f"impasc fname:={labtalk_path(path, 'file_path')} {delim_clause} "
-            "options.Miscellaneous.Sparklines:=0;"
+            "options.Sparklines:=0;"
         )
         if ok:
-            sparklines_suppressed = True
+            sparklines_option_ok = True
         else:
             ok = execute_labtalk(f"impasc fname:={labtalk_path(path, 'file_path')} {delim_clause};")
     if not ok:
@@ -328,6 +332,11 @@ def _import_csv_to_worksheet_impl(
         for g in new_graphs:
             execute_labtalk(f"win -cd {g};")
         sparklines_deleted = len(new_graphs)
+
+    # Report ACTUAL suppression, so the two telemetry fields can't contradict
+    # each other (usability F12): suppression "succeeded" only when the source
+    # option ran AND left no sparkline graph windows for the cleanup to remove.
+    sparklines_suppressed = sparklines_option_ok and sparklines_deleted == 0
 
     active_book = o.LTStr("page.name$")
     return json.dumps({

@@ -67,6 +67,23 @@ def test_set_worksheet_data_null_becomes_missing_value(live_origin):
     assert out["columns"] == [[1.0, 2.0, None, 4.0]]
 
 
+def test_import_data_suppresses_sparklines_live(live_origin, tmp_path):
+    """Item 16: a wide CSV import with the default (suppress) now reports
+    sparklines_suppressed=True and deletes nothing — the options.Sparklines:=0
+    key actually works at the source (unsuppressed it spawns one graph window
+    per column)."""
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    f = tmp_path / "wide.csv"
+    header = ",".join(f"c{i}" for i in range(12))
+    lines = [header] + [",".join(f"{r + i:.3f}" for i in range(12)) for r in range(20)]
+    f.write_text("\n".join(lines) + "\n")
+
+    out = json.loads(import_data(str(f)))
+    assert out["sparklines_suppressed"] is True, out
+    assert out["sparklines_deleted"] == 0, out
+
+
 def test_find_peaks_on_short_gaussian_live(live_origin):
     """Item 28: find_peaks with the default local_points=10 now finds the peak
     of an 11-point Gaussian (clamped window) instead of failing."""

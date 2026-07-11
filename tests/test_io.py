@@ -116,12 +116,32 @@ def test_import_data_csv_sparklines_default_deletes_new_graph_windows(fake_origi
     monkeypatch.setattr(fake_origin, "Execute", fake_execute)
 
     out = json.loads(import_data(str(f)))
-    assert out["sparklines_suppressed"] is True
+    # Item 16 (usability F12): the option "ran" but 2 sparkline windows still
+    # leaked and had to be cleaned up, so suppression did NOT actually work —
+    # the two fields must not contradict (suppressed cannot be True here).
+    assert out["sparklines_suppressed"] is False
     assert out["sparklines_deleted"] == 2
     assert "win -cd Spark1;" in fake_origin.executed
     assert "win -cd Spark2;" in fake_origin.executed
     # Pre-existing windows must never be touched.
     assert not any(s == "win -cd Graph1;" for s in fake_origin.executed)
+
+
+def test_import_data_csv_sparklines_suppressed_when_no_windows_leak(fake_origin, tmp_path):
+    """Item 16: with the correct options.Sparklines:=0 key the import produces
+    NO sparkline windows, so suppression is reported True and nothing is
+    cleaned up — the non-contradictory happy path."""
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    f = tmp_path / "data.csv"
+    f.write_text("1,2\n")
+    fake_origin.LTStr = lambda name: "Book1" if name == "page.name$" else ""
+
+    out = json.loads(import_data(str(f)))
+    assert out["sparklines_suppressed"] is True
+    assert out["sparklines_deleted"] == 0
+    # The correct key is issued.
+    assert any("options.Sparklines:=0" in s for s in fake_origin.executed)
 
 
 def test_import_data_csv_sparklines_true_skips_cleanup(fake_origin, tmp_path, monkeypatch):
