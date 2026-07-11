@@ -865,6 +865,19 @@ def add_second_y_axis(
             msg += f"; colored right axis line + tick labels {col}"
         else:
             msg += f"; WARNING right-axis color {col} may not have applied"
+    # Adding the second-layer plot leaves the legend with only layer 1's
+    # entries, a default border, and often overlapping data (the wfB_dualy
+    # regression, item 30). Rebuild it to cover BOTH layers, drop the border,
+    # and re-place it away from the data via the shared placer.
+    import time
+
+    from .style_helpers import place_legend_avoiding_data
+
+    execute_labtalk(f"win -a {safe_graph}; legend -r;")
+    execute_labtalk("legend.background = 0;")
+    time.sleep(0.3)
+    placement = place_legend_avoiding_data(safe_graph)
+    msg += f"; legend rebuilt borderless, placed {placement}"
     return msg
 
 

@@ -87,3 +87,29 @@ def test_right_axis_title_raises_without_second_layer(live_origin):
     g = json.loads(create_graph("SINGLEG", b, sh, 1, 2, plot_type="line+symbol"))["name"]
     with pytest.raises(ValueError):
         axis(g, "labels", axis="right", label="Should Not Apply")
+
+
+def test_add_second_y_axis_legend_borderless_and_placed(live_origin):
+    """Item 30: after add_second_y_axis the legend is rebuilt borderless
+    (legend.background reads back 0) and the return message reports where it
+    was placed; the graph still exports."""
+    import os
+    import tempfile
+
+    from origin_pro_mcp.origin_connection import execute_labtalk, get_lt_var
+    from origin_pro_mcp.tools.graph import export_graph
+
+    g, _, _, msg = _dual_y_graph()
+    assert "legend rebuilt borderless, placed" in msg, msg
+
+    # Borderless = legend.background == 0 (read back on the graph page).
+    execute_labtalk(f"win -a {g};")
+    assert int(get_lt_var("legend.background")) == 0
+
+    d = r"C:\Users\swym4\probe_out\roundb_tests"
+    os.makedirs(d, exist_ok=True)
+    fd, path = tempfile.mkstemp(suffix=".png", dir=d)
+    os.close(fd)
+    os.remove(path)
+    export_graph(g, path)
+    assert os.path.exists(path) and os.path.getsize(path) > 500

@@ -443,6 +443,17 @@ def test_add_second_y_axis_bad_color(fake_origin):
         add_second_y_axis("Graph1", "Book1", "Sheet1", 1, 2, color="300,0,0")
 
 
+def test_add_second_y_axis_rebuilds_borderless_legend(fake_origin):
+    # Item 30: the second-layer plot must trigger a legend rebuild, a
+    # borderless setting, and a re-placement reported in the message.
+    from origin_pro_mcp.tools.graph import add_second_y_axis
+
+    msg = add_second_y_axis("Graph1", "Book1", "Sheet1", 1, 2)
+    assert any("legend -r" in s for s in fake_origin.executed)
+    assert any("legend.background = 0" in s for s in fake_origin.executed)
+    assert "legend rebuilt borderless, placed" in msg
+
+
 # --- #17b colormap continuous levels --------------------------------------
 
 def test_colormap_levels_sets_and_verifies(fake_origin):
