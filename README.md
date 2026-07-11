@@ -481,6 +481,15 @@ Pull the skill with `get_skill("publication-figure")` (or copy `src/origin_pro_m
 | `set <plot>` fails when the graph isn't active | Run `win -a <graph>` before `set` commands |
 | Typed LabTalk locals (`int x = ...`) unreadable later | Use untyped assignment to read values back via COM |
 | A graph loaded from a `.opju` can report zero data plots over COM (per-curve styling/ungrouping silently no-ops) | The core per-curve/axis/frame tools (`set_plot_style`, `ungroup_plots`, `remove_plot`, `axis` range/scale/tick) now activate the page and re-acquire a fresh layer handle before each call; if the layer is still empty, the tool raises an actionable error instead of returning fake success — recreate the graph in-session if you hit it. Text/font/legend tools (`set_graph_font`, `set_legend`) still go through plain LabTalk and can silently no-op on a loaded graph — verify those visually |
+| Dual-Y right axis looks unstylable via `layer.y.*` | Colour it via layer 2's `y2`: `add_second_y_axis(..., color="r,g,b")`, or `layer.y2.color` (line) + `layer.y2.label.color` (tick numbers) with the graph active + `page.active=2` |
+| Heatmap/colormap stuck at ~8 discrete bands | `colormap(graph, levels=32..64)` (uses `numMajorLevels` + `setLevels(1)` + `updateScale()`); a `palette` recolors even when the PNG byte-size is unchanged |
+
+### Hard limitations (no scriptable path on Origin 2020)
+
+| Not scriptable | Do this instead |
+|----------------|-----------------|
+| Bar/column FILL PATTERN (hatch) — every route no-ops (`set -pfp/-pfw/-pfc`, indexed `-pfpd/-pfpi`, `rp.pattern.*`, `layer.plotN.pattern.*`), verified live | Apply hatching in PowerPoint/Illustrator, or distinguish bars by solid color |
+| Plot TRANSPARENCY / alpha — `set -paap/-paal/-paas`, `rr.transparency`, `layer.transparency`, `page.transparency` all no-op, verified live | Use fully-opaque colors, or composite the alpha in PowerPoint (unconfirmed future candidate: `originpro` Python `Plot.transparency()`) |
 
 ## Supported Plot Types
 

@@ -27,6 +27,9 @@ NOT_TOOLS = {
     "col",          # LabTalk col(n)
     "load",         # layer.cmap.load(...)
     "updateScale",  # layer.cmap.updateScale()
+    "setLevels",    # layer.cmap.setLevels(1)
+    "Destroy",      # COM DataPlot.Destroy()
+    "transparency",  # originpro Plot.transparency() (not an MCP tool)
     "FindGraphLayer",
     "font",         # LabTalk font(Arial)
     "color",        # LabTalk color(r,g,b)
