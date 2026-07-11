@@ -1018,6 +1018,50 @@ def _set_colormap_levels_impl(graph_name: str, z_min: float, z_max: float) -> st
     return f"Set colormap Z range to [{z_min}, {z_max}] on {safe_graph}"
 
 
+def _set_colormap_level_count_impl(graph_name: str, levels: int) -> str:
+    """Raise the colormap's level count so a banded map reads as continuous.
+
+    Origin's colormap is inherently banded; a Viridis-looking "continuous" heat
+    map is just many levels. The verified recipe (Origin 2020) is
+    ``numMajorLevels`` + ``setLevels(1)`` + ``updateScale()``. NOTE:
+    ``numColors=<n>; setLevels();`` (no-arg) does NOT rebuild the map — it is a
+    silent no-op — which is why raising the level count looked impossible.
+    Verified by reading ``layer.cmap.numColors`` back and comparing.
+
+    Args:
+        graph_name: Graph name (contour/heatmap/surface)
+        levels: Number of color levels (>= 2). ~32-64 reads as continuous.
+
+    Returns:
+        Success message
+    """
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    if int(levels) < 2:
+        msg = "levels must be >= 2."
+        raise ValueError(msg)
+    n = int(levels)
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    execute_labtalk("layer1;")
+    # Separate statements: Origin can fail a multi-statement layer.cmap batch as
+    # a whole and apply nothing. numMinorLevels=0 keeps numColors == numMajorLevels
+    # so the read-back check is exact.
+    execute_labtalk("layer.cmap.numMinorLevels = 0;")
+    execute_labtalk(f"layer.cmap.numMajorLevels = {n};")
+    execute_labtalk("layer.cmap.setLevels(1);")
+    if not execute_labtalk("layer.cmap.updateScale();"):
+        msg = f"Could not update the colormap scale on {safe_graph}."
+        raise ValueError(msg)
+    got = get_origin().LTVar("layer.cmap.numColors")
+    if int(round(got)) != n:
+        msg = (
+            f"Colormap level count did not take on {safe_graph}: requested {n}, "
+            f"read back {got}. (Is this graph a colormapped plot?)"
+        )
+        raise ValueError(msg)
+    return f"Set colormap to {n} continuous levels on {safe_graph}"
+
+
 def _add_line_impl(
     graph_name: str,
     x1: float,
@@ -1298,25 +1342,34 @@ def colormap(
     palette: str | None = None,
     z_min: float | None = None,
     z_max: float | None = None,
+    levels: int | None = None,
 ) -> str:
     """Configure the color map of a contour/heatmap/surface graph.
 
-    Applies a palette when `palette` is given and/or sets the Z color-scale
-    range when both `z_min` and `z_max` are given. At least one of those must
-    be supplied.
+    Applies a palette when `palette` is given, sets the Z color-scale range when
+    both `z_min` and `z_max` are given, and/or raises the number of color levels
+    when `levels` is given. At least one of those must be supplied.
 
     Args:
         graph_name: Graph name (must hold a colormapped plot).
         palette: Palette name (e.g. Viridis, Cividis, Plasma, Fire). Bundled
             perceptually-uniform, colorblind-safe maps are preferred for
             quantitative data; Origin built-in .pal names are also accepted.
+            (This DOES recolor the map — do not be misled if an exported PNG's
+            byte size is unchanged; the pixels change.)
         z_min, z_max: Z range for the color scale (both required together).
+        levels: Number of color levels (>= 2). Origin's colormap is inherently
+            banded; a default heatmap shows ~8 bands. Set ~32-64 to make it read
+            as a continuous (smooth) map. Verified read-back
+            (`layer.cmap.numColors`); raises if it did not take. Implemented via
+            `numMajorLevels` + `setLevels(1)` + `updateScale()` — the no-arg
+            `setLevels()` after `numColors=` is a silent no-op on this build.
 
     Returns:
         Success message describing what was changed.
     """
-    if palette is None and z_min is None and z_max is None:
-        msg = "colormap requires palette and/or z_min+z_max."
+    if palette is None and z_min is None and z_max is None and levels is None:
+        msg = "colormap requires palette, z_min+z_max, and/or levels."
         raise ValueError(msg)
     if (z_min is None) != (z_max is None):
         msg = "colormap requires both z_min and z_max together."
@@ -1326,6 +1379,8 @@ def colormap(
         messages.append(_apply_color_map_impl(graph_name, palette))
     if z_min is not None and z_max is not None:
         messages.append(_set_colormap_levels_impl(graph_name, z_min, z_max))
+    if levels is not None:
+        messages.append(_set_colormap_level_count_impl(graph_name, levels))
     return " ".join(messages)
 
 

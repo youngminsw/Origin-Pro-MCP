@@ -376,6 +376,34 @@ def test_add_second_y_axis_bad_color(fake_origin):
         add_second_y_axis("Graph1", "Book1", "Sheet1", 1, 2, color="300,0,0")
 
 
+# --- #17b colormap continuous levels --------------------------------------
+
+def test_colormap_levels_sets_and_verifies(fake_origin):
+    from origin_pro_mcp.tools.graph import colormap
+
+    fake_origin.lt_vars["layer.cmap.numColors"] = 32.0  # read-back agrees
+    msg = colormap("Graph1", levels=32)
+    assert any("layer.cmap.numMajorLevels = 32" in s for s in fake_origin.executed)
+    assert any("layer.cmap.setLevels(1)" in s for s in fake_origin.executed)
+    assert any("layer.cmap.updateScale()" in s for s in fake_origin.executed)
+    assert "32 continuous levels" in msg
+
+
+def test_colormap_levels_raises_on_readback_mismatch(fake_origin):
+    from origin_pro_mcp.tools.graph import colormap
+
+    fake_origin.lt_vars["layer.cmap.numColors"] = 8.0  # did not take
+    with pytest.raises(ValueError, match="did not take"):
+        colormap("Graph1", levels=32)
+
+
+def test_colormap_levels_too_few(fake_origin):
+    from origin_pro_mcp.tools.graph import colormap
+
+    with pytest.raises(ValueError, match="levels must be"):
+        colormap("Graph1", levels=1)
+
+
 # --- setter execute-result checks (consistency with raise-on-failure) -------
 
 def test_set_axis_labels_raises_on_execute_failure(fake_origin):
