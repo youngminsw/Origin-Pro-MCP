@@ -845,29 +845,22 @@ def add_second_y_axis(
         data_book, data_sheet: Source data
         x_col, y_col: Columns for the right-axis series (1-based)
         plot_type: scatter, line, line+symbol, column, bar, area
-        color: Optional "r,g,b" (each 0-255). When given, the RIGHT axis LINE
-            (with its ticks) and the RIGHT tick-number LABELS are colored to
-            match — the dual-Y "right axis colored like its data" convention.
-            Leave empty to keep them black.
+        color: Optional "r,g,b" (each 0-255) — always this comma-separated
+            numeric form, unlike `set_plot_style`'s `color` (named, e.g.
+            "blue") vs. its separate `rgb` param. When given, the RIGHT axis
+            LINE (with its ticks) and the RIGHT tick-number LABELS are
+            colored to match — the dual-Y "right axis colored like its data"
+            convention. Leave empty to keep them black.
 
     Returns:
         Success message
 
-    Styling the right axis (Origin 2020, verified live). The visible right axis
-    is the SECOND layer's ``y2`` (positional right) axis — NOT its ``y`` (that
-    is layer 2's hidden LEFT axis, and writing ``layer.y.*`` there is a no-op,
-    which is the trap that made the axis look unreachable). Colored with the
-    graph active and layer 2 selected (``win -a <graph>; page.active=2;``):
-        layer.y2.color=color(214,96,77);        // right axis LINE + its ticks
-        layer.y2.label.color=color(214,96,77);  // right tick-NUMBER labels
-        doc -uw;
-    The ``color`` argument above emits exactly this. The right-axis TITLE is a
-    separate object, the ``YR`` text object (not ``yl``):
-        yr.text$="\\b(Magnetization (emu/g))";  // title text + BOLD via \\b()
-        YR.color=color(214,96,77);              // title color (YR.bold=1 no-ops)
-        YR.fsize=35;                             // title size
-    For layer 1, the LEFT title colors via ``YL.color=color(...)``
-    (``layer.y.color`` alone colors only layer 1's line + ticks, not its title).
+    The visible right axis is layer 2's ``y2`` (positional right) — NOT its
+    ``y``, which is a hidden LEFT axis and a silent-no-op trap. `color` above
+    sets the axis line + tick labels only; the right-axis TITLE is a separate
+    ``YR`` text object this tool does not touch. Full recipe (title text/
+    color/size, why ``layer.y.*``/``yl`` are traps here):
+    `get_skill('labtalk-gotchas')`.
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
     safe_book = labtalk_name(data_book, "data_book")

@@ -206,7 +206,8 @@ def set_plot_style(
                orange, purple, gray/grey). "" = leave unchanged.
         rgb: Explicit "r,g,b" (each 0-255), e.g. "128,0,200", for per-curve
              rainbow/gradient colors that named colors can't express. Overrides
-             `color` when given. "" = leave unchanged.
+             `color` when given. "" = leave unchanged. Note: `add_second_y_axis`'s
+             `color` param uses this same "r,g,b" numeric form, not a named color.
         open_symbol: True = open/hollow marker interior (publication standard),
                      False = solid fill (LabTalk `set -kf 1` vs `0`). None =
                      leave unchanged.

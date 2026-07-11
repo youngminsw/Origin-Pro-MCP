@@ -74,35 +74,19 @@ def run_labtalk(script: str, confirm: bool = False, capture: list[str] | None = 
     `win -a`), or prefer the typed tools (they take `graph_name`/`book_name`
     explicitly and never depend on window activation state).
 
-    LabTalk gotchas learned the hard way (Origin 2020, styling-report fixes):
-      * `set -w` (line width) units are ~200 per point (500 = 2.5pt) — NOT
-        the same scale as error-bar `-erw`, which is in POINTS directly.
-      * Error bars use `-erw <points>` (line width) / `-erwc <cap width>` —
-        NOT `-ew`/`-w`, which are silent no-ops or wrong-unit on an error plot.
+    SAFETY-CRITICAL shortlist (Origin 2020, probe-confirmed — read
+    `get_skill('labtalk-gotchas')` for the full ledger, evidence, and recipes):
       * NEVER combine multiple `-flag`s in one `set` command (e.g. `-c` +
-        `-cf`, or `-k` + `-kf` + `-z`) — probe-confirmed to silently corrupt
-        the plot (wipes color to black, or blanks the symbol). Send one
-        `set <ds> -flag val;` per flag.
-      * NEVER write `layer.x2.majorTicks` / `layer.y2.majorTicks` — confirmed
-        to wipe the NUMBER LABELS on ALL FOUR axes, not just the opposite
-        side. Use `layer.<ax>.ticks = 0` to remove tick marks instead.
-      * SETTLE RACE — a `set`/`layer.*` command issued through `run_labtalk`
-        immediately after `create_graph`/`add_plot_to_graph`/`plotxy` can
-        silently no-op (return `false` or apply nothing) for the FIRST 1-3
-        commands, because the new page has not finished settling. The typed
-        tools (`set_plot_style`, `axis`, etc.) go through a settle barrier that
-        prevents this; raw `run_labtalk` does not. If you must style right after
-        building, prefer the typed tool, or issue a throwaway `doc -uw;` +
-        re-issue, or pass `window=<graph>` and expect the first call may need a
-        retry.
-      * Symbol shape `-k` codes (re-verified live): 1=square, 2=circle,
-        3=triangle-up, 4=triangle-down, 5=diamond, 6=plus, 7=x/cross,
-        8=asterisk; 9-12 render as a dash/vertical-bar/literal glyph, not
-        useful shapes.
-      * `layer.x/y.*` properties (from/to/inc/thickness/ticks/majorLen) read
-        back real values; `layer.x2/y2.*` (opposite-axis) reads more often
-        return Origin's "missing" sentinel — translated to the string
-        "missing" in this tool's `capture` output (see below).
+        `-cf`) — silently corrupts the plot (color to black, or blank symbol).
+      * NEVER write `layer.x2.majorTicks` / `layer.y2.majorTicks` — wipes the
+        NUMBER LABELS on ALL FOUR axes, not just the opposite side.
+      * `-w` (line width) units differ from error-bar `-erw`/`-erwc` (points).
+      * `layer.*`/`col()` hit the ACTIVE window — use `window=` above, or a
+        typed tool.
+      * A raw `set`/`layer.*` command right after `create_graph`/`plotxy`
+        can silently no-op for the first 1-3 calls (settle race) — prefer a
+        typed tool, or expect to retry.
+    Full gotcha ledger + unit/symbol tables: `get_skill('labtalk-gotchas')`.
 
     Args:
         script: LabTalk script to execute
