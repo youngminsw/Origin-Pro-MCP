@@ -1,4 +1,5 @@
 import json
+import math
 
 from ..app import mcp
 from ..origin_connection import (
@@ -13,7 +14,6 @@ from ..origin_connection import (
 from ..labtalk_safe import (
     labtalk_choice,
     labtalk_name,
-    labtalk_string,
     labtalk_text,
     positive_column,
     positive_int,
@@ -38,9 +38,26 @@ _MATRIX_TEMPLATES = {
     "image": "image",      # image plot + color scale
 }
 
-# Origin stores empty matrix cells as a large sentinel (~ -1.23e308 /
-# 1.23e-300); treat anything this large in magnitude as "missing".
+# Origin stores a missing/empty cell as either a LARGE sentinel (~1.2e308) or
+# its small "unset" sentinel -1.23456789e-300 (live-confirmed: a fresh matrix
+# AND a cell written NaN via PutMatrix both read back as -1.23456789e-300). The
+# old `abs(v) >= 1e100` test only caught the large one, so empty/NaN cells
+# silently read back as a tiny number instead of null.
 _MISSING_MAGNITUDE = 1e100
+_ORIGIN_MISSING_SENTINEL = -1.23456789e-300
+
+
+def _is_missing_cell(v) -> bool:
+    """True when a GetMatrix value represents an Origin missing/empty cell:
+    NaN, the large (~1.2e308) sentinel, or the small -1.23456789e-300 sentinel.
+    Real 0.0 is NOT flagged (isclose against the tiny sentinel fails for 0)."""
+    if not isinstance(v, (int, float)):
+        return False
+    if isinstance(v, float) and math.isnan(v):
+        return True
+    if abs(v) >= _MISSING_MAGNITUDE:
+        return True
+    return math.isclose(v, _ORIGIN_MISSING_SENTINEL, rel_tol=1e-6)
 
 
 def _create_matrix_book(name: str) -> str:
@@ -86,7 +103,11 @@ def set_matrix_data(book_name: str, data: str) -> str:
 
     Args:
         book_name: Matrix book name
-        data: JSON array of equal-length rows, e.g. [[1,2,3],[4,5,6]]
+        data: JSON array of equal-length rows, e.g. [[1,2,3],[4,5,6]]. A cell
+              may be JSON null (or NaN) to write an Origin missing value —
+              rendered as a hole in the colormap (heatmaps with missing cells
+              are a real materials-science case). Round-trips back to null via
+              get_matrix_data.
 
     Returns:
         Success message
@@ -112,13 +133,22 @@ def set_matrix_data(book_name: str, data: str) -> str:
     if any(len(r) != width for r in grid):
         msg = "all rows must have the same length (a rectangular grid)."
         raise ValueError(msg)
+    # null / NaN -> float('nan'): live-confirmed that PutMatrix accepts NaN and
+    # stores Origin's missing sentinel (reads back as -1.23456789e-300, which
+    # get_matrix_data maps to null). No per-cell LabTalk fallback is needed.
     float_grid = []
     for i, row in enumerate(grid):
-        try:
-            float_grid.append([float(v) for v in row])
-        except (TypeError, ValueError) as exc:
-            msg = f"Row {i + 1} contains non-numeric values; only numbers are supported."
-            raise ValueError(msg) from exc
+        frow = []
+        for v in row:
+            if v is None or (isinstance(v, float) and math.isnan(v)):
+                frow.append(float("nan"))
+                continue
+            try:
+                frow.append(float(v))
+            except (TypeError, ValueError) as exc:
+                msg = f"Row {i + 1} contains non-numeric values; only numbers are supported."
+                raise ValueError(msg) from exc
+        float_grid.append(frow)
     if not get_origin().PutMatrix(target, float_grid):
         msg = f"Origin rejected the matrix data for {target}."
         raise ValueError(msg)
@@ -146,7 +176,7 @@ def get_matrix_data(book_name: str) -> str:
         msg = f"Matrix {target} not found. Open matrices: {mats}."
         raise ValueError(msg)
     rows = [
-        [None if abs(v) >= _MISSING_MAGNITUDE else v for v in row]
+        [None if _is_missing_cell(v) else v for v in row]
         for row in data
     ]
     return json.dumps({"rows": rows})

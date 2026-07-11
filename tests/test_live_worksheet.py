@@ -67,6 +67,27 @@ def test_set_worksheet_data_null_becomes_missing_value(live_origin):
     assert out["columns"] == [[1.0, 2.0, None, 4.0]]
 
 
+def test_set_matrix_data_null_roundtrips_to_missing(live_origin):
+    """Item 5: a null cell written into a matrix reads back as null (Origin's
+    missing value), while surrounding real numbers are untouched."""
+    from origin_pro_mcp.tools.matrix import (
+        create_matrix,
+        get_matrix_data,
+        set_matrix_data,
+    )
+
+    made = json.loads(create_matrix("MTXNULL", rows=2, cols=3))
+    book = made["name"]
+
+    set_matrix_data(book, json.dumps([[1, None, 3], [4, 5, 6]]))
+    out = json.loads(get_matrix_data(book))
+
+    assert out["rows"][0][0] == 1.0
+    assert out["rows"][0][1] is None
+    assert out["rows"][0][2] == 3.0
+    assert out["rows"][1] == [4.0, 5.0, 6.0]
+
+
 def test_create_worksheet_existing_book_adds_sheet_not_new_book(live_origin):
     from origin_pro_mcp.tools.worksheet import create_worksheet, list_worksheets
 

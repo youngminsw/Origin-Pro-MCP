@@ -80,6 +80,32 @@ def test_get_matrix_data_maps_missing_to_null(fake_origin):
     assert out["rows"] == [[1.0, None], [2.0, 3.0]]
 
 
+def test_get_matrix_data_maps_small_origin_sentinel_to_null(fake_origin):
+    """Item 5: Origin's small missing sentinel -1.23456789e-300 (what a fresh
+    matrix and a NaN-written cell both read back as) must map to null too — the
+    old abs>=1e100 test missed it, leaking a tiny number as data."""
+    from origin_pro_mcp.tools.matrix import get_matrix_data
+
+    fake_origin.matrices = [FakeMatrix("Mtx")]
+    fake_origin.matrix_data["[Mtx]MSheet1"] = [[1.0, -1.23456789e-300], [0.0, 3.0]]
+    out = json.loads(get_matrix_data("Mtx"))
+    # The sentinel -> null; a real 0.0 stays 0.0 (not flagged as missing).
+    assert out["rows"] == [[1.0, None], [0.0, 3.0]]
+
+
+def test_set_matrix_data_accepts_null_and_roundtrips_missing(fake_origin):
+    """Item 5: a null cell is written as NaN through PutMatrix and reads back as
+    null (missing), while real numbers are untouched."""
+    from origin_pro_mcp.tools.matrix import set_matrix_data, get_matrix_data
+
+    fake_origin.matrices = [FakeMatrix("Mtx")]
+    set_matrix_data("Mtx", "[[1,null],[3,4]]")
+    out = json.loads(get_matrix_data("Mtx"))
+    assert out["rows"][0][0] == 1.0
+    assert out["rows"][0][1] is None
+    assert out["rows"][1] == [3.0, 4.0]
+
+
 def test_worksheet_to_matrix_unknown_sheet(fake_origin):
     from origin_pro_mcp.tools.matrix import worksheet_to_matrix
 
