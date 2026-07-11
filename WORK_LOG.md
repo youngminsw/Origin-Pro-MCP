@@ -1,5 +1,42 @@
 # Work Log
 
+## 2026-07-11 — whole-product review Round B (capability) (agent: round-b)
+
+Scope: the 9 capability items assigned from `docs/REVIEW-2026-07-11-whole-product.md`
+(items 6, 10, 8, 9, 11, 29, 30, 31a, 31b). Base = 59037c8 (Round A merged).
+One commit per item, TDD, ruff-clean on touched files, live-verified where the
+item required it. Did NOT push. Live runs used an isolated
+`DispatchEx("Origin.Application")` fixture (never ApplicationSI), `Exit()` in
+teardown; WSL tree rsynced into `C:\Users\swym4\opm_dev` (the
+`C:\Users\swym4\Origin-Pro-MCP` clone was never touched). Live receipts under
+`C:\Users\swym4\probe_out\roundb*`.
+
+| Item | Commit | What / how verified |
+|---|---|---|
+| 6 (vector export) | `04f101a` | Probed expGraph vector types live: **pdf ✓ (%PDF), eps ✓ (%!PS), emf ✓; svg ✗ (command fails, no file)**. Split EXPORT_IMAGE_FORMATS → EXPORT_RASTER/EXPORT_VECTOR/EXPORT_FORMATS (honest names); vector skips the tr1 pixel-size opts (they make expGraph fail on vector). export_graph/export_all/sized accept the new formats. Live: pdf/eps/emf write valid magic-byte files; svg raises. |
+| 10 (dead export params) | `5b29884` | Probed live: an explicit **width IS honored**; **tr1.height is silently ignored** (1600x1000 → 1600x1224, aspect-locked); **no dpi node** (tr1.dpi/DPI/res all make expGraph fail). So: export_graph applies width with no sized=True; **dpi removed** from both export tools; **height removed** from both (could never take effect); export_all passes width through. No param accepted-and-ignored remains. Live: width=1600 → 1600px PNG via both tools; dpi/height absent from signatures. |
+| 8 (fit X-range) | `2eab9cd` | Probed: NLFit input accepts a **1-based row subrange `!(x,y)[i1:i2]`**. Added x_min/x_max to curve_fit; _rows_in_x_range resolves bounds to a contiguous row block (X assumed monotonic), raises when empty; range-restricted line fit routed through NLFit. Live: spectrum with a small peak at xc=5 + a LARGER interfering peak at xc=15 — whole-curve fit pulled to ~15, curve_fit(x_min=2,x_max=8) recovers xc=5. |
+| 9 (smooth methods) | `87e114a` | Exposed `smooth_method` (savitzky_golay/adjacent/binomial) on transform; removed dead `poly_order`. Fake-only (no live path): smooth_method reaches the impl + right method:= id; poly_order gone. CLI typed-coercion tests moved off poly_order. |
+| 11 (orphan hygiene) | `3b1ab5c` | interpolate reuses one stable "Interp" book (rows cleared before overwrite; only self-created book rolled back on failure). find_peaks tags outputs "Peak X"/"Peak Y" and deletes the prior pair on repeat (net +2, no growth); pkfind's uninvited "Center Peaks Indices" column deleted each call (probe: no oindex/oidx option suppresses it). Live: 3 interpolate calls → one Interp book; 3 find_peaks calls settle at +2 columns. |
+| 29 (right/top axis title) | `f913b2e` | Probed: `yr.text$` (layer 2) and `xt.text$` (layer 1) both set + read back; yr **also "succeeds" on a single-layer graph** (the false success). axis(op=labels) gains axis=right (requires page.nlayers>=2, else raises) and axis=top; read-back guards a genuine no-op. Live: right title sets+reads on a dual-Y graph; single-layer axis=right raises. |
+| 30 (dual-Y legend) | `3c6b848` | add_second_y_axis now rebuilds the legend (both layers), sets it borderless (legend.background=0), re-places it via place_legend_avoiding_data, and reports the placement. Live: return says "legend rebuilt borderless, placed <corner>", legend.background reads back 0, graph exports. |
+| 31a (template APPLY) | `9d9075f` | Probed: **`plotxy ... ogl:=<new template:="<path>">`** builds a graph from a saved template. Added `template` param to create_graph (2D XY only; missing path / XYZ rejected); return gains a "template" field. Live round-trip: thick-red-styled graph → save_graph_template → create_graph(template=...) with new data exports with >5x the red pixels of a default no-template graph. |
+| 31b (batch import) | `5974940` | import_data accepts a directory or glob; imports every csv/txt/dat/xls/xlsx match into its own stem-named book; returns per-file results (partial failures non-fatal); caps at 20 with a note. Live: 3-file temp folder → books alpha/beta/gamma each holding the data. |
+
+**Vector-format verdict (live-probed):** pdf ✓, eps ✓, emf ✓, svg ✗ (unsupported
+on Origin 2020 — expGraph fails and writes nothing). **Export size controls:**
+width honored; height aspect-locked and dpi unsupported (both removed).
+**Fit-range route:** `[Book]Sheet!(x,y)[i1:i2]` row subrange on nlbegin.
+**Template route:** `plotxy iy:=... ogl:=<new template:="<path>">`.
+
+WSL fake suite (`/tmp/opm_venv/bin/python3.11 -m pytest -q`): **649 passed, 54
+skipped** at HEAD `5974940` (Round A baseline 620/38; +29 fake tests this round).
+Ruff clean on every touched file (removed one pre-existing unused `pytest`
+import in the touched `tests/test_cli.py`). Full live suite (Windows,
+`pytest -m requires_origin tests/`): **54 passed, 649 deselected in 264s, 0
+failed**. Zero leftover Origin: 4 pre-existing `Origin64.exe` before and after
+every live run (all isolated DispatchEx instances Exit()'d). Did NOT push.
+
 ## 2026-07-11 — whole-product review Round A (correctness) (agent: round-a)
 
 Scope: the 12 correctness items assigned from `docs/REVIEW-2026-07-11-whole-product.md`.
