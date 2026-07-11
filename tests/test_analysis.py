@@ -25,11 +25,11 @@ def test_integrate_returns_area(fake_origin):
 
 
 def test_smooth_rejects_bad_method(fake_origin):
-    # The smoothing sub-method is reached only through the private impl.
-    from origin_pro_mcp.tools.analysis import _smooth_impl
+    # smooth_method is now reachable through the transform dispatcher (item 9).
+    from origin_pro_mcp.tools.analysis import transform
 
-    with pytest.raises(ValueError, match="method must be one of"):
-        _smooth_impl("Book1", "Sheet1", 1, 2, method="bilateral")
+    with pytest.raises(ValueError, match="must be one of"):
+        transform("Book1", "Sheet1", 1, 2, method="smooth", smooth_method="bilateral")
 
 
 def test_find_peaks_rejects_bad_direction(fake_origin):

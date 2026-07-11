@@ -111,6 +111,29 @@ def test_transform_smooth_window_equiv(fake_origin):
                   disp_kw={"method": "smooth", "window_size": 7})
 
 
+def test_transform_smooth_method_equiv(fake_origin):
+    # Item 9: smooth_method must reach the impl (binomial -> method:=3).
+    _assert_equiv(fake_origin,
+                  A._smooth_impl, ("Book1", "Sheet1", 1, 2),
+                  A.transform, ("Book1", "Sheet1", 1, 2),
+                  impl_kw={"method": "binomial"},
+                  disp_kw={"method": "smooth", "smooth_method": "binomial"})
+
+
+def test_transform_smooth_method_emits_labtalk_id(fake_origin):
+    fake_origin.executed.clear()
+    A.transform("Book1", "Sheet1", 1, 2, method="smooth", smooth_method="adjacent")
+    smooth = [c for c in fake_origin.executed if c.startswith("smooth")]
+    assert smooth and "method:=2" in smooth[0], smooth
+
+
+def test_transform_has_no_poly_order_param():
+    # Item 9: the dead "Reserved; not used" param is gone.
+    import inspect
+    assert "poly_order" not in inspect.signature(A.transform).parameters
+    assert "smooth_method" in inspect.signature(A.transform).parameters
+
+
 def test_transform_interpolate_equiv(fake_origin):
     _assert_equiv(fake_origin,
                   A._interpolate_impl, ("Book1", "Sheet1", 1, 2),

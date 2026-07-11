@@ -404,7 +404,7 @@ def transform(
     y_col: int,
     method: str,
     window_size: int | None = None,
-    poly_order: int | None = None,
+    smooth_method: str | None = None,
     num_points: int | None = None,
     interp_method: str | None = None,
     direction: str | None = None,
@@ -418,8 +418,9 @@ def transform(
         method: Which transform to run:
             - "integrate": area under the curve. Returns JSON {area}.
             - "differentiate": dY/dX into a new column.
-            - "smooth": Savitzky-Golay smoothing into a new column;
-              uses window_size (points, odd; default 5).
+            - "smooth": smoothing into a new column; uses window_size
+              (points, odd; default 5) and smooth_method (savitzky_golay
+              (default), adjacent, or binomial).
             - "interpolate": resample onto evenly spaced X; uses num_points
               (default 100) and interp_method (linear/spline/bspline/akima,
               default linear). Returns JSON {sheet, x, y}.
@@ -430,7 +431,8 @@ def transform(
               (positive/negative/both, default positive) and local_points
               (neighborhood size, default 10). Returns JSON {peaks, count}.
         window_size: Smoothing window in points (method="smooth").
-        poly_order: Reserved; not used by any current method.
+        smooth_method: savitzky_golay/adjacent/binomial (method="smooth";
+            default savitzky_golay).
         num_points: Output point count (method="interpolate").
         interp_method: linear/spline/bspline/akima (method="interpolate").
         direction: positive/negative/both (method="find_peaks").
@@ -447,6 +449,7 @@ def transform(
     if safe_method == "smooth":
         return _smooth_impl(
             data_book, data_sheet, x_col, y_col,
+            method=smooth_method if smooth_method is not None else "savitzky_golay",
             window=window_size if window_size is not None else 5,
         )
     if safe_method == "interpolate":

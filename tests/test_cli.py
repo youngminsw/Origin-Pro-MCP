@@ -6,8 +6,6 @@ the shared fake Origin fixture.
 """
 import json
 
-import pytest
-
 from origin_pro_mcp import cli
 
 
@@ -67,10 +65,10 @@ def test_coerce_handles_int_and_bool():
 def test_consolidated_tool_coerces_typed_params(fake_origin):
     # The transform dispatcher uses explicit typed params (no **kwargs), so the
     # CLI must coerce each arg by annotation and dispatch without "unknown
-    # argument". window_size/poly_order/x_col/y_col are ints; method is str.
+    # argument". window_size/x_col/y_col are ints; method/smooth_method are str.
     argv = ["transform", "--data_book", "Book1", "--data_sheet", "Sheet1",
             "--x_col", "1", "--y_col", "2", "--method", "smooth",
-            "--window_size", "5", "--poly_order", "2"]
+            "--window_size", "5", "--smooth_method", "adjacent"]
     fake_origin.lt_vars["wks.ncols"] = 4
     assert cli.main(argv) == 0
 
@@ -82,15 +80,16 @@ def test_consolidated_tool_parse_kv_types():
     sig = inspect.signature(transform)
     kwargs = cli._parse_kv(
         ["--data_book", "B", "--data_sheet", "S", "--x_col", "1", "--y_col", "2",
-         "--method", "smooth", "--window_size", "5", "--poly_order", "2"],
+         "--method", "smooth", "--window_size", "5", "--smooth_method", "binomial"],
         sig,
     )
     assert kwargs == {
         "data_book": "B", "data_sheet": "S", "x_col": 1, "y_col": 2,
-        "method": "smooth", "window_size": 5, "poly_order": 2,
+        "method": "smooth", "window_size": 5, "smooth_method": "binomial",
     }
-    assert all(isinstance(kwargs[k], int) for k in ("x_col", "y_col", "window_size", "poly_order"))
+    assert all(isinstance(kwargs[k], int) for k in ("x_col", "y_col", "window_size"))
     assert isinstance(kwargs["method"], str)
+    assert isinstance(kwargs["smooth_method"], str)
 
 
 def test_json_args_dispatch(fake_origin, capsys):
