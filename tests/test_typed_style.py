@@ -452,6 +452,27 @@ def test_set_graph_font_raises_on_execute_failure(fake_origin):
         S.set_graph_font("Graph1", target="axes")
 
 
+def test_set_graph_font_axes_read_back_gate_raises_on_mismatch(fake_origin):
+    """Item 4: the axis-title font is read back — a mismatching size (a silent
+    wrong-window / frozen no-op that LabTalk still reports as success) raises."""
+    from origin_pro_mcp.tools import style as S
+
+    fake_origin.lt_vars["__mcp_fs"] = 99.0  # read-back != requested 24
+    with pytest.raises(ValueError, match="x-axis title font did not take"):
+        S.set_graph_font("Graph1", target="axes", font_size=24)
+
+
+def test_set_legend_warns_when_legend_unreadable(fake_origin):
+    """Item 4: after the rebuild, an unreadable legend object (frozen loaded
+    graph) yields a WARNING, not a clean success."""
+    from origin_pro_mcp.tools.style import set_legend
+
+    fake_origin.execute_results["__mcp_fs = legend.fsize"] = False
+    msg = set_legend("Graph1")
+    assert "WARNING" in msg
+    assert "could not confirm the legend rendered" in msg
+
+
 def test_set_tick_labels_raises_on_execute_failure(fake_origin, monkeypatch):
     from origin_pro_mcp.tools import style as S
 

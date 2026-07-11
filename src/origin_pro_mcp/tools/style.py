@@ -700,6 +700,34 @@ def apply_publication_style(
     )
 
 
+def _read_text_fsize(obj: str):
+    """Read a text-object font size (e.g. ``xb.fsize``) back, or None if it
+    can't be read. Used to confirm a title/legend font write actually landed —
+    live-probed reliable on graphs loaded from a .opju once the page is
+    activated (activate_window, which every caller does first)."""
+    if not execute_labtalk(f"__mcp_fs = {obj}.fsize;"):
+        return None
+    try:
+        return float(get_lt_var("__mcp_fs"))
+    except Exception:
+        return None
+
+
+def _verify_text_fsize(obj: str, expected: int, label: str, graph_name: str) -> None:
+    """Raise if ``obj``'s font size read back to a DIFFERENT non-zero value —
+    turning a silent wrong-window / frozen no-op into a loud failure. A 0/None
+    read-back (unreadable, e.g. test doubles) is skipped so this never
+    false-alarms; live it reads the real size back."""
+    got = _read_text_fsize(obj)
+    if got and abs(got - expected) > 0.5:
+        msg = (
+            f"{label} font did not take on {graph_name} (set {expected}, read "
+            f"back {got}). If this graph was loaded from a .opju, Origin may be "
+            f"freezing its text objects over COM — recreate it in-session."
+        )
+        raise ValueError(msg)
+
+
 def _bold_text_object(obj: str) -> None:
     """Bold an axis-title / graph-title text object by wrapping its current
     text in `\\b(...)`. Origin 2020 exposes no `.bold` on these objects, so
@@ -735,6 +763,11 @@ def set_graph_font(
     max(font_size - 4, 16) — a step smaller than the axis titles, the usual
     publication proportion; pass a larger font_size to enlarge them.
 
+    On a graph LOADED from a .opju the axis-title/legend font writes are now
+    read back (the size is confirmed) — live-verified reliable once the page is
+    activated, and it raises instead of reporting a false success if the write
+    is silently frozen.
+
     Returns:
         Success message
     """
@@ -758,6 +791,10 @@ def set_graph_font(
         if bold:
             _bold_text_object("xb")
             _bold_text_object("yl")
+        # Read-back gate: LabTalk returns success even if the write hit the wrong
+        # window / a frozen loaded-graph text object, so confirm the size landed.
+        _verify_text_fsize("xb", safe_font_size, "x-axis title", safe_graph_name)
+        _verify_text_fsize("yl", safe_font_size, "y-axis title", safe_graph_name)
 
     if safe_target in ("all", "tick"):
         tick_size = max(safe_font_size - 4, 16)
@@ -773,9 +810,11 @@ def set_graph_font(
             raise ValueError(msg)
 
     if safe_target in ("all", "legend"):
-        if not execute_labtalk(f"legend.font$ = {safe_font_name}; legend.fsize = {max(safe_font_size - 4, 16)};"):
+        legend_size = max(safe_font_size - 4, 16)
+        if not execute_labtalk(f"legend.font$ = {safe_font_name}; legend.fsize = {legend_size};"):
             msg = f"Could not set the legend font on {safe_graph_name}."
             raise ValueError(msg)
+        _verify_text_fsize("legend", legend_size, "legend", safe_graph_name)
 
     if safe_target == "title":
         if not execute_labtalk(f"title.font$ = {safe_font_name}; title.fsize = {safe_font_size};"):
@@ -783,6 +822,7 @@ def set_graph_font(
             raise ValueError(msg)
         if bold:
             _bold_text_object("title")
+        _verify_text_fsize("title", safe_font_size, "graph title", safe_graph_name)
 
     return f"Set font {font_name} {safe_font_size}pt on {safe_target} for {safe_graph_name}"
 
@@ -801,6 +841,10 @@ def set_legend(
         visible: Show or hide legend
         position: top-left, top-right, bottom-left, bottom-right
         entries: Comma-separated custom legend entries
+
+    On a graph loaded from a .opju the legend rebuild is read back (the legend
+    object's presence is confirmed) — live-verified reliable once the page is
+    activated; a missing legend returns a WARNING rather than a clean success.
 
     Returns:
         Success message
@@ -828,6 +872,17 @@ def set_legend(
     placement = place_legend_avoiding_data(safe_graph_name, safe_position)
 
     moved_out = " (moved outside the frame to avoid the data)" if placement.startswith("outside") else ""
+    # Read-back gate: confirm the legend object is readable after the rebuild.
+    # legend -r reports success even when it silently did nothing on a frozen
+    # loaded-graph, so an UNREADABLE legend must not read as a clean success
+    # (live-probed reliable on a reloaded .opju, so this only fires on a genuine
+    # freeze where the property can't be read back at all).
+    if _read_text_fsize("legend") is None:
+        return (
+            f"Updated legend for {safe_graph_name}: placed {placement}{moved_out} "
+            f"(WARNING: could not confirm the legend rendered — if it is missing, "
+            f"this graph may be a frozen loaded .opju; rebuild it in-session)"
+        )
     return f"Updated legend for {safe_graph_name}: placed {placement}{moved_out}"
 
 
