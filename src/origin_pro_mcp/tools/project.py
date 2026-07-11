@@ -12,7 +12,7 @@ from ..origin_connection import (
     require_graph,
 )
 from ..labtalk_safe import labtalk_choice, labtalk_name, windows_path
-from .graph import EXPORT_IMAGE_FORMATS, export_graph_to_file
+from .graph import EXPORT_FORMATS, export_graph_to_file
 
 PROJECT_EXTENSIONS = {".opj", ".opju"}
 
@@ -174,7 +174,7 @@ def export_all_graphs(
 
     Args:
         output_dir: Output directory (Windows or WSL style). Created if missing.
-        format: Image format: png, jpg, tif, bmp
+        format: Output format. Raster: png, jpg, tif, bmp. Vector: pdf, eps, emf
         dpi: Unused (kept for API compatibility; ~1200px wide is used)
         width: Unused (kept for API compatibility)
         height: Unused (kept for API compatibility)
@@ -182,7 +182,7 @@ def export_all_graphs(
     Returns:
         Per-graph list of exported files
     """
-    safe_format = labtalk_choice(format.lower(), EXPORT_IMAGE_FORMATS, "format")
+    safe_format = labtalk_choice(format.lower(), EXPORT_FORMATS, "format")
     out_dir = windows_path(output_dir, "output_dir")
     os.makedirs(out_dir, exist_ok=True)
 

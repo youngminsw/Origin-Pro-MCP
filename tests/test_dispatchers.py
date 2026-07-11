@@ -365,6 +365,40 @@ def test_export_graph_default_is_clipboard_free(fake_origin, tmp_path, monkeypat
     assert "Exported to:" in msg
 
 
+def test_export_graph_vector_pdf_emits_no_pixel_size(fake_origin, tmp_path, monkeypatch):
+    # Vector formats are resolution-independent: expGraph must be called with
+    # type:=pdf and NO tr1 pixel-size options (probe-verified those make the
+    # command fail on Origin 2020).
+    monkeypatch.setattr(G.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(G.os.path, "getsize", lambda _p: 3416)
+    p = str(tmp_path / "fig.pdf")
+    fake_origin.executed.clear()
+    msg = G.export_graph("Graph1", p, format="pdf")
+    cmds = " ".join(fake_origin.executed)
+    assert "expGraph type:=pdf" in cmds
+    assert "tr1.width" not in cmds
+    assert "tr1.unit" not in cmds
+    assert "Exported to:" in msg
+
+
+def test_export_graph_raster_still_sizes(fake_origin, tmp_path, monkeypatch):
+    monkeypatch.setattr(G.os.path, "exists", lambda _p: True)
+    monkeypatch.setattr(G.os.path, "getsize", lambda _p: 12345)
+    p = str(tmp_path / "fig.tif")
+    fake_origin.executed.clear()
+    G.export_graph("Graph1", p, format="tif")
+    cmds = " ".join(fake_origin.executed)
+    assert "expGraph type:=tif" in cmds
+    assert "tr1.width" in cmds
+
+
+def test_export_graph_rejects_svg(fake_origin, tmp_path):
+    # SVG proved out UNSUPPORTED on Origin 2020 — must be rejected up front.
+    p = str(tmp_path / "fig.svg")
+    with pytest.raises(ValueError):
+        G.export_graph("Graph1", p, format="svg")
+
+
 def test_export_graph_sized_equiv(fake_origin, tmp_path):
     p = str(tmp_path / "fig.png")
     _assert_equiv(fake_origin,

@@ -58,8 +58,15 @@ _XYZ_TYPES = {"contour", "3d_scatter"}
 # pre-made 2D page collapses them to an empty/flat projection.
 _OWN_GRAPH_TYPES = {"3d_scatter"}
 
-# Raster image formats produced by the expGraph file export.
-EXPORT_IMAGE_FORMATS = {"png", "jpg", "tif", "bmp"}
+# Formats expGraph can write on Origin 2020 (probe-verified 2026-07-11).
+# Raster formats take a pixel size; vector formats are resolution-independent
+# and IGNORE the pixel width/height. SVG proved out as UNSUPPORTED on this
+# build (expGraph type:=svg fails and writes no file), so it is not offered.
+EXPORT_RASTER_FORMATS = {"png", "jpg", "tif", "bmp"}
+EXPORT_VECTOR_FORMATS = {"pdf", "eps", "emf"}
+EXPORT_FORMATS = EXPORT_RASTER_FORMATS | EXPORT_VECTOR_FORMATS
+# Back-compat alias (was raster-only); kept so external importers don't break.
+EXPORT_IMAGE_FORMATS = EXPORT_RASTER_FORMATS
 
 
 def _designate_error_column(book: str, sheet: str, col: int) -> None:
@@ -621,8 +628,8 @@ def _export_graph_impl(
         file_path: Output path (Windows or WSL style, e.g.
                    C:\\Users\\me\\fig1.png or /mnt/c/Users/me/fig1.png).
                    Missing directories are created.
-        format: Image format: png, jpg, tif, bmp. Used as the file
-                extension when file_path has none.
+        format: Output format. Raster: png, jpg, tif, bmp. Vector: pdf, eps,
+                emf. Used as the file extension when file_path has none.
         width: Unused (kept for API compatibility; ~1200px wide is used)
         height: Unused (kept for API compatibility)
         dpi: Unused (kept for API compatibility)
@@ -630,7 +637,7 @@ def _export_graph_impl(
     Returns:
         Path to exported file
     """
-    safe_format = labtalk_choice(format.lower(), EXPORT_IMAGE_FORMATS, "format")
+    safe_format = labtalk_choice(format.lower(), EXPORT_FORMATS, "format")
     path = windows_path(file_path, "file_path")
     if not os.path.splitext(path)[1]:
         path = f"{path}.{safe_format}"
@@ -944,8 +951,7 @@ def _export_via_expgraph(
     output path. Raises ValueError with a friendly message on failure.
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
-    safe_format = labtalk_choice(format.lower(), EXPORT_IMAGE_FORMATS, "format")
-    safe_width = positive_int(width, "width")
+    safe_format = labtalk_choice(format.lower(), EXPORT_FORMATS, "format")
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
     path = windows_path(file_path, "file_path")
@@ -955,12 +961,18 @@ def _export_via_expgraph(
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
     fname = os.path.splitext(os.path.basename(path))[0]
-    size_opts = f"tr1.unit:=2 tr1.width:={safe_width}"
-    if height > 0:
-        size_opts += f" tr1.height:={positive_int(height, 'height')}"
+    # Vector formats (pdf/eps/emf) are resolution-independent — passing a
+    # pixel size option makes expGraph fail on Origin 2020 (probe-verified),
+    # so size options are emitted only for raster formats.
+    size_opts = ""
+    if safe_format in EXPORT_RASTER_FORMATS:
+        safe_width = positive_int(width, "width")
+        size_opts = f" tr1.unit:=2 tr1.width:={safe_width}"
+        if height > 0:
+            size_opts += f" tr1.height:={positive_int(height, 'height')}"
     cmd = (
         f'expGraph type:={safe_format} path:="{out_dir}" filename:="{fname}" '
-        f"overwrite:=replace {size_opts};"
+        f"overwrite:=replace{size_opts};"
     )
     if not execute_labtalk(cmd):
         msg = f"Origin could not export {safe_graph} to {path}."
@@ -992,9 +1004,10 @@ def _export_graph_sized_impl(
     Args:
         graph_name: Graph to export
         file_path: Output path (Windows or WSL style)
-        width: Image width in pixels (default 1200)
-        height: Image height in pixels (0 = keep aspect ratio)
-        format: png, jpg, tif, or bmp
+        width: Image width in pixels (default 1200; raster only)
+        height: Image height in pixels (0 = keep aspect ratio; raster only)
+        format: Raster (png, jpg, tif, bmp) or vector (pdf, eps, emf). Vector
+                formats are resolution-independent and ignore width/height.
 
     Returns:
         Path and pixel/byte size of the exported file
@@ -1556,7 +1569,9 @@ def export_graph(
         graph_name: Graph to export.
         file_path: Output path (Windows or WSL style). Missing directories
             are created.
-        format: Image format: png, jpg, tif, bmp.
+        format: Output format. Raster: png, jpg, tif, bmp. Vector (journal
+            submission): pdf, eps, emf. Vector formats are resolution-
+            independent and ignore width/height.
         width: Output pixel width (only used when sized=True).
         height: Output pixel height (only used when sized=True; 0 = keep
             aspect ratio).
