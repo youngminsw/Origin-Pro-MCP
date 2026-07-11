@@ -29,25 +29,82 @@ def test_manage_columns_designation_bad_role(fake_origin):
 
 # --- set_error_bars ----------------------------------------------------------
 
-def test_set_error_bars_y_uses_set_o(fake_origin):
+def _fake_attach_success(fake_origin, monkeypatch, *, desig, err_is_error=True):
+    """Wire the graph module so set_error_bars sees a successful attach: settle
+    is a no-op, get_plot_info returns [data] before then [data, err] after, and
+    the err column's designation reads back as `desig`."""
+    from origin_pro_mcp.tools import graph
+
+    monkeypatch.setattr(graph, "settle_new_plots", lambda *a, **k: None)
+    seq = [
+        [{"name": "G_B", "is_error": False}],
+        [{"name": "G_B", "is_error": False},
+         {"name": "G_C", "is_error": err_is_error}],
+    ]
+    calls = {"n": 0}
+
+    def _infos(_g):
+        i = min(calls["n"], len(seq) - 1)
+        calls["n"] += 1
+        return seq[i]
+
+    monkeypatch.setattr(graph, "get_plot_info", _infos)
+    fake_origin.lt_vars["__mcp_ct"] = float(desig)
+
+
+def test_set_error_bars_y_settles_and_attaches(fake_origin, monkeypatch):
+    """Item 22: the plotxy is followed by a settle, then the reassignment; a
+    verified attach (col.type==3, error plot present, no stray data curve)
+    returns success."""
     from origin_pro_mcp.tools.graph import set_error_bars
 
+    _fake_attach_success(fake_origin, monkeypatch, desig=3)
     msg = set_error_bars("Graph1", "Book1", "Sheet1", y_col=2, err_col=3)
     assert "y-error bars" in msg
     joined = " ".join(fake_origin.executed)
     assert "plotxy iy:=[Book1]Sheet1!col(3)" in joined
     assert "set __mcp_er -o __mcp_yr" in joined
-    # N1 fix: designate the err column as Y Error (3) and rebuild the legend so
-    # no stray "SD" curve/entry is left behind.
     assert "wks.col3.type = 3" in joined
     assert "legend -r" in joined
 
 
-def test_set_error_bars_x_direction(fake_origin):
+def test_set_error_bars_x_direction(fake_origin, monkeypatch):
     from origin_pro_mcp.tools.graph import set_error_bars
 
+    # X error: verification keys on the X-Error designation (7) reading back.
+    _fake_attach_success(fake_origin, monkeypatch, desig=7, err_is_error=False)
     set_error_bars("Graph1", "Book1", "Sheet1", y_col=2, err_col=3, direction="x")
     assert any("set __mcp_er -ox __mcp_yr" in s for s in fake_origin.executed)
+
+
+def test_set_error_bars_fails_honestly_and_removes_stray(fake_origin, monkeypatch):
+    """Item 22: when the error column does NOT convert (designation didn't
+    stick, leaving a stray data curve), the tool removes the stray and raises —
+    no false success."""
+    from origin_pro_mcp.tools import graph
+    from origin_pro_mcp.tools.graph import set_error_bars
+    from conftest import FakeGraph
+
+    fake_origin.graphs = [FakeGraph("Graph1", plot_names=["G_B", "G_C"])]
+    monkeypatch.setattr(graph, "settle_new_plots", lambda *a, **k: None)
+    # get_plot_info: [data] before, [data, stray-DATA] after (err not converted).
+    seq = [
+        [{"name": "G_B", "is_error": False}],
+        [{"name": "G_B", "is_error": False}, {"name": "G_C", "is_error": False}],
+    ]
+    calls = {"n": 0}
+
+    def _infos(_g):
+        i = min(calls["n"], len(seq) - 1)
+        calls["n"] += 1
+        return seq[i]
+
+    monkeypatch.setattr(graph, "get_plot_info", _infos)
+    # __mcp_ct stays 0 (designation did not stick).
+    with pytest.raises(ValueError, match="did not convert to error bars"):
+        set_error_bars("Graph1", "Book1", "Sheet1", y_col=2, err_col=3)
+    # The stray plot (last, index 1) was destroyed.
+    assert fake_origin.graphs[0].plot_names == ["G_B"]
 
 
 def test_set_error_bars_same_column_rejected(fake_origin):
@@ -135,7 +192,7 @@ def test_set_plot_style_rgb_sends_c_and_cf_as_separate_calls(fake_origin):
 # --- set_plot_style: error-bar width/cap -------------------------------------
 
 def _eb_graph(fake, plot_names, columns):
-    from fakes import FakeBook, FakeColumn, FakeGraph, FakeSheet
+    from fakes import FakeBook, FakeGraph, FakeSheet
 
     fake.books = [FakeBook("EB", sheets=[FakeSheet("Sheet1", columns=columns)])]
     fake.graphs = [FakeGraph("EB", plot_names=plot_names)]

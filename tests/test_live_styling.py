@@ -86,6 +86,27 @@ def _build_line_symbol_with_error(book="SMOKE", y_error=True):
     return g, b, sheet
 
 
+def test_set_error_bars_attaches_in_place_live(live_origin):
+    """Item 22: set_error_bars on a plotted Y column attaches error bars in
+    place — the error column reads back as an error plot and no stray DATA
+    curve survives."""
+    from origin_pro_mcp.tools.graph import set_error_bars
+    from origin_pro_mcp.tools.style_helpers import get_plot_info
+
+    g, book, sheet = _build_line_symbol_with_error(book="EBLIVE", y_error=False)
+    before = get_plot_info(g)
+    data_before = sum(1 for p in before if not p["is_error"])
+    assert data_before == 1 and not any(p["is_error"] for p in before)
+
+    msg = set_error_bars(g, book, sheet, y_col=2, err_col=3)
+    assert "y-error bars" in msg
+
+    after = get_plot_info(g)
+    data_after = sum(1 for p in after if not p["is_error"])
+    assert data_after == data_before, after  # no stray data curve
+    assert any(p["is_error"] for p in after), after  # error plot present
+
+
 def _build_multiseries_with_error(book="PUB", n_series=2):
     """A worksheet with n_series (X, Y, Yerr) triples, each plotted as its own
     line+symbol series with y-error bars — the reporter's issue #7 repro

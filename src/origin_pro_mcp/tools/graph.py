@@ -23,7 +23,13 @@ from ..labtalk_safe import (
     positive_int,
     windows_path,
 )
-from .style_helpers import graph_layer_execute, settle_new_plots, verify_layer_value
+from .style_helpers import (
+    acquire_graph_layer,
+    get_plot_info,
+    graph_layer_execute,
+    settle_new_plots,
+    verify_layer_value,
+)
 
 # Plot type IDs verified against OriginLab's "Plot Type IDs" reference and
 # tested live on Origin Pro 2020. The earlier values for area/bar/box/
@@ -355,12 +361,16 @@ def set_error_bars(
 ) -> str:
     """Attach error bars to an EXISTING plot from an error column, in place.
 
-    Uses Origin's documented `set <err> -o <y>` idiom: the error column is
-    plotted into the layer, reassigned as error bars of the target Y plot,
-    then designated as an error column and the legend is rebuilt — so no stray
-    curve or extra legend entry is left behind (unlike re-running plotxy with a
-    3-column range). The error and Y columns must live in the same sheet, and
-    the target Y column must already be plotted on the graph.
+    Uses Origin's `set <err> -o <y>` idiom: the error column is plotted into the
+    layer, SETTLED (the missing settle after this plotxy is what silently broke
+    the attach — the reassignment and the column-type designation raced the new
+    plot and no-op'd), reassigned as error bars of the target Y plot, then
+    designated as an error column and the legend rebuilt — so no stray curve or
+    extra legend entry is left behind. The attach is VERIFIED by reading the
+    error column's designation back (and, for Y, confirming no extra data curve
+    survived); on failure the stray curve is removed and the tool raises instead
+    of reporting a false success. The error and Y columns must live in the same
+    sheet, and the target Y column must already be plotted on the graph.
 
     Args:
         graph_name: Graph that already shows the Y plot
@@ -371,7 +381,8 @@ def set_error_bars(
         direction: "y" for Y error bars (default) or "x" for X error bars
 
     Returns:
-        Success message
+        Success message. Raises ValueError (after removing the stray curve) if
+        the error column did not convert to error bars.
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
     safe_book = labtalk_name(data_book, "data_book")
@@ -387,26 +398,71 @@ def set_error_bars(
     flag = _ERROR_BAR_FLAGS[safe_dir]
     desig = _ERROR_BAR_DESIG[safe_dir]
     ref = f"[{safe_book}]{safe_sheet}"
+
+    infos_before = get_plot_info(safe_graph)
+    data_before = sum(1 for p in infos_before if not p["is_error"])
+
     # 1. Plot the error column into the layer (so it is a "plotted dataset").
-    # 2. `set <er> -o/-ox <yr>` reassigns it as error bars of the Y plot.
-    # 3. Designate the error column as Y/X Error so it reads as an error plot
-    #    (not a second data curve) and drops out of data-plot counts.
-    # 4. `legend -r` rebuilds the legend WITHOUT the error-column entry.
-    script = (
+    if not execute_labtalk(
         f"win -a {safe_graph}; "
-        f"plotxy iy:={ref}!col({safe_err}) plot:=200 ogl:=[{safe_graph}]Layer1; "
+        f"plotxy iy:={ref}!col({safe_err}) plot:=200 ogl:=[{safe_graph}]Layer1;"
+    ):
+        msg = (
+            f"Origin could not plot error column {safe_err} of {ref} onto "
+            f"{safe_graph}. Check that the column contains numeric data."
+        )
+        raise ValueError(msg)
+    # 2. SETTLE — the fix. Without this the following designation/reassign race
+    #    the just-added plot and silently no-op (col.type stays 0, no whiskers).
+    settle_new_plots(safe_graph, expected_min_plots=len(infos_before) + 1)
+    # 3. Designate the error column as Y/X Error, 4. reassign it as error bars of
+    #    the Y plot, 5. rebuild the legend WITHOUT the error-column entry.
+    execute_labtalk(
+        f'win -a {safe_book}; page.active$ = "{safe_sheet}"; '
+        f"wks.col{safe_err}.type = {desig};"
+    )
+    execute_labtalk(
+        f"win -a {safe_graph}; "
         f"range __mcp_yr = {ref}!col({safe_y}); "
         f"range __mcp_er = {ref}!col({safe_err}); "
-        f"set __mcp_er {flag} __mcp_yr; "
-        f'win -a {safe_book}; page.active$ = "{safe_sheet}"; '
-        f"wks.col{safe_err}.type = {desig}; "
-        f"win -a {safe_graph}; legend -r;"
+        f"set __mcp_er {flag} __mcp_yr;"
     )
-    if not execute_labtalk(script):
+    execute_labtalk(f"win -a {safe_graph}; legend -r;")
+
+    # 6. VERIFY the attach took. The single reliable signal (live-probed) is the
+    #    error column's designation sticking; for Y the error plot also drops out
+    #    of the data-plot count (get_plot_info recognizes Y-error columns), so a
+    #    surviving extra DATA curve means the reassignment failed.
+    o = get_origin()
+    o.Execute(
+        f'win -a {safe_book}; page.active$ = "{safe_sheet}"; '
+        f"__mcp_ct = wks.col{safe_err}.type;"
+    )
+    col_type = int(round(o.LTVar("__mcp_ct")))
+    infos_after = get_plot_info(safe_graph)
+    data_after = sum(1 for p in infos_after if not p["is_error"])
+    attached = col_type == desig
+    if safe_dir == "y":
+        attached = (
+            attached
+            and data_after == data_before
+            and any(p["is_error"] for p in infos_after)
+        )
+    if not attached:
+        # Remove the stray error-column curve we added (the last plot), then
+        # fail honestly instead of leaving damage behind a success message.
+        try:
+            gl = acquire_graph_layer(safe_graph)
+            if infos_after:
+                gl.DataPlots.Item(len(infos_after) - 1).Destroy()
+        except Exception:  # noqa: BLE001 - best-effort cleanup; the raise below is the point
+            pass
         msg = (
-            f"Origin could not attach {safe_dir}-error bars from column {safe_err} "
-            f"to the column {safe_y} plot on {safe_graph}. Check that column "
-            f"{safe_y} is actually plotted on this graph."
+            f"Could not attach {safe_dir}-error bars from column {safe_err} to "
+            f"the column {safe_y} plot on {safe_graph}: the error column did not "
+            f"convert to error bars (read back col.type={col_type}, expected "
+            f"{desig}). Removed the stray curve. Rebuild the graph with "
+            f"y_error_col via create_graph / add_plot_to_graph instead."
         )
         raise ValueError(msg)
     return (
