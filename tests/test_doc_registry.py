@@ -23,6 +23,7 @@ SKILL = REPO_ROOT / "src" / "origin_pro_mcp" / "skills" / "publication-figure.md
 # (LabTalk/COM helpers, rich-text markup, or generic prose functions).
 NOT_TOOLS = {
     "b",            # \b(...) bold markup
+    "x",            # \x(...) markup (rejected — see publication-figure.md)
     "col",          # LabTalk col(n)
     "load",         # layer.cmap.load(...)
     "updateScale",  # layer.cmap.updateScale()

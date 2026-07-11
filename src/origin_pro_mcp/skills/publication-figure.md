@@ -352,6 +352,11 @@ colormap(graph_name="Graph1", palette="Viridis", z_min=0, z_max=1)   # Viridis, 
 For a quick 2D contour or a 3D scatter straight from XYZ columns, use
 `create_graph(..., plot_type="contour", z_col=N)` or `plot_type="3d_scatter"`.
 
+Heatmap tick spacing (`layer.y.inc = <n>` via `run_labtalk`) needs the graph
+window active first and a `doc -uw;` refresh after — see the Origin COM Notes
+table. If the colorbar overflows the page's right edge, shrink the plot
+LAYER (not the colorbar, which isn't directly addressable) — same table.
+
 ### Statistical / distribution figures
 
 - `create_graph(..., plot_type="box")` and `plot_type="histogram"` (single Y column).
@@ -384,7 +389,9 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
   when an axis title is clipped or panels must line up.
 - `set_graph_font(graph, target="axes", bold=True)` bolds axis titles via
   `\b(...)` markup (there is no `xb.bold` on Origin 2020).
-- `add_second_y_axis` / `add_layer` for dual-axis or stacked panels.
+- `add_second_y_axis` / `add_layer` for dual-axis or stacked panels. Coloring
+  the right axis to match its data needs a LabTalk recipe beyond what the tool
+  sets — see `add_second_y_axis`'s docstring and the Origin COM Notes table.
 - `annotate(graph, kind="reference_line", orientation=, value=)` (threshold/
   baseline), `kind="line"` / `kind="arrow"` (callouts), `kind="text"`
   (labels at data coordinates).
@@ -448,6 +455,12 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | `layer.x2.majorTicks` / `layer.y2.majorTicks` set to 0 wipes the NUMBER LABELS on ALL FOUR axes, not just the opposite side | Use `axis(op="tick", axis="top"/"right", tick_direction="none")`, which sets `layer.<ax>.ticks = 0` instead — never write `majorTicks` directly |
 | `layer.x/y.*` properties (from/to/inc/thickness/ticks/majorLen) read back real values, but `layer.x2/y2.*` (opposite-axis) reads more often return Origin's missing-property sentinel (a tiny near-zero float, e.g. `-1.23456789e-300`) | `run_labtalk`'s `capture` translates that sentinel to the string `"missing"` instead of leaking the raw float |
 | A never-saved project (no on-disk file yet) used to be treated the same as a failed autosave, blocking destructive ops (delete_graph, etc.) under a required autosave policy | Autosave now distinguishes "nothing on disk to protect" (proceeds) from "a real save attempt failed" (blocks when required) |
+| Second-Y-axis (layer 2) right-axis TITLE color/size/bold via `layer.y.color` or a `.bold` property is a no-op; `yl.text$` targets layer 2's hidden LEFT title, not the visible right one | The visible right title is the `YR` text object — `yr.text$="\b(Label)"` (bold via markup, not `YR.bold=1`), `YR.color=color(...)`, `YR.fsize=...`. See `add_second_y_axis`'s docstring for the full recipe. Right-axis tick labels and the axis line itself are NOT reachable via LabTalk on Origin 2020 — PPT/Illustrator only |
+| `layer.y.inc` (tick spacing) on a heatmap/2D y-axis can appear to no-op | It works — the write needs the graph window ACTIVE first (`win -a <graph>; page.active=<n>;`) and a `doc -uw;` refresh afterward, same as other per-layer LabTalk |
+| A colorbar (color scale) on a heatmap/colormap layer can overflow past the page's right edge, and the colorbar object itself is not directly addressable (`ColorScale.left`/`.width` read 0) | The colorbar is ANCHORED to the plot layer — shrink/reposition the LAYER instead: keep the frame's right edge (`layer.left + layer.width`) at roughly ≤72% of the page, e.g. `layer.left=15; layer.width=56; layer.top=13; layer.height=64; doc -uw;` |
+| Tick positions are anchored at multiples of `inc` from 0 with no exposed anchor property (`layer.x.anchor` is a no-op) | Workaround: shift the data by an offset and relabel with `layer.x.label.formula$="x+1"` (or similar) so the shifted ticks display the original values |
+| Axis label text rejects `\x()` markup (only `\b \i \u \+ \- \g \f` are supported — see `validate_text_escapes`) | Use the actual unicode character (×, Å, μ, °, …) directly in the label string instead of an escape sequence |
+| matplotlib nudges an in-corner "0" tick label (e.g. the x-axis 0) sideways so it doesn't collide with the y-axis "0"; Origin has no per-tick-label position/hide property (`nSpecialTicks`/`label.skip`/`label.first` are inconclusive or broken; "Special Ticks" is GUI-only) | Usually moot: Origin places the x-axis "0" BELOW the frame and the y-axis "0" to its LEFT, separated by the corner, so they don't overlap the way matplotlib's in-corner labels do — no nudge is typically needed |
 
 ## Pre-Export Checklist
 

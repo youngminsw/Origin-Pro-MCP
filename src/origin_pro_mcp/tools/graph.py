@@ -689,6 +689,24 @@ def add_second_y_axis(
 
     Returns:
         Success message
+
+    Styling the right axis (Origin 2020, verified live): this tool builds the
+    layer/plot only — coloring the right axis to match its data takes the
+    LabTalk recipe below, run with the graph active (`win -a <graph_name>;
+    page.active=2;`):
+        yr.text$="\\b(Magnetization (emu/g))";  // title text + BOLD via \\b()
+        YR.color=color(214,96,77);              // title color
+        YR.fsize=35;                             // title size
+    The visible right-axis TITLE is the `YR` text object, not `yl` (`yl`
+    targets layer 2's hidden LEFT title and does nothing to the right one).
+    `YR.bold=1` as a property is a no-op — use the `\\b(...)` text markup
+    instead. The right axis's tick-number labels and axis LINE color are NOT
+    reachable from LabTalk on this Origin build (`layer.y.color`,
+    `layer.y2.color`, `layer.y.label.color`, `layer.y.ticl.color` are all
+    no-ops there) — recolor those two elements in PPT/Illustrator if an
+    all-red right axis is required. The layer-1 LEFT axis title colors via
+    `YL.color=color(...)` (`layer.y.color` alone colors only layer 1's line +
+    ticks, not its title).
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
     safe_book = labtalk_name(data_book, "data_book")
