@@ -9,6 +9,7 @@ from ..origin_connection import (
     get_lt_var,
     get_origin,
     require_worksheet,
+    workbook_names,
 )
 from ..labtalk_safe import labtalk_choice, labtalk_name, positive_column, positive_int
 
@@ -149,7 +150,15 @@ def _interpolate_impl(
     x_min, x_max = min(xvals), max(xvals)
     step = (x_max - x_min) / (safe_n - 1) if safe_n > 1 else 0
     o = get_origin()
-    out_name = o.CreatePage(2, "Interp", "origin")
+    # Reuse a single stable "Interp" book (overwrite) instead of spawning a new
+    # Interp/Interp1/Interp2... on every call (item 11 orphan hygiene). Clear
+    # its rows first so a smaller num_points can't leave stale tail rows.
+    out_name = "Interp"
+    created = out_name not in workbook_names()
+    if created:
+        out_name = o.CreatePage(2, "Interp", "origin")
+    else:
+        execute_labtalk(f'win -a {out_name}; page.active$ = "Sheet1"; wks.nrows = 0;')
     execute_labtalk(f'win -a {out_name}; page.active$ = "Sheet1"; col(1) = data({x_min}, {x_max}, {step});')
     cmd = (
         f"interp1 ix:=[{out_name}]Sheet1!col(1) "
@@ -157,7 +166,10 @@ def _interpolate_impl(
         f"ox:=[{out_name}]Sheet1!col(2) method:={safe_method};"
     )
     if not execute_labtalk(cmd):
-        execute_labtalk(f"win -cd {out_name};")
+        # Only delete the book if THIS call created it — never destroy a
+        # pre-existing reused Interp book.
+        if created:
+            execute_labtalk(f"win -cd {out_name};")
         msg = f"Interpolation failed on [{safe_book}]{safe_sheet} ({sx},{sy})."
         raise ValueError(msg)
     new_x = _read_column(out_name, "Sheet1", 1)
@@ -215,6 +227,33 @@ def _find_named_column(book: str, sheet: str, keyword: str):
     return None
 
 
+# Stable long names tagging find_peaks' own output columns so repeat calls
+# reuse them instead of appending a new pair each time (item 11). pkfind also
+# emits a disposable "Center Peaks Indices" column we never asked for (and
+# cannot suppress — every oindex/oidx option probed makes pkfind fail); it is
+# deleted each call so it can't accumulate.
+_PEAK_X_LNAME = "Peak X"
+_PEAK_Y_LNAME = "Peak Y"
+_PEAK_INDEX_PREFIX = "Center Peaks Indices"
+
+
+def _delete_columns_by_lname(
+    book: str, sheet: str, *, names: tuple = (), prefixes: tuple = ()
+) -> None:
+    """Delete every column whose long name is in `names` or starts with any of
+    `prefixes`, highest index first (so deletions don't shift the ones still to
+    remove). No-op when none match."""
+    execute_labtalk(f'win -a {book}; page.active$ = "{sheet}";')
+    n = _ncols()
+    targets = []
+    for i in range(1, n + 1):
+        ln = get_lt_str(f"wks.col{i}.lname$")
+        if ln in names or any(ln.startswith(p) for p in prefixes):
+            targets.append(i)
+    for i in sorted(targets, reverse=True):
+        execute_labtalk(f"delete col({i});")
+
+
 def _find_peaks_impl(
     data_book: str,
     data_sheet: str,
@@ -256,6 +295,15 @@ def _find_peaks_impl(
     max_npts = max(1, (n_points - 2) // 2)
     npts_used = min(safe_npts, max_npts)
     execute_labtalk(f"wks.col{sx}.type = 4; wks.col{sy}.type = 1;")
+    # Reuse our own two output columns (item 11 orphan hygiene): delete any
+    # "Peak X"/"Peak Y" columns (and stray index columns) a prior find_peaks
+    # run left, then add a fresh pair at the end. Net column count is unchanged
+    # across repeat calls (and a fresh pair means a fewer-peak result leaves no
+    # stale rows behind).
+    _delete_columns_by_lname(
+        safe_book, safe_sheet,
+        names=(_PEAK_X_LNAME, _PEAK_Y_LNAME), prefixes=(_PEAK_INDEX_PREFIX,),
+    )
     cx = _ncols() + 1
     cy = cx + 1
     execute_labtalk("wks.addCol(); wks.addCol();")
@@ -266,8 +314,14 @@ def _find_peaks_impl(
     if not execute_labtalk(cmd):
         msg = f"Peak finding failed on [{safe_book}]{safe_sheet} ({sx},{sy})."
         raise ValueError(msg)
+    # Tag the output columns so the NEXT call recognizes and reuses them (set
+    # after pkfind, which can overwrite the long name).
+    execute_labtalk(f'wks.col{cx}.lname$ = "{_PEAK_X_LNAME}"; wks.col{cy}.lname$ = "{_PEAK_Y_LNAME}";')
     xs = _read_column(safe_book, safe_sheet, cx)
     ys = _read_column(safe_book, safe_sheet, cy)
+    # Drop pkfind's uninvited index column now that the peaks are read (its
+    # position is after cx/cy, so this does not disturb them).
+    _delete_columns_by_lname(safe_book, safe_sheet, prefixes=(_PEAK_INDEX_PREFIX,))
     peaks = [{"x": x, "y": y} for x, y in zip(xs, ys)]
     return json.dumps(
         {"peaks": peaks, "count": len(peaks), "local_points_used": npts_used}

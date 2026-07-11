@@ -32,6 +32,59 @@ def test_smooth_rejects_bad_method(fake_origin):
         transform("Book1", "Sheet1", 1, 2, method="smooth", smooth_method="bilateral")
 
 
+def test_interpolate_reuses_stable_book_when_present(fake_origin):
+    # Item 11: a pre-existing "Interp" book is reused (rows cleared), not a new
+    # Interp1/Interp2... spawned.
+    from fakes import FakeBook
+    from origin_pro_mcp.tools.analysis import transform
+
+    fake_origin.books.append(FakeBook("Interp"))
+    transform("Book1", "Sheet1", 1, 2, method="interpolate", num_points=10)
+    joined = " ".join(fake_origin.executed)
+    assert "wks.nrows = 0" in joined  # the reuse/overwrite path
+
+
+def test_interpolate_creates_book_when_absent(fake_origin):
+    from origin_pro_mcp.tools.analysis import transform
+
+    transform("Book1", "Sheet1", 1, 2, method="interpolate", num_points=10)
+    joined = " ".join(fake_origin.executed)
+    assert "wks.nrows = 0" not in joined  # first-time create path, no clear
+
+
+def test_find_peaks_deletes_prior_output_columns(fake_origin, monkeypatch):
+    # Item 11: on a repeat call, find_peaks deletes the "Peak X"/"Peak Y"
+    # columns it left last time (highest index first) rather than appending
+    # two more.
+    from origin_pro_mcp.tools.analysis import transform
+
+    def fake_ltstr(name):
+        if name == "wks.col3.lname$":
+            return "Peak X"
+        if name == "wks.col4.lname$":
+            return "Peak Y"
+        return ""
+
+    monkeypatch.setattr(fake_origin, "LTStr", fake_ltstr)
+    fake_origin.lt_vars["wks.ncols"] = 4
+    fake_origin.worksheet_data = tuple((float(i), float(i)) for i in range(1, 12))
+    transform("Book1", "Sheet1", 1, 2, method="find_peaks")
+    joined = " ".join(fake_origin.executed)
+    assert "delete col(4)" in joined
+    assert "delete col(3)" in joined
+    # delete the higher index before the lower so the second isn't shifted
+    assert joined.index("delete col(4)") < joined.index("delete col(3)")
+
+
+def test_find_peaks_no_prior_columns_no_delete(fake_origin):
+    from origin_pro_mcp.tools.analysis import transform
+
+    fake_origin.lt_vars["wks.ncols"] = 2
+    fake_origin.worksheet_data = tuple((float(i), float(i)) for i in range(1, 12))
+    transform("Book1", "Sheet1", 1, 2, method="find_peaks")
+    assert "delete col" not in " ".join(fake_origin.executed)
+
+
 def test_find_peaks_rejects_bad_direction(fake_origin):
     from origin_pro_mcp.tools.analysis import transform
 
