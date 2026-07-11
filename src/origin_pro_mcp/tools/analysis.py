@@ -191,6 +191,12 @@ def _fft_impl(data_book: str, data_sheet: str, x_col: int, y_col: int) -> str:
     sx = positive_column(x_col, "x_col")
     sy = positive_column(y_col, "y_col")
     _activate_sheet(safe_book, safe_sheet)
+    # fft1's `ix` below is fed only the Y column, with no explicit `interval`
+    # (Origin's default is <Auto>). Designating x_col/y_col as X/Y here gives
+    # the Y column an associated X, and OriginLab's docs confirm Auto mode
+    # computes the sampling interval as "the average increment ... usually
+    # from the X column associated with the input signal"
+    # (docs.originlab.com/origin-help/fft1-algorithm) — so this claim holds.
     execute_labtalk(f"wks.col{sx}.type = 4; wks.col{sy}.type = 1;")
     out_sheet = "FFTResult"
     execute_labtalk(f"win -a {safe_book};")
