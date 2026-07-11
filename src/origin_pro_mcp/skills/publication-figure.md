@@ -99,10 +99,17 @@ heatmaps, and 3D scatter.
   magnitude (0→max); diverging map with the midpoint at 0 for signed data
   (deviation, difference, charge).
 - **A labeled color scale is the legend of a colormap plot — never ship a
-  heatmap/contour/surface without it.** `create_matrix_plot` now plots every
-  type (surface/contour/heatmap/image) from the Origin system template that
-  carries a data-linked color scale, so the scale appears automatically and
-  always reflects the real palette and Z range. To match the rest of the
+  heatmap/contour/surface without it.** `create_matrix_plot` plots the
+  **surface/contour/heatmap** types from an Origin system template that carries
+  a data-linked color scale, so the scale appears automatically and always
+  reflects the real palette and Z range. **The `image` plot type is the
+  exception: it renders a continuous per-cell map but has NO color scale, and
+  one cannot be scripted onto it (live-verified). So do NOT reach for `image` to
+  get a smooth/continuous map — use a `heatmap` and raise its level count with
+  `colormap(levels=64)` (a default heatmap shows ~8 bands; `levels` smooths it
+  to a continuous look while KEEPING the colorbar). That gives matplotlib-style
+  continuous-map-plus-colorbar in a single Origin graph — no PPT compositing.**
+  To match the rest of the
   figure (figA-style bold Arial), drive the `Spectrum1` object via
   `run_labtalk`. **The numeric labels only honour `bold`/`font` after you turn
   off auto-display first:**

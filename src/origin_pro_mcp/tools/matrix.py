@@ -28,14 +28,18 @@ _MATRIX_PLOT_TYPES = {
 }
 # Surface is OpenGL and must own its graph window.
 _MATRIX_OWN_GRAPH = {"surface"}
-# Each plot type is created from its Origin system template so it carries a
-# data-linked color scale by default (the skill requires a labeled scale on
-# every colormap plot). Verified live on Origin 2020.
+# The colormapped types (surface/contour/heatmap) come from an Origin system
+# template that carries a data-linked color scale (colorbar) by default. The
+# "image" plot (type 220) is the exception: it renders a CONTINUOUS per-cell map
+# (layer.cmap.numColors == 256) but has NO color scale, and one cannot be
+# scripted onto it (every layer.colorscale.* / Colorscale.visible path no-ops —
+# live-probed 2026-07-11). For a continuous map that STILL keeps a colorbar, use
+# a heatmap + colormap(levels=64) — NOT an image plot. Verified live (Origin 2020).
 _MATRIX_TEMPLATES = {
     "surface": "glcmap",   # OpenGL Z-colored surface + color scale
     "contour": "CONTOUR",  # filled contour + color scale
     "heatmap": "HeatMap",  # cell heatmap + color scale
-    "image": "image",      # image plot + color scale
+    "image": "image",      # image plot — continuous, NO color scale
 }
 
 # Origin stores a missing/empty cell as either a LARGE sentinel (~1.2e308) or
@@ -278,7 +282,12 @@ def create_matrix_plot(
 
     Args:
         matrix_book: Matrix book name (see create_matrix / worksheet_to_matrix)
-        plot_type: surface (3D), contour, heatmap, or image
+        plot_type: surface (3D), contour, heatmap, or image. surface/contour/
+                 heatmap carry a color scale (colorbar); "image" is a continuous
+                 per-cell map with NO colorbar (Origin cannot script one on). For
+                 a continuous map that KEEPS a colorbar, use heatmap + colormap(
+                 levels=64), not image (a default heatmap shows ~8 bands; levels
+                 smooths it while retaining the color scale).
         graph_name: Optional name for the new graph
         z_label: Optional Z label with units (e.g. "Intensity (a.u.)"); sets
                  the matrix long name, which drives both the Z-axis title
@@ -302,9 +311,10 @@ def create_matrix_plot(
 
     tmpl = _MATRIX_TEMPLATES[safe_type]
     # Surface is an OpenGL Z-colored mesh (no 2D plot id); its colormap comes
-    # from the glcmap template. The 2D types (contour/heatmap/image) take their
-    # plot id plus the matching template, which supplies the data-linked color
-    # scale. Activate the matrix first so plotm spawns a fresh graph window.
+    # from the glcmap template. The 2D types take their plot id plus the matching
+    # template; contour/heatmap supply a data-linked color scale, but "image"
+    # does not (continuous map, no colorbar — see _MATRIX_TEMPLATES). Activate
+    # the matrix first so plotm spawns a fresh graph window.
     plot_clause = "" if safe_type in _MATRIX_OWN_GRAPH else f"plot:={pid} "
     execute_labtalk(f"win -a {safe_book};")
     before = set(graph_names())
