@@ -17,6 +17,7 @@ def test_create_worksheet_returns_parseable_name(fake_origin):
         "requested_name": "NewBook",
         "renamed": False,
         "sheet": "Sheet1",
+        "added_to_existing_book": False,
     }
 
 
@@ -29,6 +30,30 @@ def test_create_worksheet_reports_rename(fake_origin):
     assert out["name"] == "NewBook2"
     assert out["requested_name"] == "NewBook"
     assert out["renamed"] is True
+
+
+def test_create_worksheet_adds_sheet_to_existing_book(fake_origin):
+    from origin_pro_mcp.tools.worksheet import create_worksheet
+
+    # fake_origin.books already has "Book1" with "Sheet1".
+    out = json.loads(create_worksheet("Book1", "Sheet2"))
+    assert out == {
+        "name": "Book1",
+        "requested_name": "Book1",
+        "renamed": False,
+        "sheet": "Sheet2",
+        "added_to_existing_book": True,
+    }
+    assert any(
+        s.startswith('newsheet name:="Sheet2"') for s in fake_origin.executed
+    )
+
+
+def test_create_worksheet_existing_sheet_raises(fake_origin):
+    from origin_pro_mcp.tools.worksheet import create_worksheet
+
+    with pytest.raises(ValueError, match="already has a sheet"):
+        create_worksheet("Book1", "Sheet1")
 
 
 def test_set_column_formula_blocks_injection(fake_origin):

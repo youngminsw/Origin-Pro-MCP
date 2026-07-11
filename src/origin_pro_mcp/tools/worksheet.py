@@ -30,20 +30,51 @@ from ..labtalk_safe import (
 
 @mcp.tool()
 def create_worksheet(book_name: str, sheet_name: str = "Sheet1") -> str:
-    """Create a new workbook with a worksheet in Origin.
+    """Create a worksheet in Origin: a new workbook, or a new sheet added to
+    an EXISTING workbook of the given name (never a second, auto-renamed
+    workbook — Origin's ``CreatePage`` on a taken name silently uniquifies
+    it, which used to leave callers with two books instead of one).
 
     Args:
-        book_name: Name for the new workbook
+        book_name: Workbook name. If a workbook by this name is already
+            open, the sheet is added to it instead of creating a new book.
         sheet_name: Name for the sheet (default: Sheet1)
 
     Returns:
         JSON object: {"name": <actual workbook name>, "requested_name":
-        <book_name>, "renamed": <bool, true if Origin uniquified the name>,
-        "sheet": <sheet name>}
+        <book_name>, "renamed": <bool, true if Origin uniquified the name;
+        always false when added_to_existing_book is true>, "sheet": <sheet
+        name>, "added_to_existing_book": <bool>}
+
+    Raises:
+        ValueError: if book_name already has a sheet named sheet_name.
     """
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
     safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
+
+    if safe_book_name in workbook_names():
+        existing_page = _find_workbook_page(o, safe_book_name)
+        if safe_sheet_name in _sheet_names(o, safe_book_name, existing_page):
+            msg = (
+                f"Workbook '{safe_book_name}' already has a sheet named "
+                f"'{safe_sheet_name}'. Use list_worksheets to see existing sheets."
+            )
+            raise ValueError(msg)
+        activate_window(safe_book_name, "book_name")
+        if not execute_labtalk(
+            f'newsheet name:={labtalk_string(safe_sheet_name, "sheet_name")} cols:=2;'
+        ):
+            msg = f"Origin could not add sheet '{safe_sheet_name}' to workbook '{safe_book_name}'."
+            raise ValueError(msg)
+        return json.dumps({
+            "name": safe_book_name,
+            "requested_name": safe_book_name,
+            "renamed": False,
+            "sheet": safe_sheet_name,
+            "added_to_existing_book": True,
+        })
+
     name = o.CreatePage(2, safe_book_name, "origin")
     if safe_sheet_name != "Sheet1":
         execute_labtalk(f'page.active$ = "Sheet1"; wks.name$ = {labtalk_string(safe_sheet_name, "sheet_name")};')
@@ -52,6 +83,7 @@ def create_worksheet(book_name: str, sheet_name: str = "Sheet1") -> str:
         "requested_name": safe_book_name,
         "renamed": name != safe_book_name,
         "sheet": safe_sheet_name,
+        "added_to_existing_book": False,
     })
 
 @mcp.tool()
@@ -273,6 +305,23 @@ def _import_csv_to_worksheet_impl(
         "sparklines_suppressed": sparklines_suppressed,
         "sparklines_deleted": sparklines_deleted,
     })
+
+def _find_workbook_page(o, book_name: str):
+    """The WorksheetPages COM item for book_name, or None if not open."""
+    pages = o.WorksheetPages
+    try:
+        count = pages.Count
+    except Exception:
+        count = 0
+    for i in range(count):
+        try:
+            page = pages.Item(i)
+            if page.Name == book_name:
+                return page
+        except Exception:
+            continue
+    return None
+
 
 def _sheet_names(o, book_name: str, page=None) -> list:
     """Sheet names of a workbook: the shared crash-safe LabTalk enumeration
