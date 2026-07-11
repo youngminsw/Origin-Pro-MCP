@@ -78,7 +78,7 @@ def test_import_data_excel_returns_json_name(fake_origin, tmp_path):
 
 def test_import_data_csv_sparklines_default_deletes_new_graph_windows(fake_origin, tmp_path, monkeypatch):
     from origin_pro_mcp.tools.worksheet import import_data
-    from tests.fakes import FakeGraph
+    from fakes import FakeGraph
 
     f = tmp_path / "data.csv"
     f.write_text("1,2\n")
@@ -105,7 +105,7 @@ def test_import_data_csv_sparklines_default_deletes_new_graph_windows(fake_origi
 
 def test_import_data_csv_sparklines_true_skips_cleanup(fake_origin, tmp_path, monkeypatch):
     from origin_pro_mcp.tools.worksheet import import_data
-    from tests.fakes import FakeGraph
+    from fakes import FakeGraph
 
     f = tmp_path / "data.csv"
     f.write_text("1,2\n")
