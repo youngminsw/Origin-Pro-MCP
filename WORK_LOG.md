@@ -1,5 +1,36 @@
 # Work Log
 
+## 2026-07-11 — whole-product review Round A (correctness) (agent: round-a)
+
+Scope: the 12 correctness items assigned from `docs/REVIEW-2026-07-11-whole-product.md`.
+Base = b4e9465 (v0.2.2). One commit per item/group, TDD, ruff-clean on touched
+files, live-verified where the item required it. Did NOT push. Live runs used an
+isolated `DispatchEx("Origin.Application")` fixture (never ApplicationSI),
+`Exit()` in teardown; WSL tree rsynced into `C:\Users\swym4\opm_dev` (the
+`C:\Users\swym4\Origin-Pro-MCP` clone was never touched).
+
+| Item | Commit | What / how verified |
+|---|---|---|
+| 1 (P8 fit line) | `df1ed32` | fitting.py fit-line `-c`/`-w` split into two `set` calls + comment. Live: item-22/errbar & existing fit paths render styled. |
+| 27 (P0 label drop) | `12d7d81` | apply_publication_style routes xb/yl label writes through `_set_axis_title_verified` (activate+write+read `xb/yl.text$` back+settle-retry); return only claims labels when the read-back contains them, else WARNs. Fakes: verified/unverified both. |
+| 2 (ws placeholder 0.0) | `30b9adf` | set_worksheet_data checks activation + each `col(c)[r]=0/0` return, raises naming the exact cells still holding the 0.0 placeholder. Fake: injected per-cell failure. Live round-trip already covered by `test_set_worksheet_data_null_becomes_missing_value`. |
+| 3 (wrong-book import) | `1523f4b` | import_data captures `CreatePage`'s returned uniquified name and activates THAT. Fake: taken name -> import lands in the new book. |
+| 5 (matrix null/NaN) | `5805e2b` | Live-probed PutMatrix accepts NaN -> stores `-1.23456789e-300`. set_matrix_data accepts null/NaN; fixed get_matrix_data's sentinel test (missed the small sentinel). Live round-trip PASSED. |
+| 22 (error bars) | `8cc537d` | **FIXED WITH ROUTE.** Live root cause: missing `settle_new_plots` after the plotxy -> designation + `set -o` raced the new plot and no-op'd. Added settle + read-back verify (col.type==3, error plot present, no stray data curve) + stray rollback + fail-honest raise. Live PASSED; export shows real whiskers identical to the y_error_col route. ungroup_plots' "re-add with set_error_bars" advice is now correct, left as-is. |
+| 23/24 (colormap) | `c9f3481` | Live-probed: no cmap state distinguishes a palette change; `load()` lies on a bogus name. Reject unknown palettes up front (bundled dir + Origin `Palettes/` via `system.path.program$`); z-range reads `layer.cmap.zmin/zmax` back and raises on mismatch. Live: bogus raises, real applies, z-range reads back, line-graph z-range rejected. |
+| 25 (ungroup rollback) | `54a967e` | Counts rebuilt vs removed: raises if 0 rebuild, PARTIAL (naming missing series) if some fail; success only when all rebuild. Fakes: 0-rebuild raise + partial. Success path live-covered by existing reload test. |
+| 26 (verify batch) | `ccd5483` | set_layer_geometry -> rebind-safe path + loose read-back; apply_publication_style raises on frame/tick failures, notes cosmetic; manage_columns props/add + (sort already) check returns; create_matrix reads `wks.nrows/ncols` back. Live: geometry + create_matrix no false-raise. |
+| 12/28 (font bold, peaks) | `161ff15` | set_graph_font tick labels honor bold=False; tick-size rule documented. find_peaks clamps local_points to `(n-2)//2` (live-probed: 5 fails on 11-pt Gaussian, 4 works), raises <3 points. Live 11-pt Gaussian PASSED. |
+| 4 (rebind decision) | `08b8232` | **DECISION: writes ARE reliable on loaded .opju** (probe: xb/yl verified True after activate+settle+read-back). Wired read-back gating: set_graph_font confirms axis-title/legend/title fsize; set_legend confirms the legend is readable, else WARN. Live: both succeed on a reloaded .opju (no false alarm). |
+| 16 (sparklines) | `0a62646` | **ANSWER: the key was WRONG.** `options.Miscellaneous.Sparklines:=0` is rejected (12-col CSV -> 12 graph windows); correct key `options.Sparklines:=0` -> 0 windows. Also made sparklines_suppressed = (option ran AND deleted==0) so it can't contradict sparklines_deleted (F12). Live PASSED. Dialog-watchdog flag left out of scope. |
+
+WSL fake suite (`/tmp/opm_venv/bin/python3.11 -m pytest -q`): **620 passed, 38
+skipped** at HEAD `0a62646` (baseline 596 passed, 30 skipped). Ruff clean on
+every touched file (removed 3 pre-existing dead imports in touched files:
+matrix.py `labtalk_string`, test_typed_style.py `FakeColumn`, fakes.py
+`threading`). Full live suite counts + zero-leftover-Origin recorded below after
+the final live run.
+
 ## 2026-07-11 — g2-g8 sweep confirmed-fixes round (agent: impl-g2g8)
 
 Scope: the three CONFIRMED items assigned from the g2-g8 sweep ("NEW ISSUES
