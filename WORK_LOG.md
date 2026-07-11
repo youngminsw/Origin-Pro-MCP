@@ -1,5 +1,131 @@
 # Work Log
 
+## 2026-07-11 — whole-product review Round C (multi-peak fitting, item 7) (agent: round-c)
+
+Scope: the single biggest analysis gap — multi-peak fitting / deconvolution
+(XRD/XPS/Raman: N overlapping gauss/lorentz/voigt peaks fit simultaneously).
+DESIGN-FIRST: no tool code until the route was live-proven. Base = 6a7ad9e
+(Rounds A+B merged). Live probes: isolated `DispatchEx("Origin.Application")`,
+`Exit()` in finally, WSL tree rsynced into `C:\Users\swym4\opm_dev` (the
+`Origin-Pro-MCP` clone was never touched). Receipts: `C:\Users\swym4\probe_out\roundc\`.
+
+### Phase 1 — route probe (live, Origin Pro 2020)
+
+**VERDICT: the NLFit REPLICA route works for gauss/lorentz/voigt — and it drops
+straight into the existing `nlbegin/nlfit/nlend` + result-tree plumbing.** The
+Peak Analyzer `fitpeaks` X-Function was the fallback candidate (only
+gauss/lorentz, results in a report tree not the nltree); not needed.
+
+Working script (probe `probe_multipeak.py`, 3-Gaussian synthetic: y0=0, peaks
+(xc,σ,A)=(20,4,10),(35,3,15),(50,5,8), x 0..70 @0.35 = 201 pts + noise):
+```
+nlbegin iy:=[MPK]Sheet1!(1,2) func:=gauss replica:=2 nltree:=tt;   // replica = peaks-1
+tt.xc = 20; tt.xc__2 = 35; tt.xc__3 = 50;    // optional initial centres (peak1 = unsuffixed)
+nlfit;
+// read BEFORE nlend: tt.xc / tt.xc__2 / tt.xc__3, tt.w[/__k], tt.A[/__k],
+//                    tt.e_xc[/__k], shared tt.y0, tt.cod / tt.chisqr / tt.dof
+nlend output:=1;   // only when a fit curve is wanted
+```
+Recovered centres: **xc = 20.00 / 35.00 / 50.01** vs ground truth 20/35/50.
+
+Facts established (all live):
+- **`replica:=N` fits N+1 peaks** (N = *additional* copies). For 3 peaks use
+  `replica:=2`. `replica:=3` on 3-peak data over-parametrised → degenerate
+  (cod=0, params frozen at init) — so the tool computes `replica = peaks-1`.
+- **Node naming:** peak 1 = unsuffixed (`xc`,`w`,`A`); peaks 2..N = `xc__2`,
+  `w__2`, `A__2`, … (DOUBLE underscore). Std errors = `e_` prefix
+  (`e_xc__2`). Confirmed for gauss/lorentz (per-peak `xc/w/A`) and **voigt**
+  (per-peak `xc/A/wG/wL`). `y0` is a **single SHARED baseline** (reading
+  `y0__2` returns the same value). Stats `cod`/`chisqr`/`dof` unchanged.
+- **Origin's parameterisation is unchanged from single-peak:** gauss `w`=2σ,
+  `A`=area (recovered w=8/6/10 = 2×σ, exactly), so a multi-peak result reports
+  the SAME node meanings the existing single-peak path already returns — no new
+  caller surprise.
+- **Stale-read hazard:** reading a node BEYOND the last real peak (e.g. `xc__4`
+  when 3 peaks) silently returns the previous `__pr` value, not an error — so
+  reads must be strictly bounded to `peaks`. A genuinely non-converged fit
+  freezes params at their init values and reads std errors back as the
+  missing-value sentinel `-1.23456789e-300` with **`cod=0.0`** (probe
+  `probe_multipeak3.py`, flat-line data + absurd centres: `nlfit` still
+  returned TRUE — so nlfit's return alone is NOT a convergence proof for
+  multi-peak; `cod<=0` is the honest guard).
+- **Auto-init converges too:** the same 3-peak fit with NO supplied centres
+  recovered identical params — Origin's built-in replica initialisation is good
+  on well-separated peaks, so `peak_centers` is optional (seed only when the
+  caller supplies them; no internal find_peaks dependency needed).
+- **Fit-curve sheet (for plot_on_graph):** `nlend output:=1` makes
+  **`FitNLCurve1`** (contains "Curve" → the existing sheet-search still finds
+  it). Its columns, found by LongName: `Fit Peak 1`, `Fit Peak 2`, … `Fit Peak
+  N` (per-peak components) then **`Cumulative Fit Peak`** (the full envelope) —
+  for N=3 that's cols 2,3,4 (components) and col 5 (cumulative). The plot path
+  must target the cumulative column by LongName (NOT col 2, which is only
+  component 1), and may additionally draw the component columns. `plotxy` of the
+  cumulative column onto a graph succeeded live.
+
+### Phase 2 — design
+
+**NO NEW TOOL — extend `curve_fit`.** Two new params:
+- `peaks: int = 1` — >1 activates multi-peak (replica) fitting; only for
+  gauss/lorentz/voigt.
+- `peak_centers: str = ""` — "x1,x2,…" initial centre guesses. When given, its
+  count must equal `peaks`. When empty, Origin's replica auto-init is used.
+
+Validation (fail-honest, BEFORE Origin):
+- `peaks < 1` → ValueError.
+- `peaks > 1` and function ∉ {gauss,lorentz,voigt} → ValueError.
+- `peak_centers` supplied and count ≠ `peaks` → ValueError.
+- `peak_centers` supplied with `peaks == 1` → ValueError (avoid a silent no-op).
+- `peaks == 1` leaves the existing single-peak path and its JSON UNCHANGED.
+
+Route (`peaks > 1`): `nlbegin … func:=<fdf> replica:=peaks-1 nltree:=__mcpfit`;
+compose with the Round-B x_min/x_max row-subrange (restrict THEN deconvolve);
+set `__mcpfit.xc[/__k]` from `peak_centers` when supplied; `nlfit`; raise on
+`nlfit`==False OR on `cod` unreadable/≤0 (non-convergence, message suggests
+supplying/adjusting `peak_centers`).
+
+Return JSON (`peaks > 1`):
+```
+{ "function":"gauss", "peaks":3,
+  "statistics": {r_squared, sum_sq_residuals, reduced_chi_sq, dof},
+  "baseline": {"y0": {value, std_error}},          // the shared offset
+  "parameters": {"peak_1":{"xc":{value,std_error},"w":{…},"A":{…}},
+                 "peak_2":{…}, "peak_3":{…}} }
+```
+Per-peak keys come from `FITTING_FUNCTIONS[fn][1][1:]` (index 0 is the shared
+`y0`): gauss/lorentz → xc/w/A, voigt → xc/A/wG/wL. Reads are sentinel-filtered
+(`-1.23e-300` → omitted, like the "power" unreadable precedent); reads bounded
+to exactly `peaks`. When `plot_on_graph` is set: draw the `Cumulative Fit Peak`
+column (bold brick-red, P8 one-flag-per-`set`) as the fit line and the `Fit Peak
+k` components as thin best-effort lines; report which were drawn.
+
+### Phase 3 — implement + verify
+
+One feature, `curve_fit` extended in place (no new tool). The `peaks>1` branch
+returns early, so the single-peak path and its JSON are byte-for-byte unchanged.
+
+| # | Commit | What / verification |
+|---|---|---|
+| impl | `<c1>` | `fitting.py`: `peaks`/`peak_centers` params; validation (peaks<1, unsupported func, centre-count/`peaks==1` misuse) raises before Origin; replica route + optional centre seeding; `cod<=0` non-convergence guard; sentinel-filtered per-peak reader; `_plot_multipeak_fit` (cumulative by LongName + best-effort components). 11 fake tests in `test_fitting.py` (replica count, centre seeding, auto-init, return shape, x-range composition, every raise, nlfit-fail, cod-fail). |
+| live | `<c2>` | 5 live tests in `test_live_fitting.py`. |
+
+Live (Windows, isolated DispatchEx, opm_dev rsync — clone untouched), all PASSED:
+- **3-Gaussian recovery:** `peaks=3` recovered xc within 0.5 of 20/35/50, R²>0.99,
+  every peak reports w/A + xc std_error.
+- **peaks=2 lorentz + supplied centres** (`peak_centers="20,40"`): recovered 20/40.
+- **peaks=2 + x_min/x_max=[10,42]:** restricts (drops the xc=50 peak) then
+  deconvolves the two in-range peaks → 20/35.
+- **non-convergence:** flat data + centres at 1000/2000/3000 → `cod<=0` guard
+  raises "did not converge" (nlfit itself returned True — guard is what catches it).
+- **plot:** `plot_on_graph` → `fit_curve.components_drawn == 3`, cumulative column
+  drawn, graph exports a non-empty PNG.
+
+WSL fake suite (`/tmp/opm_venv/bin/python3.11 -m pytest -q`): **660 passed, 54
+skipped** (baseline 649/54; +11 fake tests). Ruff clean on `fitting.py`,
+`test_fitting.py`, `test_live_fitting.py`. Live fitting file: **7 passed in 60s**
+(2 prior x-range + 5 new). Full live suite counts recorded below. Zero leftover
+Origin: 0 `Origin64.exe` before and after every run (all isolated DispatchEx
+`Exit()`'d). Did NOT push.
+
 ## 2026-07-11 — whole-product review Round B (capability) (agent: round-b)
 
 Scope: the 9 capability items assigned from `docs/REVIEW-2026-07-11-whole-product.md`
