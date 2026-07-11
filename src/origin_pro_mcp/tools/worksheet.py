@@ -505,7 +505,9 @@ def _add_columns_impl(book_name: str, sheet_name: str, count: int = 1) -> str:
     activate_window(safe_book, "book_name")
     execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
     for _ in range(safe_count):
-        execute_labtalk("wks.addCol();")
+        if not execute_labtalk("wks.addCol();"):
+            msg = f"Origin could not add a column to [{safe_book}]{safe_sheet}."
+            raise ValueError(msg)
     return f"Added {safe_count} column(s) to [{safe_book}]{safe_sheet}"
 
 
@@ -569,18 +571,27 @@ def _set_column_properties_impl(
     activate_window(safe_book, "book_name")
     execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
     changed = []
+    ref = f"[{safe_book}]{safe_sheet}"
     if long_name:
-        execute_labtalk(f'wks.col{safe_col}.lname$ = {labtalk_text(long_name, "long_name")};')
+        if not execute_labtalk(f'wks.col{safe_col}.lname$ = {labtalk_text(long_name, "long_name")};'):
+            msg = f"Origin could not set the long name of column {safe_col} of {ref}."
+            raise ValueError(msg)
         changed.append("long_name")
     if units:
-        execute_labtalk(f'wks.col{safe_col}.unit$ = {labtalk_text(units, "units")};')
+        if not execute_labtalk(f'wks.col{safe_col}.unit$ = {labtalk_text(units, "units")};'):
+            msg = f"Origin could not set the units of column {safe_col} of {ref}."
+            raise ValueError(msg)
         changed.append("units")
     if comment:
-        execute_labtalk(f'wks.col{safe_col}.comment$ = {labtalk_text(comment, "comment")};')
+        if not execute_labtalk(f'wks.col{safe_col}.comment$ = {labtalk_text(comment, "comment")};'):
+            msg = f"Origin could not set the comment of column {safe_col} of {ref}."
+            raise ValueError(msg)
         changed.append("comment")
     if designation:
         safe_des = labtalk_choice(designation.lower(), _DESIGNATIONS, "designation")
-        execute_labtalk(f"wks.col{safe_col}.type = {_DESIGNATIONS[safe_des]};")
+        if not execute_labtalk(f"wks.col{safe_col}.type = {_DESIGNATIONS[safe_des]};"):
+            msg = f"Origin could not set the designation of column {safe_col} of {ref}."
+            raise ValueError(msg)
         changed.append("designation")
     if not changed:
         msg = "Provide at least one of long_name, units, comment, or designation."

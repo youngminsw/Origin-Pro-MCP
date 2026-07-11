@@ -546,9 +546,17 @@ def apply_publication_style(
         if not _set_axis_title_verified(safe_graph_name, "yl", y_label):
             label_unverified.append("y")
 
-    # 2. Tick labels — bold, Arial 22pt
-    graph_layer_execute(safe_graph_name, 'layer.x.label.pt = 22; layer.y.label.pt = 22;')
-    graph_layer_execute(safe_graph_name, 'layer.x.label.bold = 1; layer.y.label.bold = 1;')
+    # Step returns are now checked: a FRAME or TICK failure raises (those are
+    # structural — a "publication style" without a frame is misleading), while a
+    # purely cosmetic failure (tick-label font, grid removal) is noted in the
+    # return rather than aborting the whole call.
+    cosmetic_notes: list[str] = []
+
+    # 2. Tick labels — bold, Arial 22pt (cosmetic)
+    if not graph_layer_execute(safe_graph_name, 'layer.x.label.pt = 22; layer.y.label.pt = 22;'):
+        cosmetic_notes.append("tick-label size")
+    if not graph_layer_execute(safe_graph_name, 'layer.x.label.bold = 1; layer.y.label.bold = 1;'):
+        cosmetic_notes.append("tick-label bold")
 
     # 3. Axis range — TIGHT to the data by default (no empty gap before the
     # first or after the last point; if the data starts at 0 the axis starts
@@ -559,24 +567,29 @@ def apply_publication_style(
     if range_cmds:
         graph_layer_execute(safe_graph_name, " ".join(range_cmds))
 
-    # 4. Ticks — inward, minor ticks on, proper lengths
-    graph_layer_execute(safe_graph_name,
+    # 4. Ticks — inward, minor ticks on, proper lengths (structural → raise)
+    if not graph_layer_execute(safe_graph_name,
         "layer.x.ticks = 1; layer.y.ticks = 1; "
         "layer.x.minor = 1; layer.y.minor = 1; "
         "layer.x.majorLen = 8; layer.y.majorLen = 8;"
-    )
+    ):
+        msg = f"Could not set inward ticks on {safe_graph_name}."
+        raise ValueError(msg)
 
-    # 5. Frame — closed (4 sides), thick
-    graph_layer_execute(safe_graph_name,
+    # 5. Frame — closed (4 sides), thick (structural → raise)
+    if not graph_layer_execute(safe_graph_name,
         "layer.x.opposite = 1; layer.y.opposite = 1; "
         "layer.x.thickness = 2; layer.y.thickness = 2;"
-    )
+    ):
+        msg = f"Could not close/thicken the frame on {safe_graph_name}."
+        raise ValueError(msg)
 
-    # 6. Remove grid lines
-    graph_layer_execute(safe_graph_name,
+    # 6. Remove grid lines (cosmetic)
+    if not graph_layer_execute(safe_graph_name,
         "layer.x.grid = 0; layer.y.grid = 0; "
         "layer.x.minorGrid = 0; layer.y.minorGrid = 0;"
-    )
+    ):
+        cosmetic_notes.append("grid removal")
 
     # 7. Auto-style each data plot with a muted pastel palette + distinct
     # symbols. Error-bar plots only get the color of their data plot —
@@ -675,11 +688,15 @@ def apply_publication_style(
         )
     else:
         labels_phrase = "Arial bold labels (verified)"
+    cosmetic_note = (
+        f"; NOTE: these cosmetic steps did not take: {', '.join(cosmetic_notes)}"
+        if cosmetic_notes else ""
+    )
     return (
         f"Publication style applied to {safe_graph_name}: "
         f"{data_index} data plots styled (pastel palette, {_PUB_LINE_WIDTH_PT} pt lines), "
         f"{labels_phrase}, inward ticks, closed frame, no grid, "
-        f"borderless bold legend ({placement}){moved_out}{grouping_note}"
+        f"borderless bold legend ({placement}){moved_out}{grouping_note}{cosmetic_note}"
     )
 
 

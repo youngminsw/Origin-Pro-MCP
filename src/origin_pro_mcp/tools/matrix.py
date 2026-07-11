@@ -87,7 +87,24 @@ def create_matrix(book_name: str, rows: int = 10, cols: int = 10) -> str:
     safe_rows = positive_int(rows, "rows")
     safe_cols = positive_int(cols, "cols")
     name = _create_matrix_book(safe_book)
-    execute_labtalk(f"win -a {name}; mdim cols:={safe_cols} rows:={safe_rows};")
+    if not execute_labtalk(f"win -a {name}; mdim cols:={safe_cols} rows:={safe_rows};"):
+        msg = f"Origin could not size matrix '{name}' to {safe_cols}x{safe_rows}."
+        raise ValueError(msg)
+    # Verify mdim took by reading the dims back (wks.nrows/ncols on the active
+    # matrix — live-confirmed the correct read). Best-effort: skip when the
+    # read is unavailable (0, e.g. test doubles) so this never false-alarms.
+    o = get_origin()
+    o.Execute(f"win -a {name};")
+    got_rows = o.LTVar("wks.nrows")
+    got_cols = o.LTVar("wks.ncols")
+    if (got_rows and int(round(got_rows)) != safe_rows) or (
+        got_cols and int(round(got_cols)) != safe_cols
+    ):
+        msg = (
+            f"Matrix '{name}' size did not take: requested {safe_cols}x{safe_rows}, "
+            f"read back {int(round(got_cols))}x{int(round(got_rows))}."
+        )
+        raise ValueError(msg)
     return json.dumps({
         "name": name,
         "requested_name": safe_book,

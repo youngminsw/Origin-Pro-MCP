@@ -74,6 +74,10 @@ class FakePlot:
 # (verify_layer_value).
 _LAYER_WRITE_RE = re.compile(r"layer\.([xy]2?)\.(from|to|thickness)\s*=\s*(-?[0-9.eE+]+)")
 _LAYER_READ_RE = re.compile(r"^\s*(__\w+)\s*=\s*layer\.([xy]2?)\.(from|to|thickness)\s*;?\s*$")
+# Panel geometry (layer.left/top/width/height) writes/reads, so the fake can
+# model set_layer_geometry's read-back verification the same way.
+_LAYER_GEO_WRITE_RE = re.compile(r"layer\.(left|top|width|height)\s*=\s*(-?[0-9.eE+]+)")
+_LAYER_GEO_READ_RE = re.compile(r"^\s*(__\w+)\s*=\s*layer\.(left|top|width|height)\s*;?\s*$")
 
 
 class FakeLayer:
@@ -103,14 +107,21 @@ class FakeLayer:
         self.executed.append(script)
         o = self._origin
         read = _LAYER_READ_RE.match(script)
+        geo_read = _LAYER_GEO_READ_RE.match(script)
         if read is not None and o is not None:
             var, axis, bound = read.group(1), read.group(2), read.group(3)
             o.lt_vars[var] = self._vals.get((axis, bound), 0.0)
+        elif geo_read is not None and o is not None:
+            var, prop = geo_read.group(1), geo_read.group(2)
+            o.lt_vars[var] = self._vals.get(("geo", prop), 0.0)
         else:
             frozen = self._graph is not None and self._graph.frozen
             for w in _LAYER_WRITE_RE.finditer(script):
                 if not frozen:  # a frozen layer silently ignores the write
                     self._vals[(w.group(1), w.group(2))] = float(w.group(3))
+            for w in _LAYER_GEO_WRITE_RE.finditer(script):
+                if not frozen:
+                    self._vals[("geo", w.group(1))] = float(w.group(2))
         if o is None:
             return True
         o.executed.append(script)
@@ -272,8 +283,6 @@ class ThreadGuardedFake:
     """
 
     def __init__(self, owner_thread_id: int):
-        import threading
-
         object.__setattr__(self, "_owner", owner_thread_id)
         object.__setattr__(self, "touched", False)
 

@@ -151,6 +151,26 @@ def test_set_column_properties_sets_units_singular(fake_origin):
     assert any("wks.col1.lname$" in s for s in fake_origin.executed)
 
 
+def test_manage_columns_properties_raises_on_failure(fake_origin):
+    """Item 26c: a failed column-property write raises instead of a false
+    success."""
+    from origin_pro_mcp.tools.worksheet import manage_columns
+
+    fake_origin.execute_results["wks.col1.lname$"] = False
+    with pytest.raises(ValueError, match="long name of column 1"):
+        manage_columns("Book1", "Sheet1", op="properties", col=1, long_name="Time")
+
+
+def test_manage_columns_add_raises_on_failure(fake_origin):
+    """Item 26c: a failed wks.addCol() raises instead of reporting columns
+    added."""
+    from origin_pro_mcp.tools.worksheet import manage_columns
+
+    fake_origin.execute_results["wks.addCol()"] = False
+    with pytest.raises(ValueError, match="could not add a column"):
+        manage_columns("Book1", "Sheet1", op="add", count=1)
+
+
 def test_transpose_unknown_sheet(fake_origin):
     from origin_pro_mcp.tools.worksheet import transpose_worksheet
 

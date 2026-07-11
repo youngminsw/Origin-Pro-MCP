@@ -390,6 +390,39 @@ def test_set_layer_geometry_requires_an_argument(fake_origin):
         set_layer_geometry("Graph1")
 
 
+def test_set_layer_geometry_raises_on_frozen_graph(fake_origin):
+    """Item 26a: routed through the rebind-safe path with a read-back — a frozen
+    (loaded-.opju) layer silently drops the write, so this must raise instead of
+    reporting success."""
+    from fakes import FakeGraph
+    from origin_pro_mcp.tools.graph import set_layer_geometry
+
+    fake_origin.graphs = [FakeGraph("F", frozen=True)]
+    with pytest.raises(ValueError, match="did not take"):
+        set_layer_geometry("F", left=15, top=12, width=75, height=75)
+
+
+def test_apply_publication_style_raises_when_frame_fails(fake_origin):
+    """Item 26b: a FRAME failure is structural — apply_publication_style must
+    raise, not silently omit the frame."""
+    from origin_pro_mcp.tools.style import apply_publication_style
+
+    fake_origin.execute_results["layer.x.opposite = 1; layer.y.opposite = 1;"] = False
+    with pytest.raises(ValueError, match="close/thicken the frame"):
+        apply_publication_style("Graph1")
+
+
+def test_create_matrix_raises_on_dim_mismatch(fake_origin):
+    """Item 26d: create_matrix reads wks dims back; a non-zero mismatch raises."""
+    from origin_pro_mcp.tools.matrix import create_matrix
+
+    fake_origin.LTStr = lambda name: "MX" if name == "page.name$" else ""
+    fake_origin.lt_vars["wks.nrows"] = 3.0  # asked for 10, got 3 -> mismatch
+    fake_origin.lt_vars["wks.ncols"] = 10.0
+    with pytest.raises(ValueError, match="did not take"):
+        create_matrix("MX", rows=10, cols=10)
+
+
 # --- setter execute-result checks (consistency with raise-on-failure) -------
 
 def test_set_graph_font_raises_on_execute_failure(fake_origin):

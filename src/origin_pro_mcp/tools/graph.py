@@ -27,6 +27,7 @@ from .style_helpers import (
     acquire_graph_layer,
     get_plot_info,
     graph_layer_execute,
+    read_layer_value,
     settle_new_plots,
     verify_layer_value,
 )
@@ -499,16 +500,31 @@ def set_layer_geometry(
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph)
-    activate_window(safe_graph, "graph_name")
     fields = {"left": left, "top": top, "width": width, "height": height}
     provided = {k: v for k, v in fields.items() if v is not None}
     if not provided:
         msg = "Provide at least one of left, top, width, or height."
         raise ValueError(msg)
-    cmds = " ".join(f"layer.{k} = {float(v)};" for k, v in provided.items())
-    if not execute_labtalk(cmds):
-        msg = f"Origin could not set the layer geometry of {safe_graph}."
-        raise ValueError(msg)
+    # Route each field through the fresh, activated layer handle
+    # (graph_layer_execute) — like the axis-range sibling — so it also lands on
+    # graphs loaded from a .opju, then READ IT BACK. Geometry rounds to page
+    # units (~0.5%), so a loose tolerance still catches a total no-op (the
+    # loaded-graph freeze) while tolerating that rounding.
+    for k, v in provided.items():
+        if not graph_layer_execute(safe_graph, f"layer.{k} = {float(v)};"):
+            msg = f"Origin could not set layer {k} of {safe_graph}."
+            raise ValueError(msg)
+        got = read_layer_value(safe_graph, f"layer.{k}")
+        if got is not None:
+            tol = max(1.0, abs(float(v)) * 0.05)
+            if abs(got - float(v)) > tol:
+                msg = (
+                    f"layer {k} did not take on {safe_graph} (set {v}, read back "
+                    f"{got}). The layer ignored the change — the graph was most "
+                    f"likely loaded from a .opju Origin freezes over COM; recreate "
+                    f"it in-session with create_graph / plotxy."
+                )
+                raise ValueError(msg)
     return f"Set layer geometry of {safe_graph}: {', '.join(provided)}."
 
 
