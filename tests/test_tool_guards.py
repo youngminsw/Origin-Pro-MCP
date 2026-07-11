@@ -430,6 +430,56 @@ def test_apply_publication_style_never_combines_flags_in_one_set_call(fake_origi
         assert flag_count <= 1, f"multiple flags in one `set` call: {cmd!r}"
 
 
+def _pub_graph_with_one_plot(fake_origin):
+    """A single-data-plot graph 'PB' so apply_publication_style reaches its
+    label-verification return (data_index > 0) instead of the no-plots early
+    return."""
+    fake_origin.books = [FakeBook("PB", sheets=[FakeSheet("Sheet1", columns=[
+        FakeColumn("A"), FakeColumn("B"),
+    ])])]
+    fake_origin.graphs = [FakeGraph("PB", plot_names=["PB_B"])]
+    fake_origin.lt_vars["__mcpk"] = 1  # PB_B reports as a symbol plot
+
+
+def test_apply_publication_style_labels_verified_when_readback_matches(fake_origin):
+    """Item 27: the label step now READS xb/yl.text$ back — when the read-back
+    contains the label words, the return says the labels are verified and the
+    write was actually issued."""
+    from origin_pro_mcp.tools.style import apply_publication_style
+
+    _pub_graph_with_one_plot(fake_origin)
+    fake_origin.LTStr = lambda name: {
+        "xb.text$": "\\b(Temperature (K))",
+        "yl.text$": "\\b(Signal (a.u.))",
+    }.get(name, "")
+
+    msg = apply_publication_style(
+        "PB", x_label="Temperature (K)", y_label="Signal (a.u.)"
+    )
+    assert "verified" in msg
+    assert "WARNING" not in msg
+    assert any(s.startswith("xb.text$") for s in fake_origin.executed)
+    assert any(s.startswith("yl.text$") for s in fake_origin.executed)
+
+
+def test_apply_publication_style_warns_when_label_readback_fails(fake_origin, monkeypatch):
+    """Item 27: when the title reads back as the %(?X) placeholder (the live
+    label-drop bug), the return must NOT claim the label was set — it warns."""
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda *_a, **_k: None)
+    from origin_pro_mcp.tools.style import apply_publication_style
+
+    _pub_graph_with_one_plot(fake_origin)
+    fake_origin.LTStr = lambda name: (
+        "%(?X)" if name in ("xb.text$", "yl.text$") else ""
+    )
+
+    msg = apply_publication_style("PB", x_label="Temperature (K)")
+    assert "WARNING" in msg
+    assert "could NOT be verified" in msg
+    assert "x-axis" in msg
+
+
 def test_delete_graph_closes_window(fake_origin):
     from origin_pro_mcp.tools.graph import delete_graph
 

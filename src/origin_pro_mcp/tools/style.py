@@ -1,4 +1,6 @@
 from ..app import mcp
+import time
+
 from ..origin_connection import (
     activate_window, execute_labtalk, get_lt_str, get_lt_var,
     require_graph,
@@ -139,6 +141,34 @@ def _tight_axis_cmds(
         if inc is not None:
             cmds.append(f"layer.{prefix}.inc = {inc};")
     return cmds
+
+
+def _set_axis_title_verified(
+    graph_name: str, obj: str, label_text: str, font_size: int = 28
+) -> bool:
+    """Write an axis-title text object (``xb`` bottom-X / ``yl`` left-Y), bold
+    Arial, then CONFIRM it landed by reading ``<obj>.text$`` back.
+
+    Origin's active-window text-object writes can silently hit the wrong window
+    or no-op on the new-page settle race — the exact bug that left
+    apply_publication_style's titles reading back as the ``%(?X)`` column-name
+    placeholder while the tool claimed "Arial bold labels" (usability agent,
+    3/3). LabTalk returns success either way, so success is gated on the
+    read-back actually containing the label words, with an activate + settle
+    retry. Returns True when verified, False otherwise (caller must NOT claim
+    the label was set)."""
+    safe = labtalk_string("\\b(" + label_text + ")", obj)
+    for attempt in range(3):
+        activate_window(graph_name, "graph_name")
+        execute_labtalk(
+            f'{obj}.text$ = {safe}; {obj}.fsize = {font_size}; {obj}.font$ = "Arial";'
+        )
+        got = get_lt_str(f"{obj}.text$") or ""
+        if label_text in got:
+            return True
+        if attempt < 2:
+            time.sleep(0.3)
+    return False
 
 
 @mcp.tool()
@@ -477,15 +507,20 @@ def apply_publication_style(
     activate_window(safe_graph_name, "graph_name")
     plot_infos = get_plot_info(safe_graph_name)
 
-    # 1. Axis titles — bold, Arial 28pt
+    # 1. Axis titles — bold, Arial 28pt. Written through the read-back-gated
+    # helper: the old bare active-window writes silently dropped the labels on
+    # the settle race (titles stayed the %(?X) column-name placeholder) while
+    # the return still claimed "Arial bold labels". label_unverified collects
+    # any axis whose title could not be confirmed so the return tells the truth.
+    label_unverified: list[str] = []
     if x_label:
         validate_text_escapes(x_label, "x_label")
-        x_title = labtalk_string("\\b(" + x_label + ")", "x_label")
-        execute_labtalk(f'xb.text$ = {x_title}; xb.fsize = 28; xb.font$ = "Arial";')
+        if not _set_axis_title_verified(safe_graph_name, "xb", x_label):
+            label_unverified.append("x")
     if y_label:
         validate_text_escapes(y_label, "y_label")
-        y_title = labtalk_string("\\b(" + y_label + ")", "y_label")
-        execute_labtalk(f'yl.text$ = {y_title}; yl.fsize = 28; yl.font$ = "Arial";')
+        if not _set_axis_title_verified(safe_graph_name, "yl", y_label):
+            label_unverified.append("y")
 
     # 2. Tick labels — bold, Arial 22pt
     graph_layer_execute(safe_graph_name, 'layer.x.label.pt = 22; layer.y.label.pt = 22;')
@@ -604,10 +639,22 @@ def apply_publication_style(
             "overridden by the group — call ungroup_plots first if the "
             "palette doesn't look right"
         )
+    requested_labels = [a for a, lbl in (("x", x_label), ("y", y_label)) if lbl]
+    if not requested_labels:
+        labels_phrase = "Arial bold labels"
+    elif label_unverified:
+        labels_phrase = (
+            f"Arial bold ticks (WARNING: the {', '.join(label_unverified)}-axis "
+            f"label(s) could NOT be verified — Origin read them back unchanged, "
+            f"so they were most likely dropped; set them again with "
+            f"axis(op='labels'))"
+        )
+    else:
+        labels_phrase = "Arial bold labels (verified)"
     return (
         f"Publication style applied to {safe_graph_name}: "
         f"{data_index} data plots styled (pastel palette, {_PUB_LINE_WIDTH_PT} pt lines), "
-        f"Arial bold labels, inward ticks, closed frame, no grid, "
+        f"{labels_phrase}, inward ticks, closed frame, no grid, "
         f"borderless bold legend ({placement}){moved_out}{grouping_note}"
     )
 
