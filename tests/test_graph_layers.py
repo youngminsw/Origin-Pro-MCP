@@ -13,6 +13,45 @@ def test_set_axis_scale_bad_scale(fake_origin):
         axis("Graph1", op="scale", axis="y", scale="logarithmic")
 
 
+# --- item 31a: create_graph(template=...) ---------------------------------
+
+def test_create_graph_template_not_found(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.graph import create_graph
+
+    missing = str(tmp_path / "nope.otpu")
+    with pytest.raises(ValueError, match="Template not found"):
+        create_graph("G", "Book1", "Sheet1", 1, 2, template=missing)
+
+
+def test_create_graph_template_rejects_xyz(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.graph import create_graph
+
+    tmpl = tmp_path / "t.otpu"
+    tmpl.write_bytes(b"x")
+    with pytest.raises(ValueError, match="2D XY plot types only"):
+        create_graph("G", "Book1", "Sheet1", 1, 2, z_col=3,
+                     plot_type="contour", template=str(tmpl))
+
+
+def test_create_graph_template_emits_template_route(fake_origin, tmp_path, monkeypatch):
+    import json
+
+    from origin_pro_mcp.tools import graph as G
+
+    monkeypatch.setattr(G, "settle_new_plots", lambda *a, **k: None)
+    tmpl = tmp_path / "styled.otpu"
+    tmpl.write_bytes(b"otpu")
+    fake_origin.executed.clear()
+    out = json.loads(
+        G.create_graph("G", "Book1", "Sheet1", 1, 2,
+                       plot_type="line", template=str(tmpl))
+    )
+    cmds = " ".join(fake_origin.executed)
+    assert "ogl:=<new template:=" in cmds
+    assert "styled.otpu" in cmds
+    assert out["template"] is not None
+
+
 def test_set_axis_scale_unknown_graph(fake_origin):
     from origin_pro_mcp.tools.graph import axis
 
@@ -193,6 +232,7 @@ def test_create_graph_returns_parseable_json(fake_origin):
         "requested_name": "MyGraph",
         "renamed": False,
         "plot_type": "scatter",
+        "template": None,
     }
 
 

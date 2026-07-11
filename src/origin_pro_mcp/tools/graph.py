@@ -101,7 +101,8 @@ def create_graph(
     plot_type: str = "scatter",
     y_error_col: int = 0,
     z_col: int = 0,
-    title: str = ""
+    title: str = "",
+    template: str = ""
 ) -> str:
     """Create a graph from worksheet data.
 
@@ -116,6 +117,11 @@ def create_graph(
         y_error_col: Optional Y error column (1-based, 0=none). XY plots only.
         z_col: Z column (1-based). REQUIRED for contour and 3d_scatter.
         title: Optional graph title
+        template: Optional path to a saved Origin graph template (.otpu/.otp,
+                  e.g. from save_graph_template). When given, the new graph is
+                  built FROM that template so it reproduces the saved styling
+                  (frame, fonts, line/symbol style, colors) with this data.
+                  2D XY plot types only (not contour/3d_scatter).
 
     Returns:
         JSON string: {"name": <actual graph name>, "requested_name": <name
@@ -132,6 +138,19 @@ def create_graph(
     safe_plot_type = labtalk_choice(plot_type, PLOT_TYPES, "plot_type")
     ptype = PLOT_TYPES[safe_plot_type]
     require_worksheet(safe_book, safe_sheet)
+
+    template_path = ""
+    if template:
+        if safe_plot_type in _XYZ_TYPES:
+            msg = (
+                f"create_graph(template=...) supports 2D XY plot types only, "
+                f"not '{safe_plot_type}'."
+            )
+            raise ValueError(msg)
+        template_path = windows_path(template, "template")
+        if not os.path.isfile(template_path):
+            msg = f"Template not found: {template_path}"
+            raise ValueError(msg)
 
     def _set_title():
         if title:
@@ -203,14 +222,37 @@ def create_graph(
                 f"({safe_x_col},{safe_y_col},{safe_error_col})"
             )
 
-    name = o.CreatePage(3, safe_graph_name, "origin")
-    if not execute_labtalk(f"plotxy iy:={data_ref} plot:={ptype} ogl:=[{name}]Layer1;"):
-        execute_labtalk(f"win -cd {name};")
-        msg = (
-            f"Could not plot {data_ref}. Check that columns exist and contain "
-            f"data, and that plot_type '{safe_plot_type}' suits this data."
-        )
-        raise ValueError(msg)
+    if template_path:
+        # Build the graph FROM the saved template so it reproduces the styling
+        # (probe-verified route: plotxy ... ogl:=<new template:="<path>">).
+        # plotm/plotxy into <new template:=...> spawns its own window, so grab
+        # the new page name by diffing the graph list, then rename to requested.
+        before = set(graph_names())
+        if not execute_labtalk(
+            f'plotxy iy:={data_ref} plot:={ptype} '
+            f'ogl:=<new template:="{template_path}">;'
+        ):
+            msg = (
+                f"Could not plot {data_ref} onto the template {template_path}. "
+                f"Check the columns and that plot_type '{safe_plot_type}' suits "
+                "this data."
+            )
+            raise ValueError(msg)
+        new = set(graph_names()) - before
+        name = new.pop() if new else o.LTStr("page.name$")
+        if name != safe_graph_name and execute_labtalk(
+            f"win -r {name} {safe_graph_name};"
+        ):
+            name = safe_graph_name
+    else:
+        name = o.CreatePage(3, safe_graph_name, "origin")
+        if not execute_labtalk(f"plotxy iy:={data_ref} plot:={ptype} ogl:=[{name}]Layer1;"):
+            execute_labtalk(f"win -cd {name};")
+            msg = (
+                f"Could not plot {data_ref}. Check that columns exist and contain "
+                f"data, and that plot_type '{safe_plot_type}' suits this data."
+            )
+            raise ValueError(msg)
     settle_new_plots(name, expected_min_plots=1)
 
     _set_title()
@@ -219,6 +261,7 @@ def create_graph(
         "requested_name": safe_graph_name,
         "renamed": name != safe_graph_name,
         "plot_type": safe_plot_type,
+        "template": template_path or None,
     })
 
 @mcp.tool()
