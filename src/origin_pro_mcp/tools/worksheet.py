@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import os
 
 from ..app import mcp
@@ -66,7 +67,9 @@ def set_worksheet_data(
         book_name: Workbook name (e.g., "Book1")
         sheet_name: Sheet name (e.g., "Sheet1")
         columns: JSON array of arrays, each inner array is a column of data.
-                 Example: [[1,2,3],[4,5,6]] for 2 columns with 3 rows
+                 Example: [[1,2,3],[4,5,6]] for 2 columns with 3 rows. A cell
+                 may be JSON null (or NaN) to write an Origin missing value —
+                 rendered as a gap in the polyline, not interpolated through.
         column_names: Optional comma-separated column names (e.g., "X,Y,Error")
 
     Returns:
@@ -98,15 +101,30 @@ def set_worksheet_data(
         msg = "columns must be a non-empty JSON array of non-empty arrays, e.g. [[1,2,3],[4,5,6]]."
         raise ValueError(msg)
 
+    # (column_index, row_index) pairs, 0-based, to be written as Origin
+    # missing values via LabTalk after the bulk numeric write below.
+    missing_cells: list[tuple[int, int]] = []
     for i, col_data in enumerate(cols):
-        try:
-            float_data = [float(x) for x in col_data]
-        except (TypeError, ValueError) as exc:
-            msg = f"Column {i + 1} contains non-numeric values; only numbers are supported."
-            raise ValueError(msg) from exc
+        float_data = []
+        for r, x in enumerate(col_data):
+            if x is None or (isinstance(x, float) and math.isnan(x)):
+                missing_cells.append((i, r))
+                float_data.append(0.0)  # placeholder, overwritten below
+                continue
+            try:
+                float_data.append(float(x))
+            except (TypeError, ValueError) as exc:
+                msg = f"Column {i + 1} contains non-numeric values; only numbers are supported."
+                raise ValueError(msg) from exc
         if not o.PutWorksheet(target, float_data, 0, i):
             msg = f"Origin rejected the data for column {i + 1} of {target}."
             raise ValueError(msg)
+
+    if missing_cells:
+        activate_window(safe_book_name, "book_name")
+        execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet_name, "sheet_name")};')
+        for col_idx, row_idx in missing_cells:
+            execute_labtalk(f"col({col_idx + 1})[{row_idx + 1}]=0/0;")
 
     if column_names:
         names = [n.strip() for n in column_names.split(",")]

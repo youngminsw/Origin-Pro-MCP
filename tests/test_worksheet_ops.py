@@ -141,3 +141,32 @@ def test_get_worksheet_data_maps_missing_to_null(fake_origin):
     fake_origin.worksheet_data = ((1.0, 4.0), (2.0, 1.23e308))
     out = json.loads(get_worksheet_data("Book1", "Sheet1"))
     assert out["columns"] == [[1.0, 2.0], [4.0, None]]
+
+
+def test_set_worksheet_data_accepts_null_as_missing_value(fake_origin):
+    from origin_pro_mcp.tools.worksheet import set_worksheet_data
+
+    set_worksheet_data("Book1", "Sheet1", "[[1,2,null,4]]")
+    # Exactly the null position (0-based row 2 -> LabTalk 1-based row 3)
+    # gets the missing-value write; no other row is touched this way.
+    assert "col(1)[3]=0/0;" in fake_origin.executed
+    assert not any(
+        s.startswith("col(1)[1]=") or s.startswith("col(1)[2]=") or s.startswith("col(1)[4]=")
+        for s in fake_origin.executed
+    )
+
+
+def test_set_worksheet_data_accepts_nan_as_missing_value(fake_origin):
+    from origin_pro_mcp.tools.worksheet import set_worksheet_data
+
+    # A bare NaN token in the JSON payload (Python's json module parses it
+    # to float('nan')) is treated the same as JSON null.
+    set_worksheet_data("Book1", "Sheet1", "[[1,NaN,3]]")
+    assert "col(1)[2]=0/0;" in fake_origin.executed
+
+
+def test_set_worksheet_data_no_missing_cells_emits_no_labtalk(fake_origin):
+    from origin_pro_mcp.tools.worksheet import set_worksheet_data
+
+    set_worksheet_data("Book1", "Sheet1", "[[1,2,3]]")
+    assert not any("=0/0;" in s for s in fake_origin.executed)
