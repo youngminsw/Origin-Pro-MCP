@@ -8,6 +8,7 @@ from ..app import mcp
 from ..origin_connection import (
     activate_window,
     execute_labtalk,
+    get_lt_str,
     get_origin,
     graph_names,
     require_graph,
@@ -957,6 +958,41 @@ def _bundled_palette_path(name: str) -> str:
     return ""
 
 
+def _origin_palette_dir() -> str:
+    """Origin's built-in ``.pal`` folder (``<install>\\Palettes``), or "" when
+    it can't be resolved (fakes / CI / odd install). Read from
+    ``system.path.program$`` at runtime so it isn't hard-coded to one install."""
+    try:
+        prog = get_lt_str("system.path.program$")
+    except Exception:
+        return ""
+    if not prog:
+        return ""
+    pal_dir = os.path.join(prog, "Palettes")
+    return pal_dir if os.path.isdir(pal_dir) else ""
+
+
+def _palette_is_valid(name: str):
+    """True if ``name`` is a bundled or Origin built-in ``.pal``; False if we can
+    prove it is neither; None if Origin's palette folder can't be read (so the
+    caller must NOT reject upfront and should fall back to ``load()``).
+
+    Needed because ``layer.cmap.load()`` returns True even for a NONEXISTENT
+    palette (live-confirmed) and no readable cmap state changes between
+    palettes, so a mistyped name would otherwise silently do nothing behind an
+    "Applied palette" success message."""
+    if _bundled_palette_path(name):
+        return True
+    pal_dir = _origin_palette_dir()
+    if not pal_dir:
+        return None
+    want = f"{str(name).strip().lower()}.pal"
+    try:
+        return want in {fn.lower() for fn in os.listdir(pal_dir)}
+    except OSError:
+        return None
+
+
 def _apply_color_map_impl(graph_name: str, palette: str = "Viridis") -> str:
     """Apply a color palette to a contour/heatmap/surface graph.
 
@@ -974,6 +1010,20 @@ def _apply_color_map_impl(graph_name: str, palette: str = "Viridis") -> str:
     """
     safe_graph = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph)
+    # Reject a palette name Origin doesn't ship BEFORE touching the graph:
+    # layer.cmap.load() returns True even for a nonexistent palette and no
+    # readable cmap state distinguishes a real recolor from a no-op, so an
+    # unknown name would otherwise report success while doing nothing.
+    if _palette_is_valid(palette) is False:
+        msg = (
+            f"Unknown palette '{palette}'. Origin's colormap load() reports "
+            f"success even for a nonexistent palette, so applying this would "
+            f"silently do nothing. Use a bundled map (Viridis, Cividis, Plasma, "
+            f"Inferno, Magma, PastelViridis, PastelCividis) or an Origin "
+            f"built-in .pal name (e.g. Fire, GrayScale, RedWhiteBlue, "
+            f"Temperature, Heatmap4ColorBlind)."
+        )
+        raise ValueError(msg)
     activate_window(safe_graph, "graph_name")
     execute_labtalk("layer1;")
 
@@ -1025,6 +1075,22 @@ def _set_colormap_levels_impl(graph_name: str, z_min: float, z_max: float) -> st
         "layer.cmap.SetLevels(); layer.cmap.updateScale();"
     ):
         msg = f"Could not set colormap levels on {safe_graph}."
+        raise ValueError(msg)
+    # Read zmin/zmax back and confirm they took (mirrors the levels branch's
+    # numColors read-back). On a non-colormap graph — or a build where the set
+    # no-ops — the read-back won't match and this raises instead of reporting a
+    # false success (live-confirmed readable on a real colormap plot).
+    o = get_origin()
+    got_min = o.LTVar("layer.cmap.zmin")
+    got_max = o.LTVar("layer.cmap.zmax")
+    tol_min = max(1e-6, abs(float(z_min)) * 1e-6)
+    tol_max = max(1e-6, abs(float(z_max)) * 1e-6)
+    if abs(got_min - float(z_min)) > tol_min or abs(got_max - float(z_max)) > tol_max:
+        msg = (
+            f"Colormap Z range did not take on {safe_graph}: requested "
+            f"[{z_min}, {z_max}], read back [{got_min}, {got_max}]. "
+            f"(Is this graph a colormapped plot?)"
+        )
         raise ValueError(msg)
     return f"Set colormap Z range to [{z_min}, {z_max}] on {safe_graph}"
 
@@ -1367,8 +1433,12 @@ def colormap(
             perceptually-uniform, colorblind-safe maps are preferred for
             quantitative data; Origin built-in .pal names are also accepted.
             (This DOES recolor the map — do not be misled if an exported PNG's
-            byte size is unchanged; the pixels change.)
-        z_min, z_max: Z range for the color scale (both required together).
+            byte size is unchanged; the pixels change.) An unknown palette name
+            is REJECTED up front: Origin's load() reports success for a
+            nonexistent palette, so a typo would otherwise silently do nothing.
+        z_min, z_max: Z range for the color scale (both required together). The
+            applied range is read back (layer.cmap.zmin/zmax) and raises if it
+            did not take (e.g. the graph is not a colormapped plot).
         levels: Number of color levels (>= 2). Origin's colormap is inherently
             banded; a default heatmap shows ~8 bands. Set ~32-64 to make it read
             as a continuous (smooth) map. Verified read-back

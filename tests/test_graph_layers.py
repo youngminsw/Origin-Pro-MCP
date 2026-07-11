@@ -113,6 +113,43 @@ def test_set_colormap_levels_bad_range(fake_origin):
         colormap("Graph1", z_min=5, z_max=5)
 
 
+def test_colormap_zrange_reads_back_and_succeeds(fake_origin):
+    """Item 24: a colormap z-range whose read-back agrees is reported applied."""
+    from origin_pro_mcp.tools.graph import colormap
+
+    fake_origin.lt_vars["layer.cmap.zmin"] = 2.0
+    fake_origin.lt_vars["layer.cmap.zmax"] = 20.0
+    msg = colormap("Graph1", z_min=2, z_max=20)
+    assert "Z range" in msg
+
+
+def test_colormap_zrange_raises_on_readback_mismatch(fake_origin):
+    """Item 24: if zmin/zmax do not read back (non-colormap graph), raise
+    instead of a false success."""
+    from origin_pro_mcp.tools.graph import colormap
+
+    fake_origin.lt_vars["layer.cmap.zmin"] = 0.0  # did not take
+    fake_origin.lt_vars["layer.cmap.zmax"] = 0.0
+    with pytest.raises(ValueError, match="did not take"):
+        colormap("Graph1", z_min=2, z_max=20)
+
+
+def test_colormap_rejects_unknown_palette_name(fake_origin, monkeypatch, tmp_path):
+    """Item 23: an unknown palette name is rejected up front (load() lies),
+    while a name present in Origin's Palettes folder is accepted."""
+    from origin_pro_mcp.tools import graph
+
+    (tmp_path / "fire.pal").write_text("stub")
+    monkeypatch.setattr(graph, "_origin_palette_dir", lambda: str(tmp_path))
+
+    with pytest.raises(ValueError, match="Unknown palette"):
+        graph.colormap("Graph1", palette="NoSuchMap")
+
+    # A name present in the folder passes validation and issues the load.
+    graph.colormap("Graph1", palette="Fire")
+    assert any("layer.cmap.load(Fire.pal)" in s for s in fake_origin.executed)
+
+
 def test_colormap_requires_an_argument(fake_origin):
     from origin_pro_mcp.tools.graph import colormap
 
