@@ -568,6 +568,50 @@ def _set_axis_labels_impl(
             raise ValueError(msg)
     return f"Updated labels for {safe_graph_name}"
 
+
+def _set_border_axis_title_impl(graph_name: str, side: str, label: str) -> str:
+    """Set the RIGHT (dual-Y layer-2 ``yr``) or TOP (layer-1 ``xt``) axis
+    title, then CONFIRM it landed by reading ``<obj>.text$`` back.
+
+    Fail-honest: axis="right" requires a real second Y layer (from
+    add_second_y_axis). Writing ``yr.text$`` on a single-layer graph
+    "succeeds" at the LabTalk level (Execute returns true and the property
+    reads back) but titles a right axis that isn't drawn — the false success
+    the usability agent hit. So the second layer is required up front; the
+    read-back then guards against a genuine no-op."""
+    import time
+
+    safe_graph = labtalk_name(graph_name, "graph_name")
+    require_graph(safe_graph)
+    activate_window(safe_graph, "graph_name")
+    nlayers = int(get_origin().LTVar("page.nlayers"))
+    if side == "right":
+        if nlayers < 2:
+            msg = (
+                f"axis(op='labels', axis='right') needs a right-Y layer on "
+                f"{safe_graph}, but it has {nlayers} layer(s). Add one with "
+                "add_second_y_axis first, then set the right-axis title."
+            )
+            raise ValueError(msg)
+        obj, layer = "yr", 2
+    else:  # top
+        obj, layer = "xt", 1
+    safe = labtalk_text(label, "label")
+    got = ""
+    for attempt in range(3):
+        execute_labtalk(f"win -a {safe_graph}; page.active={layer};")
+        execute_labtalk(f"{obj}.text$ = {safe};")
+        got = get_lt_str(f"{obj}.text$") or ""
+        if label in got:
+            return f"Set {side}-axis title on {safe_graph} (layer {layer})"
+        if attempt < 2:
+            time.sleep(0.3)
+    msg = (
+        f"Could not confirm the {side}-axis title on {safe_graph} "
+        f"(read back: {got!r})."
+    )
+    raise ValueError(msg)
+
 def _set_axis_range_impl(
     graph_name: str,
     x_min: float | None = None,
@@ -1309,8 +1353,12 @@ def axis(
     Args:
         graph_name: Graph name.
         op: Which axis aspect to set:
-            - "labels": set an axis label. Uses `axis` ("x", "y", or "both")
-              and `label` (the text). Note: does not set the graph title.
+            - "labels": set an axis label. Uses `axis` ("x", "y", "both",
+              "right", or "top") and `label` (the text). "right" sets the
+              dual-Y right-axis title (requires a second Y layer from
+              add_second_y_axis — raises otherwise, never a false success);
+              "top" sets the top-axis title. Note: does not set the graph
+              title.
             - "range": set an axis range. Uses `axis` plus `range_min`/
               `range_max` (None = auto). With axis="both" the same range is
               applied to X and Y.
@@ -1334,6 +1382,7 @@ def axis(
               default "closed") and `frame_width` (points, applied to all 4
               sides; None = leave unchanged).
         axis: Target axis ("x", "y", "both", "top", or "right"; default "both").
+            For op="labels", "right"/"top" set the right/top-axis TITLE.
         label: Axis label text (op="labels").
         range_min, range_max: Axis range bounds (op="range").
         scale: Axis scale type (op="scale").
@@ -1352,7 +1401,11 @@ def axis(
         if label is None:
             msg = "axis op 'labels' requires label."
             raise ValueError(msg)
-        safe_axis = labtalk_choice(axis.lower(), {"x", "y", "both"}, "axis")
+        safe_axis = labtalk_choice(
+            axis.lower(), {"x", "y", "both", "right", "top"}, "axis"
+        )
+        if safe_axis in ("right", "top"):
+            return _set_border_axis_title_impl(graph_name, safe_axis, label)
         x_label = label if safe_axis in ("x", "both") else ""
         y_label = label if safe_axis in ("y", "both") else ""
         return _set_axis_labels_impl(graph_name, x_label=x_label, y_label=y_label)

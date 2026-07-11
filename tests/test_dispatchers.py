@@ -284,6 +284,43 @@ def test_axis_scale_missing_scale(fake_origin):
         G.axis("Graph1", "scale", axis="y")
 
 
+def test_axis_labels_right_needs_second_layer(fake_origin):
+    # Item 29: the right-axis title must NOT falsely succeed on a single-layer
+    # graph — it requires a real second Y layer.
+    fake_origin.lt_vars["page.nlayers"] = 1
+    with pytest.raises(ValueError, match="right-Y layer"):
+        G.axis("Graph1", "labels", axis="right", label="Magnetization")
+
+
+def test_axis_labels_right_sets_yr_on_layer2(fake_origin, monkeypatch):
+    fake_origin.lt_vars["page.nlayers"] = 2
+    monkeypatch.setattr(fake_origin, "LTStr", lambda name: "Magnetization")
+    fake_origin.executed.clear()
+    msg = G.axis("Graph1", "labels", axis="right", label="Magnetization")
+    cmds = " ".join(fake_origin.executed)
+    assert "page.active=2" in cmds
+    assert "yr.text$" in cmds
+    assert "layer 2" in msg
+
+
+def test_axis_labels_top_sets_xt_on_layer1(fake_origin, monkeypatch):
+    monkeypatch.setattr(fake_origin, "LTStr", lambda name: "Energy")
+    fake_origin.executed.clear()
+    G.axis("Graph1", "labels", axis="top", label="Energy")
+    cmds = " ".join(fake_origin.executed)
+    assert "page.active=1" in cmds
+    assert "xt.text$" in cmds
+
+
+def test_axis_labels_right_readback_mismatch_raises(fake_origin, monkeypatch):
+    # A genuine no-op (read-back never contains the label) must raise, not
+    # report a false success.
+    fake_origin.lt_vars["page.nlayers"] = 2
+    monkeypatch.setattr(fake_origin, "LTStr", lambda name: "")
+    with pytest.raises(ValueError, match="Could not confirm"):
+        G.axis("Graph1", "labels", axis="right", label="Magnetization")
+
+
 # --- annotate: 4 kind branches ------------------------------------------------
 
 def test_annotate_reference_line_equiv(fake_origin):
