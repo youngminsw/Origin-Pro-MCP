@@ -1,7 +1,9 @@
 import csv
+import glob
 import json
 import math
 import os
+import re
 
 from ..app import mcp
 from ..origin_connection import (
@@ -804,6 +806,83 @@ def manage_columns(
 
 _IMPORT_FORMATS = {"auto", "csv", "excel"}
 _EXCEL_EXTENSIONS = (".xls", ".xlsx", ".xlsm")
+# Data files a folder/glob import will pick up.
+_BATCH_DATA_EXTENSIONS = (".csv", ".txt", ".dat", ".xls", ".xlsx", ".xlsm")
+# Import at most this many files per batch call (time/context guard).
+_BATCH_CAP = 20
+
+
+def _is_batch_target(file_path: str) -> bool:
+    """True when file_path names a DIRECTORY or a glob pattern (so import_data
+    should batch-import many files rather than one)."""
+    if any(ch in file_path for ch in "*?[]"):
+        return True
+    try:
+        win = windows_path(file_path, "file_path")
+    except ValueError:
+        return False
+    return os.path.isdir(win)
+
+
+def _book_name_from_stem(stem: str) -> str:
+    """A valid Origin book name derived from a file stem: non-identifier chars
+    become underscores, and a leading non-letter/underscore is prefixed."""
+    safe = re.sub(r"[^A-Za-z0-9_]", "_", stem) or "Book"
+    if not (safe[0].isalpha() or safe[0] == "_"):
+        safe = "B_" + safe
+    return safe[:60]
+
+
+def _import_batch_impl(
+    file_path: str, format: str, delimiter: str, sparklines: bool
+) -> str:
+    """Import every data file in a directory / matching a glob, each into its
+    own book named from the file stem. Per-file partial failures are reported,
+    not fatal. Caps at _BATCH_CAP files."""
+    win = windows_path(file_path, "file_path")
+    if os.path.isdir(win):
+        matches = glob.glob(os.path.join(win, "*"))
+    else:
+        matches = glob.glob(win)
+    files = sorted(
+        f for f in matches
+        if os.path.isfile(f)
+        and os.path.splitext(f)[1].lower() in _BATCH_DATA_EXTENSIONS
+    )
+    if not files:
+        msg = (
+            f"No data files (csv/txt/dat/xls/xlsx) found for {win}. "
+            "Pass a folder or a glob like '.../*.csv'."
+        )
+        raise ValueError(msg)
+    matched = len(files)
+    capped = matched > _BATCH_CAP
+    files = files[:_BATCH_CAP]
+    results = []
+    for f in files:
+        stem = os.path.splitext(os.path.basename(f))[0]
+        try:
+            single = import_data(
+                f, format=format, book_name=_book_name_from_stem(stem),
+                delimiter=delimiter, sparklines=sparklines,
+            )
+            results.append(
+                {"file": f, "name": json.loads(single).get("name"), "ok": True}
+            )
+        except (ValueError, RuntimeError) as exc:
+            results.append({"file": f, "error": str(exc), "ok": False})
+    payload = {
+        "batch": True,
+        "matched": matched,
+        "imported": sum(1 for r in results if r["ok"]),
+        "results": results,
+    }
+    if capped:
+        payload["note"] = (
+            f"{matched} files matched; imported the first {_BATCH_CAP} "
+            "(cap to guard time/context). Narrow the pattern for the rest."
+        )
+    return json.dumps(payload)
 
 
 @mcp.tool()
@@ -817,25 +896,37 @@ def import_data(
     """Import a data file into an Origin worksheet.
 
     Args:
-        file_path: Path to the file (Windows or WSL style).
+        file_path: Path to the file (Windows or WSL style). May ALSO be a
+            DIRECTORY or a glob pattern (e.g. C:\\data or C:\\data\\*.csv) to
+            batch-import every data file (csv/txt/dat/xls/xlsx) it matches,
+            each into its own book named from the file stem.
         format: "auto" (detect by extension; default), "csv" (text/CSV), or
             "excel" (.xls/.xlsx). "auto" treats .xls/.xlsx/.xlsm as Excel and
             everything else as CSV/text.
-        book_name: Optional workbook name for the result.
+        book_name: Optional workbook name for the result. Ignored in batch mode
+            (each file is named from its stem).
         delimiter: Column delimiter for CSV/text (default comma; ignored for
             Excel).
         sparklines: CSV/text import only. Whether to allow Origin's auto-
             generated sparkline mini-graph windows (default False =
             suppressed — an unsuppressed CSV import can spawn a dozen-plus
-            throwaway graph windows, bloating the project).
+            throwaway graph windows, bloating the project). Applied per file in
+            batch mode.
 
     Returns:
-        JSON object: {"name": <actual workbook name>, "requested_name":
-        <book_name if given, else null>, "renamed": <bool, true if Origin
-        gave the workbook a different name>, "file": <file_path>}. For
-        CSV/text imports, also: {"sparklines_suppressed": <bool>,
+        Single file: JSON object {"name": <actual workbook name>,
+        "requested_name": <book_name if given, else null>, "renamed": <bool,
+        true if Origin gave the workbook a different name>, "file":
+        <file_path>}; CSV/text also adds {"sparklines_suppressed": <bool>,
         "sparklines_deleted": <int>}.
+        Batch (directory/glob): JSON object {"batch": true, "matched": <int
+        files matched>, "imported": <int succeeded>, "results": [{"file",
+        "name"/"error", "ok"}, ...]} — partial failures are reported per file,
+        not fatal. If more than 20 files match, only the first 20 are imported
+        and a "note" says so.
     """
+    if _is_batch_target(file_path):
+        return _import_batch_impl(file_path, format, delimiter, sparklines)
     safe_format = labtalk_choice(format.lower(), _IMPORT_FORMATS, "format")
     if safe_format == "auto":
         ext = os.path.splitext(file_path)[1].lower()

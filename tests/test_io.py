@@ -51,6 +51,79 @@ def test_import_data_csv_returns_json_name(fake_origin, tmp_path):
     assert out["file"] == str(f)
 
 
+# --- item 31b: batch/folder import -------------------------------------------
+
+def test_import_data_batch_directory(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    for i in range(3):
+        (tmp_path / f"spectrum{i}.csv").write_text("1,2\n3,4\n")
+    out = json.loads(import_data(str(tmp_path)))
+    assert out["batch"] is True
+    assert out["matched"] == 3
+    assert out["imported"] == 3
+    assert len(out["results"]) == 3
+    assert all(r["ok"] for r in out["results"])
+
+
+def test_import_data_batch_glob(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    (tmp_path / "a.csv").write_text("1,2\n")
+    (tmp_path / "b.csv").write_text("1,2\n")
+    (tmp_path / "skip.log").write_text("nope\n")  # not a data extension
+    out = json.loads(import_data(str(tmp_path / "*.csv")))
+    assert out["matched"] == 2
+    assert {r["file"].split("/")[-1].split("\\")[-1] for r in out["results"]} == {"a.csv", "b.csv"}
+
+
+def test_import_data_batch_no_matches_raises(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    with pytest.raises(ValueError, match="No data files"):
+        import_data(str(tmp_path))
+
+
+def test_import_data_batch_caps_at_20(fake_origin, tmp_path):
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    for i in range(23):
+        (tmp_path / f"f{i:02d}.csv").write_text("1,2\n")
+    out = json.loads(import_data(str(tmp_path)))
+    assert out["matched"] == 23
+    assert out["imported"] == 20
+    assert len(out["results"]) == 20
+    assert "note" in out and "20" in out["note"]
+
+
+def test_import_data_batch_reports_per_file_failure(fake_origin, tmp_path, monkeypatch):
+    # A per-file import error is reported in that file's result, not fatal.
+    import origin_pro_mcp.tools.worksheet as W
+
+    (tmp_path / "good.csv").write_text("1,2\n")
+    (tmp_path / "bad.csv").write_text("1,2\n")
+    real = W._import_csv_to_worksheet_impl
+
+    def flaky(path, book_name, delimiter, sparklines):
+        if "bad" in path:
+            raise ValueError("boom")
+        return real(path, book_name, delimiter, sparklines)
+
+    monkeypatch.setattr(W, "_import_csv_to_worksheet_impl", flaky)
+    out = json.loads(W.import_data(str(tmp_path)))
+    assert out["matched"] == 2
+    assert out["imported"] == 1
+    by_ok = {r["ok"]: r for r in out["results"]}
+    assert "boom" in by_ok[False]["error"]
+
+
+def test_book_name_from_stem_sanitizes():
+    from origin_pro_mcp.tools.worksheet import _book_name_from_stem
+
+    assert _book_name_from_stem("2024 run-1") == "B_2024_run_1"
+    assert _book_name_from_stem("clean_name") == "clean_name"
+
+
 def test_import_data_csv_activates_uniquified_book_not_existing(fake_origin, tmp_path):
     """Item 3: when book_name collides, CreatePage uniquifies it. The import
     must activate (and land in) the NEW uniquified book, never `win -a` the
