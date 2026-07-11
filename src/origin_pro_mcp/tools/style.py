@@ -439,17 +439,41 @@ def ungroup_plots(graph_name: str, plot_type: str = "line") -> str:
     # Layer1 COM object (gl.Execute) so it works without an active window (win -a
     # fails on .opju-loaded graphs). `plotxy iy:=<dataset>` reuses the sheet's X
     # designation, preserving the original X.
+    removed = len(infos)
     for p in infos:
         graph_layer_execute(safe_graph, f"layer -e {p['name']};")
     rebuilt = 0
+    failed_names = []
     for name in data_names:
         if graph_layer_execute(
             safe_graph,
             f"plotxy iy:={name} plot:={ptype} ogl:=[{safe_graph}]Layer1;",
         ):
             rebuilt += 1
+        else:
+            failed_names.append(name)
     if rebuilt:
         settle_new_plots(safe_graph, expected_min_plots=rebuilt)
+
+    # Ungroup removes EVERY plot before re-plotting, so a rebuild failure leaves
+    # the graph with fewer curves than it started with — that is never a
+    # "success". Be honest about how many of the known datasets came back.
+    if rebuilt == 0:
+        msg = (
+            f"Ungroup FAILED on {safe_graph}: removed {removed} plot(s) but could "
+            f"NOT re-plot any of the {len(data_names)} data series "
+            f"({', '.join(data_names)}). Layer1 may now be empty — recreate the "
+            f"plots with create_graph / add_plot_to_graph."
+        )
+        raise ValueError(msg)
+    if rebuilt < len(data_names):
+        return (
+            f"Ungroup PARTIAL on {safe_graph}: rebuilt {rebuilt} of "
+            f"{len(data_names)} data series as independent {plot_type} plots, but "
+            f"FAILED to re-plot {', '.join(failed_names)} — those series are now "
+            f"MISSING from the graph (recreate them with add_plot_to_graph). Color "
+            f"the rebuilt ones with set_plot_style."
+        )
     note = (" Error-bar plots were dropped — re-add them with set_error_bars."
             if has_error else "")
     return (f"Ungrouped {safe_graph}: rebuilt {rebuilt} independent {plot_type} "
