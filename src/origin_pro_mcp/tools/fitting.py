@@ -69,6 +69,34 @@ def _book_sheet_names(book: str) -> set:
     return set(sheet_names(book))
 
 
+def _rows_in_x_range(book: str, sheet: str, x_col: int, x_min, x_max):
+    """1-based (first, last) row indices whose X value falls in [x_min, x_max]
+    (either bound may be None = open). Used to build an NLFit row-subrange
+    ``!(x,y)[i1:i2]`` — probe-verified to restrict the fit to those rows.
+    Raises if no rows qualify. Assumes X is monotonic (spectra are); a
+    contiguous [min..max] block is taken."""
+    data = get_origin().GetWorksheet(f"[{book}]{sheet}")
+    if not isinstance(data, (list, tuple)):
+        msg = f"Could not read X column {x_col} of [{book}]{sheet} for the fit range."
+        raise ValueError(msg)
+    rows = []
+    for r, row in enumerate(data, start=1):
+        if x_col - 1 < len(row):
+            v = row[x_col - 1]
+            if isinstance(v, (int, float)) and abs(v) < 1e100:
+                if (x_min is None or v >= x_min) and (x_max is None or v <= x_max):
+                    rows.append(r)
+    if not rows:
+        lo = "-inf" if x_min is None else x_min
+        hi = "+inf" if x_max is None else x_max
+        msg = (
+            f"No data rows of [{book}]{sheet} have X in [{lo}, {hi}]; "
+            "the fit range excludes all points."
+        )
+        raise ValueError(msg)
+    return min(rows), max(rows)
+
+
 @mcp.tool()
 def curve_fit(
     data_book: str,
@@ -77,7 +105,9 @@ def curve_fit(
     y_col: int,
     function: str = "line",
     y_error_col: int = 0,
-    plot_on_graph: str = ""
+    plot_on_graph: str = "",
+    x_min: float | None = None,
+    x_max: float | None = None
 ) -> str:
     """Perform curve fitting on worksheet data.
 
@@ -95,6 +125,13 @@ def curve_fit(
                        curve is drawn on it as a line (paper style:
                        data symbols + fit line). Also keeps the fit
                        report sheets in the workbook.
+        x_min: Optional lower X bound — restrict the fit to rows whose X is
+               >= x_min. Use with x_max to fit a single peak/region and
+               exclude a baseline or a neighboring feature outside the range.
+        x_max: Optional upper X bound — restrict the fit to rows whose X is
+               <= x_max. Either bound may be given alone. The restriction is
+               applied as a contiguous row block (X is assumed monotonic, as
+               spectra are); a "line" fit with a range uses the NLFit engine.
 
     Returns:
         JSON with fitted parameters and statistics. Parameter keys are
@@ -120,6 +157,16 @@ def curve_fit(
         safe_target_graph = labtalk_name(plot_on_graph, "plot_on_graph")
         require_graph(safe_target_graph)
 
+    if x_min is not None and x_max is not None and x_min >= x_max:
+        msg = f"curve_fit x_min ({x_min}) must be < x_max ({x_max})."
+        raise ValueError(msg)
+    # Resolve an optional X-range restriction to a 1-based row subrange. The
+    # bracket ``!(x,y)[i1:i2]`` is probe-verified to restrict the NLFit input.
+    row_subrange = ""
+    if x_min is not None or x_max is not None:
+        i1, i2 = _rows_in_x_range(safe_book, safe_sheet, safe_x_col, x_min, x_max)
+        row_subrange = f"[{i1}:{i2}]"
+
     # Set column designations so Origin knows which is X and which is Y.
     # Must use the active-sheet `wks` form — sheet-qualified assignments
     # like `[Book]Sheet!col(n).type = ...` are silently ignored.
@@ -130,7 +177,7 @@ def curve_fit(
 
     result = {"function": safe_function, "statistics": {}}
 
-    if safe_function == "line" and not safe_target_graph:
+    if safe_function == "line" and not safe_target_graph and not row_subrange:
         # Use fitlr for linear regression (fast, no GUI)
         if not execute_labtalk(f"fitlr {sheet_ref}!col({safe_y_col});"):
             msg = (
@@ -155,6 +202,8 @@ def curve_fit(
     if y_error_col > 0:
         safe_error_col = positive_column(y_error_col, "y_error_col")
         data_ref = f"{sheet_ref}!({safe_x_col},{safe_y_col},{safe_error_col})"
+    # Restrict to the resolved row block (empty when no x_min/x_max given).
+    data_ref += row_subrange
 
     if not execute_labtalk(f"nlbegin iy:={data_ref} func:={fdf_name} nltree:={_TREE};"):
         execute_labtalk("nlend;")
