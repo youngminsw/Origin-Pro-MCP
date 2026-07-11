@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "origin-pro-mcp"
-version = "0.2.2"
+version = "0.3.0"
 description = "MCP server for controlling OriginLab Origin Pro via COM automation"
 readme = "README.md"
 license = "MIT"
