@@ -277,8 +277,13 @@ def _import_csv_to_worksheet_impl(
     requested_name = None
     if book_name:
         requested_name = labtalk_name(book_name, "book_name")
-        o.CreatePage(2, requested_name, "origin")
-        execute_labtalk(f"win -a {requested_name};")
+        # CreatePage UNIQUIFIES a taken name (e.g. "Data" -> "Data1"), so its
+        # RETURN is the actual new book. The old code discarded it and did
+        # `win -a <requested>`, which activates the pre-existing book of that
+        # name — impasc (which imports into the ACTIVE window) then landed the
+        # data in the WRONG book. Activate the actual new book instead.
+        actual_book = o.CreatePage(2, requested_name, "origin")
+        activate_window(actual_book, "book_name")
 
     if delimiter == ",":
         delim_clause = "options.FileStruct.Delimiter:=1"

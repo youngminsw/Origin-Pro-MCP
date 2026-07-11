@@ -51,6 +51,27 @@ def test_import_data_csv_returns_json_name(fake_origin, tmp_path):
     assert out["file"] == str(f)
 
 
+def test_import_data_csv_activates_uniquified_book_not_existing(fake_origin, tmp_path):
+    """Item 3: when book_name collides, CreatePage uniquifies it. The import
+    must activate (and land in) the NEW uniquified book, never `win -a` the
+    pre-existing book of the requested name."""
+    from origin_pro_mcp.tools.worksheet import import_data
+
+    f = tmp_path / "data.csv"
+    f.write_text("1,2\n3,4\n")
+    # Model CreatePage uniquifying "Data" -> "Data1" (the requested name is taken).
+    fake_origin.CreatePage = lambda kind, name, tmpl: "Data1"
+    fake_origin.LTStr = lambda name: "Data1" if name == "page.name$" else ""
+
+    out = json.loads(import_data(str(f), book_name="Data"))
+    assert out["name"] == "Data1"
+    assert out["requested_name"] == "Data"
+    assert out["renamed"] is True
+    # Activated the actual new book, never the pre-existing "Data".
+    assert any(s.startswith("win -a Data1") for s in fake_origin.executed)
+    assert not any(s.strip() == "win -a Data;" for s in fake_origin.executed)
+
+
 def test_import_data_csv_no_book_name_requested_is_null(fake_origin, tmp_path):
     from origin_pro_mcp.tools.worksheet import import_data
 
