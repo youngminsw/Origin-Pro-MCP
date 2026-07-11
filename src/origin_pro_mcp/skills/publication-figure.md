@@ -408,9 +408,10 @@ find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
 - **Open (hollow) markers** — publication standard — via
   `set_plot_style(graph, plot_index, symbol_shape=2, open_symbol=True)`
   (`open_symbol` maps to LabTalk `set -kf 1`; `-kf 0` is solid).
-- **Remove a stray/dead plot** with `remove_plot(graph, plot_index)` — it uses
-  `layer -e` + `layer -ie`, which actually removes the curve AND its dead
-  legend/style holder (a bare `delete range` does not).
+- **Remove a stray/dead plot** with `remove_plot(graph, plot_index)` — it
+  destroys only the indexed plot (COM `DataPlot.Destroy()`), so it is safe
+  even when the same dataset is plotted more than once (a bare `delete range`
+  or a name-addressed `layer -e` would remove every copy).
 
 ### Worksheet prep and IO
 

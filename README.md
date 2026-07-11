@@ -357,18 +357,18 @@ used to be many single-purpose ones.
 ### Graphing
 | Tool | Description |
 |------|-------------|
-| `create_graph` | Create graph (scatter, line, line+symbol, column, bar, area, pie, histogram, box, contour, 3d_scatter) |
+| `create_graph` | Create graph (scatter, line, line+symbol, column, bar, area, pie, histogram, box, contour, 3d_scatter); optional `template=` builds it from a saved `.otpu`/`.otp` (2D XY types only) |
 | `add_plot_to_graph` | Add another dataset to an existing graph |
 | `delete_graph` | Delete a graph window |
-| `remove_plot` | Remove one data plot from a graph (uses `layer -e` + `layer -ie`, actually deletes; `layer -d` would delete the whole layer) |
+| `remove_plot` | Remove one data plot from a graph, addressed by index (COM `DataPlot.Destroy()`) — removes only that plot even if the same dataset is plotted more than once |
 | `set_error_bars` | Attach Y/X error bars to an existing plot from an error column (no duplicate) |
 | `set_layer_geometry` | Set a layer's panel position/size (left/top/width/height) |
 | `add_second_y_axis` | Add a right-Y layer and plot on it |
 | `add_layer` | Add a panel/axis layer (right-y, top-x, inset, independent) |
-| `axis` | Configure axes — `op="labels"/"range"/"scale"/"tick"/"frame"` |
+| `axis` | Configure axes — `op="labels"/"range"/"scale"/"tick"/"frame"`; `op="labels"` also sets the right/top-axis title on `axis="right"/"top"` |
 | `annotate` | Add an annotation — `kind="reference_line"/"text"/"line"/"arrow"` |
 | `colormap` | Apply a palette and/or set the Z color-scale range on a colormapped graph |
-| `export_graph` | Export to an image file; `sized=True` for an exact pixel width/height (default ~1200px wide) |
+| `export_graph` | Export to an image file — raster (png/jpg/tif/bmp) or vector (pdf/eps/emf, resolution-independent); `width=` sets an exact pixel width for raster (default ~1200px wide, height follows the graph's aspect ratio) |
 | `ungroup_plots` | Break a plot group so each curve can be colored independently |
 
 ### Styling
