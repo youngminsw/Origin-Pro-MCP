@@ -1,5 +1,46 @@
 # Work Log
 
+## 2026-07-11 — whole-product review Round D (docs coherence + agent-context diet) (agent: round-d)
+
+Scope: items 13-20, 32, and the Addendum from `docs/REVIEW-2026-07-11-whole-product.md`,
+docs-only (no runtime behavior changes, no live Origin needed). Base =
+`1890e02` (Rounds A+B+C merged). One commit per task, ruff-clean on every
+touched file, WSL suite must stay green throughout.
+
+| Task | Commit(s) | What / verdict |
+|---|---|---|
+| 13 (docstring diet) | `b2052cd` | New `src/origin_pro_mcp/skills/labtalk-gotchas.md` skill (6836 bytes, loaded on demand via `get_skill`) holds the FULL gotcha ledger: P8 flag-batching rule + evidence, `majorTicks` danger, `-w`/`-erw`/`-erwc` unit tables, `-k` symbol table, `offsetV`/`offsetH` tick-label-offset property semantics, the `y2`/`YR` right-axis recipe, layer-2 `-w` protocol, the settle race, readable-vs-sentinel axis properties, `0/0` missing-value writes, and the hatch/transparency hard limitations (#15/#19). `run_labtalk`'s docstring keeps only its own confirm-gate/capture/statement-retry mechanics + a 5-line safety-critical shortlist + a `get_skill('labtalk-gotchas')` pointer. `add_second_y_axis`'s inline recipe block shrank the same way. |
+| 20 (color param cross-ref) | `b2052cd` | `add_second_y_axis`'s `color` docstring now states it is always "r,g,b" numeric (unlike `set_plot_style`'s named `color`); `set_plot_style`'s `rgb` docstring now notes `add_second_y_axis` uses this same format. Docs-only, no behavior change. |
+| 18/19 (remove_plot truth, tool count) | `8df4f9b` | README.md:363 and publication-figure.md's own prose (not its COM Notes table, which was already correct) still described the old `layer -e`/`layer -ie` name-addressed removal, replaced by `d5a1f14`'s per-index COM `DataPlot.Destroy()` — fixed both to match the COM Notes table. Tool count: **verified, not fixed** — the live registry is 45 tools (43 `@mcp.tool` functions in `tools/*.py` + `list_skills`/`get_skill` from `skills.py`), matching README/skill prose already; the review's "actual is 43" used an AST scan that only walked `tools/*.py` and missed the 2 skill tools. `tests/test_doc_registry.py::test_readme_tool_count_matches_registry` (already present, added in `9b44d5b`) asserts this against the live registry and passes — no test change needed. |
+| 32 + usability P2s | `c79ac4f` | publication-figure.md: softened `offset_pct=80` to "start at 20-30, tune against an export" (a live run showed 80 collides tick numbers with the axis); added a note that `colormap(levels=)` drives colorbar LABEL density along with band smoothness, so a high level count can over-label the bar. `import_data` docstring: told agents to use the returned `"name"` directly instead of a `list_worksheets` round-trip (F11). `set_plot_style`'s grouping NOTE reworded so it only suggests `ungroup_plots` when a change had NO visible effect, not on every call (F13). |
+| 14 (FFT claim) | `a46818f` | Researched `docs.originlab.com/x-function/ref/fft1` + `.../origin-help/fft1-algorithm`: fft1's `interval` param defaults to `<Auto>`, defined as "the average increment of the time sequence, which is usually from the X column associated with the input signal." `_fft_impl` designates x_col/y_col as X/Y on the sheet before calling `fft1 ix:=col(<y>)`, so the Y column has an associated X — **the docstring's claim is TRUE**, kept as-is with a code comment citing the source. |
+| 15 + feature-doc sync | `6527889` | README.md + publication-figure.md updated for Rounds A-C: vector export (`format="pdf"/"eps"/"emf"`, svg impossible), export width honored / no independent height, `create_graph(template=)`, `curve_fit(x_min=, x_max=, peaks=N, peak_centers=)`, `transform(smooth_method=)`, `axis(op="labels", axis="right"/"top")`. Added the "Return-format convention" paragraph to README (JSON for creation/data tools, plain strings for styling). Swept for stale `poly_order`/`dpi`/`height` references — none found; those were already fully removed in prior rounds. |
+
+**Context-cost measurement (AST over all `@mcp.tool` docstrings, before → after):**
+- Total always-loaded docstring bytes: **41646 → 40565** (-1081 bytes / -2.6%; the
+  reduction is smaller than the review's 3-4k-token estimate because several
+  tasks this round ADDED docstring content elsewhere — the import_data
+  usability note, the rgb cross-reference, the reworded grouping note — that
+  partially offset the run_labtalk/add_second_y_axis cuts).
+- `run_labtalk`: **6159 → 5084 bytes** (-1075, -17%).
+- `add_second_y_axis`: **1568 → 1080 bytes** (-488, -31%).
+- New `labtalk-gotchas.md` skill: 6836 bytes, loaded ONLY on `get_skill('labtalk-gotchas')` — zero always-loaded cost.
+- Tool count unchanged at 45 (43 `@mcp.tool` + 2 skill tools); confirmed by the same AST scan.
+
+**Note on commit atomicity:** README.md's Graphing-section table hunk bundles
+the item-18 `remove_plot` fix with adjacent item-15 row updates
+(`create_graph`/`axis`/`export_graph`) because they fall in the same diff
+hunk (adjacent markdown table rows) — split via `git add -p` where the tools
+allowed it (`style.py`, `publication-figure.md`'s 5 independent hunks),
+otherwise commits carry both items and say so in the message.
+
+WSL suite (`/tmp/opm_venv/bin/python3.11 -m pytest -q`): **660 passed, 59
+skipped** at HEAD `6527889` — unchanged from the Round A+B+C baseline (this
+was a docs-only round, no test changes expected or needed). `ruff check` on
+every file touched this round (`labtalk.py`, `graph.py`, `style.py`,
+`analysis.py`, `worksheet.py`, `README.md`, `publication-figure.md`,
+`labtalk-gotchas.md`): all clean. Did NOT push.
+
 ## 2026-07-11 — whole-product review Round C (multi-peak fitting, item 7) (agent: round-c)
 
 Scope: the single biggest analysis gap — multi-peak fitting / deconvolution
