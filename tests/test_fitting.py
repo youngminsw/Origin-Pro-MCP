@@ -72,6 +72,113 @@ def test_curve_fit_x_range_no_rows_raises(fake_origin):
         curve_fit("Book1", "Sheet1", 1, 2, function="gauss", x_min=100.0, x_max=200.0)
 
 
+def test_multipeak_emits_replica_for_peaks(fake_origin):
+    """peaks=3 gauss fits via the replica engine: replica:=peaks-1."""
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    fake_origin.lt_vars["__mcpread"] = 5.0  # cod>0 so the convergence guard passes
+    curve_fit("Book1", "Sheet1", 1, 2, function="gauss", peaks=3)
+    nlbegin = [c for c in fake_origin.executed if c.startswith("nlbegin")]
+    assert nlbegin, fake_origin.executed
+    assert "replica:=2" in nlbegin[0], nlbegin[0]
+
+
+def test_multipeak_sets_supplied_centers(fake_origin):
+    """peak_centers seed tt.xc / tt.xc__2 / tt.xc__3 (peak 1 unsuffixed)."""
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    fake_origin.lt_vars["__mcpread"] = 5.0
+    curve_fit(
+        "Book1", "Sheet1", 1, 2, function="gauss", peaks=3, peak_centers="20,35,50"
+    )
+    joined = " ".join(fake_origin.executed)
+    assert "__mcpfit.xc = 20" in joined, joined
+    assert "__mcpfit.xc__2 = 35" in joined, joined
+    assert "__mcpfit.xc__3 = 50" in joined, joined
+
+
+def test_multipeak_auto_init_emits_no_center_assignments(fake_origin):
+    """With no peak_centers, no tt.xc assignment is emitted (Origin auto-init)."""
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    fake_origin.lt_vars["__mcpread"] = 5.0
+    curve_fit("Book1", "Sheet1", 1, 2, function="gauss", peaks=2)
+    assert not [c for c in fake_origin.executed if "__mcpfit.xc =" in c]
+
+
+def test_multipeak_return_structure(fake_origin):
+    """peaks>1 returns peaks/baseline/parameters with per-peak blocks."""
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    fake_origin.lt_vars["__mcpread"] = 5.0
+    out = json.loads(curve_fit("Book1", "Sheet1", 1, 2, function="gauss", peaks=2))
+    assert out["peaks"] == 2
+    assert out["baseline"] == {"y0": {"value": 5.0, "std_error": 5.0}}
+    assert set(out["parameters"].keys()) == {"peak_1", "peak_2"}
+    assert set(out["parameters"]["peak_1"].keys()) == {"xc", "w", "A"}
+
+
+def test_multipeak_composes_with_x_range(fake_origin):
+    """peaks>1 and x_min/x_max both apply: replica AND a row subrange."""
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    fake_origin.worksheet_data = tuple((float(i), float(i)) for i in range(0, 11))
+    fake_origin.lt_vars["__mcpread"] = 5.0
+    curve_fit(
+        "Book1", "Sheet1", 1, 2, function="gauss", peaks=2, x_min=2.0, x_max=8.0
+    )
+    nlbegin = [c for c in fake_origin.executed if c.startswith("nlbegin")][0]
+    assert "replica:=1" in nlbegin, nlbegin
+    assert "[3:9]" in nlbegin, nlbegin
+
+
+def test_multipeak_unsupported_function_raises(fake_origin):
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    with pytest.raises(ValueError, match="only supported for"):
+        curve_fit("Book1", "Sheet1", 1, 2, function="poly2", peaks=2)
+
+
+def test_multipeak_peaks_below_one_raises(fake_origin):
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    with pytest.raises(ValueError, match="must be >= 1"):
+        curve_fit("Book1", "Sheet1", 1, 2, function="gauss", peaks=0)
+
+
+def test_multipeak_center_count_mismatch_raises(fake_origin):
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    with pytest.raises(ValueError, match="exactly one centre per peak"):
+        curve_fit(
+            "Book1", "Sheet1", 1, 2, function="gauss", peaks=3, peak_centers="20,35"
+        )
+
+
+def test_multipeak_centers_with_single_peak_raises(fake_origin):
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    with pytest.raises(ValueError, match="only applies when peaks>1"):
+        curve_fit("Book1", "Sheet1", 1, 2, function="gauss", peak_centers="20")
+
+
+def test_multipeak_nonconvergence_raises(fake_origin):
+    """cod (R^2) <= 0 => frozen/non-converged fit => actionable raise."""
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    fake_origin.lt_vars["__mcpread"] = 0.0  # cod reads back 0 => not converged
+    with pytest.raises(ValueError, match="did not converge"):
+        curve_fit("Book1", "Sheet1", 1, 2, function="gauss", peaks=2)
+
+
+def test_multipeak_nlfit_failure_raises(fake_origin):
+    from origin_pro_mcp.tools.fitting import curve_fit
+
+    fake_origin.execute_results["nlfit"] = False
+    with pytest.raises(ValueError, match="did not converge"):
+        curve_fit("Book1", "Sheet1", 1, 2, function="gauss", peaks=2)
+
+
 @pytest.mark.requires_origin
 def test_linear_fit():
     o = get_origin()

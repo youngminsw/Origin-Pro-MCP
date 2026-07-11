@@ -56,11 +56,126 @@ _LINE_NLFIT = ("Line", ("A", "B"))
 _LINE_PARAM_MAP = {"A": "intercept", "B": "slope"}
 
 
+# Origin's tiny "missing/unset" numeric sentinel (-1.23456789e-300): a
+# non-converged replica fit freezes params at their init values and reads its
+# std errors back as this value. Same magnitude heuristic used in labtalk.py /
+# matrix.py — deep in the denormal regime, far below any real fit quantity.
+_MISSING_SENTINEL_ABS_MAX = 1e-290
+
+
+def _is_missing(value) -> bool:
+    return isinstance(value, (int, float)) and 0 < abs(value) < _MISSING_SENTINEL_ABS_MAX
+
+
 def _read_tree_value(node: str):
     """Read one node of the NLFit result tree, or None if unreadable."""
     if not execute_labtalk(f"__mcpread = {_TREE}.{node};"):
         return None
     return get_lt_var("__mcpread")
+
+
+def _read_param_entry(node: str) -> dict:
+    """{"value", "std_error"} for one result-tree parameter node, each key
+    present only when it reads back as a real number (the missing-value
+    sentinel of a frozen/non-converged fit is dropped, like the "power"
+    unreadable precedent)."""
+    entry = {}
+    value = _read_tree_value(node)
+    if value is not None and not _is_missing(value):
+        entry["value"] = value
+    std_error = _read_tree_value(f"e_{node}")
+    if std_error is not None and not _is_missing(std_error):
+        entry["std_error"] = std_error
+    return entry
+
+
+def _columns_by_longname(book: str, sheet: str):
+    """(1-based index, LongName) for every column of [book]sheet, or [] if the
+    sheet cannot be resolved. Used to locate the 'Cumulative Fit Peak' /
+    'Fit Peak k' columns of a multi-peak fit-curve sheet by NAME (their column
+    order is not assumed)."""
+    ws = get_origin().FindWorksheet(f"[{book}]{sheet}")
+    if ws is None:
+        return []
+    return [(c + 1, ws.Columns.Item(c).LongName) for c in range(ws.Columns.Count)]
+
+
+def _plot_multipeak_fit(book, curve_sheet, target_graph, function, peaks):
+    """Draw a multi-peak fit onto ``target_graph``: the 'Cumulative Fit Peak'
+    envelope as the bold fit line, plus each 'Fit Peak k' component as a thin
+    line (best-effort). Columns are found by LongName. Returns the ``fit_curve``
+    dict, or a note dict when the cumulative column is absent/undrawable."""
+    import time
+
+    from .style_helpers import get_plot_names, place_legend_avoiding_data
+
+    cols = _columns_by_longname(book, curve_sheet)
+    cum_idx = next((i for i, ln in cols if ln == "Cumulative Fit Peak"), None)
+    comp_idx = [i for i, ln in cols if ln.startswith("Fit Peak ")]
+    if cum_idx is None:
+        return {
+            "fit_curve_note": (
+                f"Multi-peak fit succeeded but [{book}]{curve_sheet} had no "
+                "'Cumulative Fit Peak' column, so nothing was drawn."
+            )
+        }
+
+    curve_ws = get_origin().FindWorksheet(f"[{book}]{curve_sheet}")
+    if curve_ws is not None and cum_idx <= curve_ws.Columns.Count:
+        curve_ws.Columns.Item(cum_idx - 1).LongName = f"\\b({function.capitalize()} fit)"
+
+    if not execute_labtalk(
+        f"plotxy iy:=[{book}]{curve_sheet}!(1,{cum_idx}) plot:=200 "
+        f"ogl:=[{target_graph}]Layer1;"
+    ):
+        return {
+            "fit_curve_note": (
+                f"Could not draw the cumulative fit of [{book}]{curve_sheet} on "
+                f"{target_graph}."
+            )
+        }
+
+    # `set` resolves plot names against the ACTIVE window; plotxy ogl:= does not
+    # activate the graph. Style the cumulative envelope brick-red 2 pt. P8 HARD
+    # RULE: one flag per `set` call (batching corrupts the plot to black).
+    execute_labtalk(f"win -a {target_graph};")
+    curve_plots = get_plot_names(target_graph)
+    if curve_plots:
+        fit_plot = curve_plots[-1]
+        execute_labtalk(f"set {fit_plot} -c color(170,68,80);")
+        execute_labtalk(f"set {fit_plot} -w 400;")  # 2 pt
+        time.sleep(0.2)
+
+    # Per-peak component curves: thin muted grey, best-effort (a failure to draw
+    # a component never fails the fit — the cumulative line is the deliverable).
+    components_drawn = 0
+    for order, idx in enumerate(comp_idx, start=1):
+        if idx <= curve_ws.Columns.Count:
+            curve_ws.Columns.Item(idx - 1).LongName = f"Peak {order}"
+        if execute_labtalk(
+            f"plotxy iy:=[{book}]{curve_sheet}!(1,{idx}) plot:=200 "
+            f"ogl:=[{target_graph}]Layer1;"
+        ):
+            execute_labtalk(f"win -a {target_graph};")
+            names = get_plot_names(target_graph)
+            if names:
+                execute_labtalk(f"set {names[-1]} -c color(150,150,150);")
+                execute_labtalk(f"set {names[-1]} -w 100;")  # 0.5 pt
+            components_drawn += 1
+    time.sleep(0.2)
+
+    # Adding plots rebuilds the legend with new entries — re-anchor it inside.
+    execute_labtalk(f"win -a {target_graph}; legend -r;")
+    time.sleep(0.3)
+    place_legend_avoiding_data(target_graph)
+    return {
+        "fit_curve": {
+            "sheet": f"[{book}]{curve_sheet}",
+            "plotted_on": target_graph,
+            "cumulative_column": cum_idx,
+            "components_drawn": components_drawn,
+        }
+    }
 
 
 def _book_sheet_names(book: str) -> set:
@@ -107,7 +222,9 @@ def curve_fit(
     y_error_col: int = 0,
     plot_on_graph: str = "",
     x_min: float | None = None,
-    x_max: float | None = None
+    x_max: float | None = None,
+    peaks: int = 1,
+    peak_centers: str = ""
 ) -> str:
     """Perform curve fitting on worksheet data.
 
@@ -132,6 +249,15 @@ def curve_fit(
                <= x_max. Either bound may be given alone. The restriction is
                applied as a contiguous row block (X is assumed monotonic, as
                spectra are); a "line" fit with a range uses the NLFit engine.
+        peaks: Number of peaks to fit simultaneously (deconvolution). Default 1
+               (single-peak, unchanged). peaks>1 fits N overlapping peaks of the
+               same function at once (XRD/XPS/Raman); ONLY valid for gauss,
+               lorentz and voigt. Composes with x_min/x_max (restrict the range,
+               then deconvolve within it).
+        peak_centers: For peaks>1, optional "x1,x2,..." initial centre guesses,
+               one per peak (count must equal peaks). When empty, Origin's
+               built-in initialisation is used (works well on well-separated
+               peaks; supply centres for tightly overlapping or noisy spectra).
 
     Returns:
         JSON with fitted parameters and statistics. Parameter keys are
@@ -145,12 +271,50 @@ def curve_fit(
         function="power", the result has NO "parameters" key — Origin
         2020 cannot read the exponent back over COM, so only a
         "parameters_note" string is returned instead.
+        For peaks>1 the shape differs: "peaks" (the count), a shared
+        "baseline" {"y0": {...}}, and "parameters" keyed "peak_1".."peak_N",
+        each a block of that function's per-peak parameters (gauss/lorentz:
+        xc/w/A; voigt: xc/A/wG/wL) with value/std_error where readable. When
+        plot_on_graph is given, the cumulative fit envelope is drawn as the fit
+        line and each per-peak component as a thin line.
     """
     safe_book = labtalk_name(data_book, "data_book")
     safe_sheet = labtalk_name(data_sheet, "data_sheet")
     safe_x_col = positive_column(x_col, "x_col")
     safe_y_col = positive_column(y_col, "y_col")
     safe_function = labtalk_choice(function, FITTING_FUNCTIONS, "function")
+
+    # Multi-peak (deconvolution) validation — fail honestly BEFORE touching
+    # Origin. peaks>1 uses the NLFit replica engine, which only makes sense for
+    # peak functions.
+    _MULTIPEAK_OK = ("gauss", "lorentz", "voigt")
+    if peaks < 1:
+        msg = f"curve_fit peaks ({peaks}) must be >= 1."
+        raise ValueError(msg)
+    is_multi = peaks > 1
+    if is_multi and safe_function not in _MULTIPEAK_OK:
+        msg = (
+            f"curve_fit peaks>1 (multi-peak) is only supported for "
+            f"{', '.join(_MULTIPEAK_OK)}, not '{safe_function}'."
+        )
+        raise ValueError(msg)
+    center_values = []
+    if peak_centers.strip():
+        try:
+            center_values = [float(c) for c in peak_centers.split(",") if c.strip()]
+        except ValueError:
+            msg = f"curve_fit peak_centers ({peak_centers!r}) must be comma-separated numbers."
+            raise ValueError(msg) from None
+        if not is_multi:
+            msg = "curve_fit peak_centers only applies when peaks>1."
+            raise ValueError(msg)
+        if len(center_values) != peaks:
+            msg = (
+                f"curve_fit peak_centers has {len(center_values)} value(s) but "
+                f"peaks={peaks}; supply exactly one centre per peak."
+            )
+            raise ValueError(msg)
+
     sheet_ref = require_worksheet(safe_book, safe_sheet)
     safe_target_graph = ""
     if plot_on_graph:
@@ -205,13 +369,24 @@ def curve_fit(
     # Restrict to the resolved row block (empty when no x_min/x_max given).
     data_ref += row_subrange
 
-    if not execute_labtalk(f"nlbegin iy:={data_ref} func:={fdf_name} nltree:={_TREE};"):
+    # peaks>1: N overlapping copies of the peak function. replica:=peaks-1
+    # (probe-verified: replica is the count of ADDITIONAL copies).
+    replica_opt = f" replica:={peaks - 1}" if is_multi else ""
+    if not execute_labtalk(
+        f"nlbegin iy:={data_ref} func:={fdf_name}{replica_opt} nltree:={_TREE};"
+    ):
         execute_labtalk("nlend;")
         msg = (
             f"Could not start the '{safe_function}' fit on {data_ref}. "
             "Check that the columns contain numeric data."
         )
         raise ValueError(msg)
+    # Seed the per-peak centres when supplied (peak 1 = unsuffixed node `xc`,
+    # peaks 2..N = `xc__k`). Omitted => Origin's built-in replica init.
+    if is_multi and center_values:
+        for k, c in enumerate(center_values, start=1):
+            node = "xc" if k == 1 else f"xc__{k}"
+            execute_labtalk(f"{_TREE}.{node} = {c};")
     if not execute_labtalk("nlfit;"):
         execute_labtalk("nlend;")
         msg = f"The '{safe_function}' fit did not converge on {data_ref}."
@@ -222,6 +397,58 @@ def curve_fit(
         value = _read_tree_value(node)
         if value is not None:
             result["statistics"][key] = value
+
+    # A non-converged replica fit leaves nlfit reporting success but freezes the
+    # params at their init with cod (R^2) == 0 (probe-verified). Guard it so the
+    # tool never returns a frozen fit as a real one.
+    if is_multi:
+        cod = result["statistics"].get("r_squared")
+        if cod is None or cod <= 0:
+            execute_labtalk("nlend;")
+            msg = (
+                f"The {peaks}-peak '{safe_function}' fit did not converge on "
+                f"{data_ref} (R^2 <= 0). Supply peak_centers close to the real "
+                "peak positions, or reduce peaks."
+            )
+            raise ValueError(msg)
+        # Shared baseline + one block per peak. Per-peak params are the function's
+        # params after the shared y0 (param_names[0]); reads bounded to `peaks`
+        # (reading a node beyond the last peak silently returns a stale value).
+        per_peak_bases = param_names[1:]
+        y0_entry = _read_param_entry(param_names[0])
+        if y0_entry:
+            result["baseline"] = {param_names[0]: y0_entry}
+        peak_blocks = {}
+        for k in range(1, peaks + 1):
+            block = {}
+            for base in per_peak_bases:
+                node = base if k == 1 else f"{base}__{k}"
+                entry = _read_param_entry(node)
+                if entry:
+                    block[base] = entry
+            peak_blocks[f"peak_{k}"] = block
+        result["peaks"] = peaks
+        result["parameters"] = peak_blocks
+        if safe_target_graph:
+            sheets_before = _book_sheet_names(safe_book)
+            execute_labtalk("nlend output:=1;")
+            new_sheets = _book_sheet_names(safe_book) - sheets_before
+            curve_sheets = [s for s in new_sheets if "Curve" in s]
+            if not curve_sheets:
+                result["fit_curve_note"] = (
+                    "Fit succeeded but Origin produced no fit-curve sheet, "
+                    "so nothing was drawn on the graph."
+                )
+            else:
+                result.update(
+                    _plot_multipeak_fit(
+                        safe_book, curve_sheets[0], safe_target_graph,
+                        safe_function, peaks,
+                    )
+                )
+        else:
+            execute_labtalk("nlend;")
+        return json.dumps(result, indent=2)
 
     if param_names is None:
         result["parameters_note"] = (
