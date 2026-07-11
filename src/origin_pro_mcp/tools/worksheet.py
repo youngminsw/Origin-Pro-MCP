@@ -153,10 +153,38 @@ def set_worksheet_data(
             raise ValueError(msg)
 
     if missing_cells:
+        # The bulk PutWorksheet above already wrote a numeric 0.0 placeholder
+        # into every null/NaN cell. Each must be overwritten with Origin's real
+        # missing-value sentinel (col(c)[r]=0/0). If activation or ANY per-cell
+        # write fails, that cell silently keeps the 0.0 — a wrong number wearing
+        # a success message, the worst class of bug — so check every return and
+        # raise, naming exactly which cells still hold the placeholder.
+        def _cells(pairs):
+            return ", ".join(f"col {c + 1} row {r + 1}" for c, r in pairs)
+
         activate_window(safe_book_name, "book_name")
-        execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet_name, "sheet_name")};')
+        if not execute_labtalk(
+            f'page.active$ = {labtalk_string(safe_sheet_name, "sheet_name")};'
+        ):
+            msg = (
+                f"Could not activate sheet '{safe_sheet_name}' of "
+                f"'{safe_book_name}' to write missing values. The bulk write left "
+                f"a numeric 0.0 placeholder in these cells that should be blank: "
+                f"{_cells(missing_cells)}. Treat that data as wrong."
+            )
+            raise ValueError(msg)
+        failed = []
         for col_idx, row_idx in missing_cells:
-            execute_labtalk(f"col({col_idx + 1})[{row_idx + 1}]=0/0;")
+            if not execute_labtalk(f"col({col_idx + 1})[{row_idx + 1}]=0/0;"):
+                failed.append((col_idx, row_idx))
+        if failed:
+            msg = (
+                f"Origin rejected the missing-value write for these cells of "
+                f"{target}: {_cells(failed)}. They still hold the numeric 0.0 "
+                f"placeholder from the bulk write instead of a blank/missing "
+                f"value — treat that data as wrong."
+            )
+            raise ValueError(msg)
 
     if column_names:
         names = [n.strip() for n in column_names.split(",")]

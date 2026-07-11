@@ -195,3 +195,17 @@ def test_set_worksheet_data_no_missing_cells_emits_no_labtalk(fake_origin):
 
     set_worksheet_data("Book1", "Sheet1", "[[1,2,3]]")
     assert not any("=0/0;" in s for s in fake_origin.executed)
+
+
+def test_set_worksheet_data_raises_naming_cell_when_missing_write_fails(fake_origin):
+    """Item 2: if the per-cell missing-value write fails, the cell still holds
+    the bulk 0.0 placeholder — the tool must raise naming that exact cell, not
+    return success over corrupt data."""
+    import pytest
+
+    from origin_pro_mcp.tools.worksheet import set_worksheet_data
+
+    # Two columns; the null is at col 2 row 2 -> LabTalk col(2)[2]=0/0.
+    fake_origin.execute_results["col(2)[2]=0/0"] = False
+    with pytest.raises(ValueError, match="col 2 row 2"):
+        set_worksheet_data("Book1", "Sheet1", "[[1,2],[3,null]]")
