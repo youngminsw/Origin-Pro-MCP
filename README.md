@@ -333,13 +333,20 @@ used to be many single-purpose ones.
 > rename on collision, so read `"name"` from the result rather than assuming
 > the requested name was used.
 
+> **Return-format convention**: tools that create or read structured data
+> (worksheets, graphs, matrices, imports, fits, stats, transforms) return a
+> JSON string to parse; tools that apply styling or a one-off action (the
+> Styling and Advanced sections below, plus most of Graphing) return a plain
+> human-readable status string. A few dispatcher tools (`stats`, `transform`)
+> mix both across their `op`/`method` choices — each is documented per-tool.
+
 ### Worksheet Data
 | Tool | Description |
 |------|-------------|
 | `create_worksheet` | Create new workbook |
 | `set_worksheet_data` | Write column data (JSON arrays) |
 | `get_worksheet_data` | Read worksheet data as JSON (empty cells → null) |
-| `import_data` | Import a CSV/text or Excel file (`format="auto"/"csv"/"excel"`); CSV/text import suppresses Origin's auto-generated sparkline mini-graph windows by default (`sparklines=False`) |
+| `import_data` | Import a CSV/text or Excel file (`format="auto"/"csv"/"excel"`); CSV/text import suppresses Origin's auto-generated sparkline mini-graph windows by default (`sparklines=False`). `file_path` may also be a directory or glob to batch-import every matching file, each into its own book |
 | `export_worksheet` | Export a worksheet to CSV/text |
 | `list_worksheets` | List open workbooks, graphs, and matrices |
 | `manage_columns` | Add, delete, or edit columns — `op="add"/"delete"/"properties"/"formula"` |
@@ -383,9 +390,9 @@ used to be many single-purpose ones.
 ### Analysis
 | Tool | Description |
 |------|-------------|
-| `curve_fit` | Curve fitting: parameters ± std errors, R², SSR, reduced χ²; optional `plot_on_graph` |
+| `curve_fit` | Curve fitting: parameters ± std errors, R², SSR, reduced χ²; optional `plot_on_graph`, `x_min`/`x_max` to restrict the fit range, and `peaks=N` (gauss/lorentz/voigt) for multi-peak deconvolution |
 | `list_fitting_functions` | Show available fit functions |
-| `transform` | Numerical transform on an XY curve — `method="integrate"/"differentiate"/"smooth"/"interpolate"/"fft"/"find_peaks"` |
+| `transform` | Numerical transform on an XY curve — `method="integrate"/"differentiate"/"smooth"/"interpolate"/"fft"/"find_peaks"`; `smooth` takes `smooth_method="savitzky_golay"/"adjacent"/"binomial"` |
 | `stats` | Statistics on worksheet columns — `op="column"/"compare_means"/"frequency"` |
 
 ### Advanced

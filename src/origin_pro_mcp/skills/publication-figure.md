@@ -372,8 +372,12 @@ colorbar's label density to follow it, tuning down if the labels crowd.
 ### Signal / spectra workflows
 
 `transform(method="smooth"/"differentiate"/"integrate"/"interpolate"/"fft"/"find_peaks")`
-writes result columns or returns JSON. Typical Raman/XRD flow: smooth →
-find_peaks → `curve_fit(plot_on_graph=...)` → annotate the peaks.
+writes result columns or returns JSON (`smooth` takes `smooth_method=
+"savitzky_golay"/"adjacent"/"binomial"`). Typical Raman/XRD flow: smooth →
+find_peaks → `curve_fit(plot_on_graph=..., x_min=, x_max=)` to fit one
+isolated peak, or `curve_fit(peaks=N)` (gauss/lorentz/voigt) to deconvolve N
+overlapping peaks at once, with optional `peak_centers="x1,x2,..."` seeds →
+annotate the peaks.
 
 ### Multi-panel and axis control
 
@@ -427,15 +431,23 @@ add/delete columns, units/long name/designation), `sort_worksheet`,
 `import_data` suppresses Origin's auto-generated sparkline mini-graph windows
 by default for CSV/text imports (`sparklines=False`) — no manual cleanup of
 those throwaway windows is needed; pass `sparklines=True` to keep them.
+`import_data(file_path=<directory or glob>)` batch-imports every matching
+file, one book per file (first 20 matches); use the returned "name" per file
+rather than a follow-up `list_worksheets` call.
 
 ### Reuse and sized export
 
 - `save_graph_template(graph, path)` captures a finished layout as `.otpu`
-  to reuse across figures.
-- `export_graph(graph, path, sized=True, width=1600)` exports at an exact
-  pixel width (vs. the default, which exports at ~1200px wide). Both write
-  the file directly via expGraph with no clipboard, so the user's clipboard
-  is preserved.
+  to reuse across figures; `create_graph(..., template=<path>)` builds a NEW
+  graph FROM that template (2D XY plot types only), reproducing the saved
+  frame/fonts/line/symbol styling with new data.
+- `export_graph(graph, path, width=1600)` exports at an exact pixel width
+  (vs. the default, which exports at ~1200px wide; height always follows the
+  graph's aspect ratio). Also supports vector formats — `format="pdf"/"eps"/
+  "emf"` — for a resolution-independent journal submission (`svg` is not
+  offered; Origin's expGraph fails to write one). Both write the file
+  directly via expGraph with no clipboard, so the user's clipboard is
+  preserved.
 
 ## Origin COM Notes
 
