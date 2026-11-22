@@ -2102,11 +2102,64 @@ _LAUNCH_LOCK = threading.Lock()
 _real_pid_tls = threading.local()
 
 
+def _registered_origin_images() -> tuple:
+    """Executable basename(s) COM actually launches for Origin, read from the
+    ``LocalServer32`` registration of ``Origin.Application`` /
+    ``Origin.ApplicationSI``.
+
+    This is what ``tasklist`` reports, and it is often NOT one of the default
+    names: Origin 2018 (9.5) ships ``Origin95_64.exe`` and registers the server
+    with an 8.3 short path, so the process shows up as ``ORIGIN~1.EXE``. Without
+    it, PID capture silently fails and the dialog watchdog, force-kill backstop
+    and orphan reclaim are all disabled. Windows-only, best-effort (``()``
+    elsewhere or on any registry error).
+    """
+    try:
+        import winreg
+    except ImportError:
+        return ()
+    names: list = []
+    views = (0, getattr(winreg, "KEY_WOW64_32KEY", 0), getattr(winreg, "KEY_WOW64_64KEY", 0))
+    for progid in ("Origin.Application", "Origin.ApplicationSI"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, progid + "\\CLSID") as key:
+                clsid = winreg.QueryValue(key, None)
+        except OSError:
+            continue
+        for view in views:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT,
+                                    f"CLSID\\{clsid}\\LocalServer32", 0,
+                                    winreg.KEY_READ | view) as key:
+                    cmd = (winreg.QueryValue(key, None) or "").strip()
+            except OSError:
+                continue
+            if cmd.startswith('"'):
+                exe = cmd[1:].split('"', 1)[0]
+            else:
+                exe = cmd.split(" -", 1)[0].split(" /", 1)[0].strip()
+            base = os.path.basename(exe)
+            if base and base.lower() not in {n.lower() for n in names}:
+                names.append(base)
+            break
+    return tuple(names)
+
+
 def _origin_image_names() -> tuple:
+    """Image names that identify an Origin process in ``tasklist``.
+
+    ``ORIGIN_PRO_MCP_ORIGIN_IMAGE`` (comma-separated) replaces the built-in
+    defaults; the names read from the COM registration are ALWAYS added, so a
+    wrong or stale override can no longer disable PID capture.
+    """
     override = os.environ.get("ORIGIN_PRO_MCP_ORIGIN_IMAGE")
     if override:
-        return tuple(n.strip() for n in override.split(",") if n.strip())
-    return _DEFAULT_ORIGIN_IMAGES
+        base = tuple(n.strip() for n in override.split(",") if n.strip())
+    else:
+        base = _DEFAULT_ORIGIN_IMAGES
+    seen = {n.lower() for n in base}
+    extra = tuple(n for n in _registered_origin_images() if n.lower() not in seen)
+    return base + extra
 
 
 def _origin_process_pids() -> set:

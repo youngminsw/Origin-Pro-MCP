@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 
 from ..app import mcp
 import time
@@ -165,19 +166,107 @@ def close_origin(save: bool = False, confirm: bool = False) -> str:
         except Exception:
             pass
         outcome = "unsaved changes discarded"
+    # The PID is only trusted for an isolated instance this session launched;
+    # an attached/shared Origin is never force-killed.
+    pid = None if session_origin_is_shared() else _session_origin_pid()
     _close_instance(o)
-    # Exit returns before the process is gone; wait briefly for the proxy to die.
-    closed = False
-    for _ in range(20):
-        if not _connection_alive(o):
-            closed = True
-            break
-        time.sleep(0.25)
+    # Exit returns before the process is gone, and on Origin 2018 an Exit sent
+    # to a -Embedding instance does not always take — so confirm by PID (or, if
+    # the PID is unknown, by the COM proxy dying).
+    closed = _wait_closed(o, pid, timeout=10.0)
+    forced = False
+    if not closed and pid is not None:
+        try:
+            _terminate_pid(pid)
+        except Exception:
+            pass
+        closed = _wait_closed(o, pid, timeout=3.0)
+        forced = closed
+    _forget_session_origin_pid()
     drop_session_origin()
     if not closed:
         return (f"Exit sent to this session's Origin ({outcome}), but it has not "
                 "exited yet — a dialog may be open in that window.")
+    if forced:
+        return (f"Closed this session's Origin ({outcome}); it ignored Exit, so its "
+                f"process (PID {pid}) was terminated.")
     return f"Closed this session's Origin ({outcome})."
+
+
+def _daemon_pid_stores() -> list:
+    """The daemon's thread-local PID store(s).
+
+    The daemon runs as ``python -m origin_pro_mcp.daemon``, so inside that
+    process its module is ``__main__``; ``import origin_pro_mcp.daemon`` would
+    load a SECOND, empty copy. Check both, never importing a new copy.
+    """
+    stores = []
+    for name in ("__main__", "origin_pro_mcp.daemon"):
+        mod = sys.modules.get(name)
+        tls = getattr(mod, "_real_pid_tls", None) if mod is not None else None
+        if tls is not None and all(tls is not s for s in stores):
+            stores.append(tls)
+    return stores
+
+
+def _session_origin_pid():
+    """PID of the Origin this daemon worker launched (captured by the daemon's
+    factory on this thread), or None (in-process mode / capture failed)."""
+    for tls in _daemon_pid_stores():
+        pid = getattr(tls, "pid", None)
+        if isinstance(pid, int) and pid > 0:
+            return pid
+    return None
+
+
+def _forget_session_origin_pid() -> None:
+    """Clear the captured PID so a later force-kill can never hit a reused PID."""
+    for tls in _daemon_pid_stores():
+        try:
+            tls.pid = None
+        except Exception:
+            pass
+
+
+def _terminate_pid(pid: int) -> None:
+    for name in ("__main__", "origin_pro_mcp.daemon"):
+        fn = getattr(sys.modules.get(name), "default_terminate_process", None)
+        if callable(fn):
+            fn(pid)
+            return
+
+
+def _pid_alive(pid: int) -> bool:
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+
+    SYNCHRONIZE = 0x00100000
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    WAIT_TIMEOUT = 0x102
+    k32 = ctypes.windll.kernel32
+    handle = k32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    try:
+        return k32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+    finally:
+        k32.CloseHandle(handle)
+
+
+def _wait_closed(o, pid, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        alive = _pid_alive(pid) if pid is not None else _connection_alive(o)
+        if not alive:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
 
 @mcp.tool()
 def load_project(file_path: str) -> str:
