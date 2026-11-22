@@ -62,12 +62,13 @@ def _registry():
     return mcp._tool_manager._tools
 
 
-def test_registry_has_exactly_45_tools():
+def test_registry_has_exactly_46_tools():
     # 43 Origin tools + list_skills + get_skill = 45. N7 added ungroup_plots and
     # folded per-plot RGB into set_plot_style (dropping set_plot_color /
     # set_plot_line_width) and removed set_column_designation (use
-    # manage_columns op="properties"), netting back to 45.
-    assert len(_registry()) == 45
+    # manage_columns op="properties"), netting back to 45. close_origin
+    # (Origin 2018 work) makes it 46.
+    assert len(_registry()) == 46
 
 
 def test_eight_new_dispatchers_registered():

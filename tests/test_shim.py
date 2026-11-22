@@ -123,12 +123,12 @@ def test_shim_schema_is_byte_identical_for_all_tools():
     shim_server = shim.build_shim_server(client)
     shim_tools = shim_server._tool_manager._tools
 
-    # Same exact set of tool names, and exactly 45 of them: 43 Origin
-    # forwarders + list_skills + get_skill (skill tools are served locally by
+    # Same exact set of tool names, and exactly 46 of them: 44 Origin
+    # forwarders (close_origin is the 44th) + list_skills + get_skill (skill tools are served locally by
     # the shim, not forwarded, but must still be schema-identical to the
     # in-process server).
     assert set(shim_tools) == set(real_tools)
-    assert len(shim_tools) == 45
+    assert len(shim_tools) == 46
 
     for name, real in real_tools.items():
         fwd = shim_tools[name].fn

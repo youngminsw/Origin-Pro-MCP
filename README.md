@@ -312,7 +312,7 @@ cd src && /mnt/c/.../python.exe -m origin_pro_mcp.cli list_worksheets
 The CLI reflects over the same tool registry as the MCP server, so it
 always exposes exactly the tools listed below.
 
-## Available Tools (45 total)
+## Available Tools (46 total)
 
 Several tools are **dispatchers**: one tool name with an `op`/`kind`/`method`
 argument that selects the specific action, so a handful of tools cover what
@@ -326,6 +326,7 @@ used to be many single-purpose ones.
 | `load_project` | Open existing .opj/.opju file |
 | `export_all_graphs` | Export every graph in the project to image files |
 | `save_graph_template` | Save a graph as a reusable .otpu/.otp template |
+| `close_origin` | Close this session's Origin window (never the user's own unless `confirm=True`) |
 
 > **Note**: `create_worksheet`, `create_matrix`, `create_graph`,
 > `create_matrix_plot`, `import_data`, and `worksheet_to_matrix` return a

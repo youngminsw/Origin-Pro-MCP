@@ -30,3 +30,14 @@ def main():
         return
     from . import server  # noqa: F401 — registers all tools
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    # Run as ``python -m origin_pro_mcp.app`` this file is ``__main__``, a
+    # second copy of the module: the tools register on
+    # ``origin_pro_mcp.app.mcp``, not on this copy's ``mcp``. Delegate to the
+    # real module so the server that runs is the one the tools are on (this
+    # matters in in-process mode, ORIGIN_PRO_MCP_USE_DAEMON=0).
+    from origin_pro_mcp.app import main as _package_main
+
+    _package_main()

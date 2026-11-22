@@ -55,6 +55,12 @@ DISPATCH_KILL_GRACE_DEFAULT: float = 90.0  # seconds; env: ORIGIN_PRO_MCP_DISPAT
 # sessions. 0 disables. env: ORIGIN_PRO_MCP_AUTOSAVE_INTERVAL
 AUTOSAVE_INTERVAL_DEFAULT: float = 300.0
 
+# Detach reap of an EMPTY Origin: how long to wait for Exit to take before the
+# PID force-kill fallback. This wait plus the 1 s post-kill check is kept below
+# the default reap grace (5 s), so the watchdog's stage-2 deadline is not what
+# ends the session.
+EMPTY_CLOSE_WAIT_DEFAULT: float = 3.5
+
 def _env_flag_on(name: str) -> bool:
     """True when env var ``name`` is explicitly set to a truthy on-value."""
     raw = os.environ.get(name)
@@ -163,9 +169,19 @@ class Session:
     def __init__(self, session_id: str, origin_factory: OriginFactory,
                  registry: dict, get_pid: Optional[GetPid] = None,
                  autosave_policy: Optional[AutosavePolicy] = None,
-                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None):
+                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None,
+                 terminate_process: Optional[TerminateProcess] = None,
+                 process_running: Optional[Callable[[int], bool]] = None,
+                 empty_close_wait: float = EMPTY_CLOSE_WAIT_DEFAULT):
         self.session_id = session_id
         self._factory = origin_factory
+        # Used only by _close_if_empty (detach reap of an EMPTY Origin): the
+        # force-kill fallback and the "has it exited yet?" probe. Injectable so
+        # tests never signal a real PID.
+        self._terminate_process = terminate_process or default_terminate_process
+        self._process_running = process_running or default_process_running
+        self._empty_close_wait = empty_close_wait
+        self.empty_close_result: Optional[str] = None
         self._registry = registry
         self._get_pid = get_pid or _default_get_pid
         self._autosave_policy = autosave_policy
@@ -344,7 +360,15 @@ class Session:
         WEDGED worker is freed instead by the watchdog force-killing its PID.
         """
         if not _reap_close_enabled():
-            return  # detach: leave the window untouched; the worker exits below
+            # detach: leave the window untouched; the worker exits below —
+            # EXCEPT an Origin with nothing in it, which would otherwise be left
+            # behind un-closable (Origin 2018 says it is "controlled by another
+            # program"). Anything uncertain keeps it.
+            try:
+                self._close_if_empty()
+            except Exception:
+                pass
+            return
         project_path = None
         if getter is not None:
             try:
@@ -369,6 +393,94 @@ class Session:
                 except Exception:
                     pass
                 break
+
+    def _project_is_empty(self) -> bool:
+        """True ONLY when the Origin provably holds no windows: the
+        WorksheetPages, GraphPages and MatrixPages counts all read as ints and
+        sum to 0. Any read failure means "unknown" -> False (keep the Origin).
+        A readable ``Pages`` (all pages, if this Origin exposes it) above 0
+        also keeps it, so a project holding only e.g. a Notes window survives."""
+        inst = self.instance
+        total = 0
+        for coll in ("WorksheetPages", "GraphPages", "MatrixPages"):
+            try:
+                n = getattr(inst, coll).Count
+            except Exception:
+                return False
+            if isinstance(n, bool) or not isinstance(n, int):
+                try:
+                    n = int(n)
+                except Exception:
+                    return False
+            total += n
+        if total != 0:
+            return False
+        try:
+            every = int(inst.Pages.Count)
+        except Exception:
+            every = None  # not exposed / unreadable: rely on the three above
+        if every is not None and every > 0:
+            return False
+        return True
+
+    def _close_if_empty(self) -> Optional[str]:
+        """Detach-reap helper: close this session's Origin iff it is EMPTY.
+
+        Conditions (all required): not attach mode (never the user's own
+        Origin), and :meth:`_project_is_empty`. Then mark the project clean
+        (``doc -s;``, so no "Save changes?" modal), ``Exit()``, and confirm by
+        PID. Origin 2018 ignores Exit on a ``-Embedding`` instance, so a process
+        still running after the wait is force-killed — but only with a known
+        PID; ``pid is None`` never force-kills.
+
+        Returns (and records in ``empty_close_result``) one of: "kept",
+        "closed", "forced", "exit-sent" (no PID to confirm/kill),
+        "still-running" (kill attempted, process survived)."""
+        result = "kept"
+        try:
+            if self.attached or self.instance is None or not self._project_is_empty():
+                return result
+            inst = self.instance
+            try:
+                inst.Execute("doc -s;")
+            except Exception:
+                pass
+            for closer in ("Exit", "Close"):
+                fn = getattr(inst, closer, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+                    break
+            pid = self.pid
+            if pid is None:
+                result = "exit-sent"
+                return result
+            if self._wait_process_gone(pid, self._empty_close_wait):
+                result = "closed"
+                return result
+            try:
+                self._terminate_process(pid)
+            except Exception:
+                pass
+            result = "forced" if self._wait_process_gone(pid, 1.0) else "still-running"
+            return result
+        finally:
+            self.empty_close_result = result
+
+    def _wait_process_gone(self, pid: int, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            try:
+                running = self._process_running(pid)
+            except Exception:
+                running = True  # unknown: keep waiting, then fall back
+            if not running:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
 
     def submit_reap(self, recovery_dir: str, getter,
                     on_done: Optional[Callable[[], None]] = None) -> None:
@@ -521,9 +633,13 @@ class Pool:
                  autosave_policy: Optional[AutosavePolicy] = None,
                  attach_factory: Optional[OriginFactory] = None,
                  attach_get_pid: Optional[GetPid] = None,
-                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None):
+                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None,
+                 terminate_process: Optional[TerminateProcess] = None,
+                 process_running: Optional[Callable[[int], bool]] = None):
         self._factory = origin_factory
         self._registry = registry
+        self._terminate_process = terminate_process
+        self._process_running = process_running
         self._max_size = max_size
         self._get_pid = get_pid
         self._start_timeout = start_timeout
@@ -573,6 +689,8 @@ class Pool:
                 session_id, factory, self._registry, get_pid,
                 autosave_policy=self._autosave_policy,
                 dialog_watchdog_factory=self._dialog_watchdog_factory,
+                terminate_process=self._terminate_process,
+                process_running=self._process_running,
             )
             session.attached = bool(use_attach)
             if use_attach:
@@ -1034,6 +1152,34 @@ def default_is_alive(pid: int) -> bool:
     return True
 
 
+def default_process_running(pid: int) -> bool:
+    """True while process ``pid`` is still running — out-of-band, no COM.
+
+    Unlike :func:`default_is_alive` (which only checks that a handle can be
+    opened, and so stays True for an exited process whose handle someone still
+    holds), Windows checks the process is not yet signalled. Used to confirm an
+    ``Exit`` actually took before falling back to a force-kill.
+    """
+    if not pid:
+        return False
+    if sys.platform == "win32":
+        import ctypes  # local import: Windows-only path
+
+        SYNCHRONIZE = 0x00100000
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        WAIT_TIMEOUT = 0x102
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(
+            SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            return k32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+        finally:
+            k32.CloseHandle(handle)
+    return default_is_alive(pid)
+
+
 def iter_registered_tools(mcp) -> dict:
     """Return ``{tool_name: fn}`` for every tool registered on a FastMCP server.
 
@@ -1256,7 +1402,11 @@ class Daemon:
                           autosave_policy=autosave_policy,
                           attach_factory=attach_factory,
                           attach_get_pid=attach_get_pid,
-                          dialog_watchdog_factory=dialog_watchdog_factory)
+                          dialog_watchdog_factory=dialog_watchdog_factory,
+                          # Same injected kill/liveness hooks as the watchdog
+                          # and startup sweep, for the empty-Origin close.
+                          terminate_process=self._terminate,
+                          process_running=is_alive)
         self._watchdog = Watchdog(terminate_process=self._terminate,
                                   on_reap=self._on_watchdog_reap,
                                   tick=monitor_tick, clock=self._clock)

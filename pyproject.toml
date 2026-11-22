@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Visualization",
 ]
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.8.0,<2",
     "pywin32>=306; platform_system == 'Windows'",
     "Pillow>=10.0.0",
 ]
