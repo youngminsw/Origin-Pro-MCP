@@ -210,20 +210,20 @@ def _column_labels(o, target: str, ncols: int) -> tuple:
     try:
         ws = o.FindWorksheet(target)
         cols = ws.Columns if ws is not None else None
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort COM guard
         cols = None
     if cols is None:
         return long_names, units
     for i in range(ncols):
         try:
             col = cols.Item(i)
-        except Exception:
+        except Exception:  # noqa: BLE001, S112 - best-effort COM guard
             continue
         for attr, out in (("LongName", long_names), ("Units", units)):
             try:
                 val = getattr(col, attr)
                 out[i] = val if isinstance(val, str) else ""
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - best-effort COM guard
                 pass
     return long_names, units
 

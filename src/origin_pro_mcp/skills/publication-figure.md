@@ -341,7 +341,7 @@ After export, inspect whether labels are readable, legends avoid data, axis rang
 
 ## Extended Toolkit (beyond 2D line plots)
 
-The server exposes 45 tools, several of them dispatchers (one tool name,
+The server exposes 46 tools, several of them dispatchers (one tool name,
 an `op`/`kind`/`method` argument selecting the action). Reach for these
 when a figure needs more than a styled XY plot.
 

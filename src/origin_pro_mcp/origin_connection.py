@@ -324,7 +324,7 @@ def require_graph(graph_name: str):
                 if page.Name == graph_name and page.Layers.Count:
                     layer = page.Layers.Item(0)
                     break
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort COM guard
             layer = None
     if layer is None:
         graphs = ", ".join(graph_names()) or "(none)"

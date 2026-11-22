@@ -312,7 +312,7 @@ cd src && /mnt/c/.../python.exe -m origin_pro_mcp.cli list_worksheets
 The CLI reflects over the same tool registry as the MCP server, so it
 always exposes exactly the tools listed below.
 
-## Available Tools (45 total)
+## Available Tools (46 total)
 
 Several tools are **dispatchers**: one tool name with an `op`/`kind`/`method`
 argument that selects the specific action, so a handful of tools cover what
@@ -324,6 +324,7 @@ used to be many single-purpose ones.
 | `new_project` | Create new empty Origin project |
 | `save_project` | Save project to .opju file |
 | `load_project` | Open existing .opj/.opju file |
+| `close_origin` | Close this session's own Origin window (optional save; refuses a user-owned window without `confirm=True`) |
 | `export_all_graphs` | Export every graph in the project to image files |
 | `save_graph_template` | Save a graph as a reusable .otpu/.otp template |
 
@@ -345,7 +346,7 @@ used to be many single-purpose ones.
 |------|-------------|
 | `create_worksheet` | Create new workbook |
 | `set_worksheet_data` | Write column data (JSON arrays) |
-| `get_worksheet_data` | Read worksheet data as JSON (empty cells → null) |
+| `get_worksheet_data` | Read worksheet data as JSON, paged (`start_row`/`max_rows`, default 200 rows; empty cells → null) |
 | `import_data` | Import a CSV/text or Excel file (`format="auto"/"csv"/"excel"`); CSV/text import suppresses Origin's auto-generated sparkline mini-graph windows by default (`sparklines=False`). `file_path` may also be a directory or glob to batch-import every matching file, each into its own book |
 | `export_worksheet` | Export a worksheet to CSV/text |
 | `list_worksheets` | List open workbooks, graphs, and matrices |

@@ -1,10 +1,9 @@
 import os
 import shutil
 import sys
-
-from ..app import mcp
 import time
 
+from ..app import mcp
 from ..origin_connection import (
     _close_instance,
     _connection_alive,
@@ -163,7 +162,7 @@ def close_origin(save: bool = False, confirm: bool = False) -> str:
         # (which would block the session until someone clicks it).
         try:
             o.Execute("doc -s;")
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - best-effort COM guard
             pass
         outcome = "unsaved changes discarded"
     # The PID is only trusted for an isolated instance this session launched;
@@ -178,7 +177,7 @@ def close_origin(save: bool = False, confirm: bool = False) -> str:
     if not closed and pid is not None:
         try:
             _terminate_pid(pid)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - best-effort COM guard
             pass
         closed = _wait_closed(o, pid, timeout=3.0)
         forced = closed
@@ -224,7 +223,7 @@ def _forget_session_origin_pid() -> None:
     for tls in _daemon_pid_stores():
         try:
             tls.pid = None
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - best-effort COM guard
             pass
 
 

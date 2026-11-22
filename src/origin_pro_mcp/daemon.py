@@ -17,6 +17,7 @@ This phase (3b) is entirely COM-free. The daemon owns:
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import queue
 import secrets
@@ -2138,7 +2139,9 @@ def _registered_origin_images() -> tuple:
                 exe = cmd[1:].split('"', 1)[0]
             else:
                 exe = cmd.split(" -", 1)[0].split(" /", 1)[0].strip()
-            base = os.path.basename(exe)
+            # ntpath, not os.path: the registry always holds a Windows path,
+            # and posixpath.basename would not split on backslashes.
+            base = ntpath.basename(exe)
             if base and base.lower() not in {n.lower() for n in names}:
                 names.append(base)
             break
