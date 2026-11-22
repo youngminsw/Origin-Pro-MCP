@@ -40,7 +40,43 @@ def labtalk_name(value: str, field: str) -> str:
             f"{field} must start with a letter or underscore and contain only "
             "letters, numbers, and underscores."
         )
+        if "sheet" in field and isinstance(value, str) and value.strip():
+            msg += (
+                " (This tool interpolates the sheet name into a LabTalk range, "
+                "so it needs a plain name. Sheet names with spaces or other "
+                "characters ARE accepted by get_worksheet_data, "
+                "export_worksheet, set_worksheet_data, stats and the other "
+                "read/analysis tools; rename the sheet first to use it here.)"
+            )
         raise ValueError(msg)
+    return value
+
+
+# Characters that would break a ``[Book]Sheet`` reference or a quoted
+# ``page.active$ = "..."`` assignment. Everything else Origin allows in a
+# sheet name (spaces, dashes, dots, parentheses, CJK, ...) is accepted.
+_SHEET_FORBIDDEN: Final = frozenset('"[]!;\r\n\t')
+
+
+def labtalk_sheet_name(value: str, field: str) -> str:
+    """Validate an EXISTING worksheet name that may contain spaces etc.
+
+    Origin itself allows sheet names such as ``wpd_datasets _1_``. This
+    validator accepts them, but its result may only be used where the name is
+    passed to COM (``GetWorksheet``/``FindWorksheet``/``PutWorksheet`` with a
+    ``[Book]Sheet`` reference) or quoted via :func:`labtalk_string`
+    (``page.active$ = "..."``). NEVER interpolate it raw into a LabTalk range
+    such as ``[Book]Sheet!col(1)`` — those call sites must keep using
+    :func:`labtalk_name`.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} cannot be empty.")
+    if value != value.strip():
+        raise ValueError(f"{field} cannot start or end with whitespace.")
+    bad = sorted({ch for ch in value if ch in _SHEET_FORBIDDEN})
+    if bad:
+        shown = ", ".join(repr(ch) for ch in bad)
+        raise ValueError(f"{field} cannot contain {shown}.")
     return value
 
 

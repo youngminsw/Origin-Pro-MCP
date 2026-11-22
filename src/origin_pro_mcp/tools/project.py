@@ -2,14 +2,21 @@ import os
 import shutil
 
 from ..app import mcp
+import time
+
 from ..origin_connection import (
+    _close_instance,
+    _connection_alive,
     activate_window,
     check_project_collision,
+    drop_session_origin,
     execute_labtalk,
     get_origin,
     graph_names,
+    peek_session_origin,
     remember_project_path,
     require_graph,
+    session_origin_is_shared,
 )
 from ..labtalk_safe import labtalk_choice, labtalk_name, windows_path
 from .graph import EXPORT_FORMATS, export_graph_to_file
@@ -108,6 +115,69 @@ def save_project(file_path: str = "") -> str:
         )
         raise ValueError(msg)
     return "Project saved"
+
+@mcp.tool()
+def close_origin(save: bool = False, confirm: bool = False) -> str:
+    """Close THIS session's Origin window.
+
+    Only the Origin instance this MCP session launched is closed — never
+    another session's, and never a window the user opened themselves (attach
+    mode / in-process mode) unless ``confirm=True``. Use this instead of
+    ``run_labtalk("exit")``, which can reach the wrong instance after a daemon
+    restart. The next tool call starts a fresh, empty Origin.
+
+    Args:
+        save: True saves the project to its current file first (fails if it
+              has none — call save_project(file_path=...) first). False
+              (default) DISCARDS unsaved changes without a prompt.
+        confirm: Required to close an Origin the user opened themselves.
+
+    Returns:
+        What was closed and whether changes were saved or discarded.
+    """
+    o = peek_session_origin()
+    if o is None:
+        drop_session_origin()
+        return "No Origin window is open for this session; nothing to close."
+    if session_origin_is_shared() and not confirm:
+        msg = (
+            "Refusing to close: this session is using an Origin window the user "
+            "opened (attach mode or in-process mode), so closing it would close "
+            "THEIR Origin. Re-call with confirm=True only if the user explicitly "
+            "asked to close it."
+        )
+        raise ValueError(msg)
+    if save:
+        if _project_page_count(o) == 0:
+            msg = ("Refusing to save: the project is empty. Close with save=False, "
+                   "or load/create content first.")
+            raise ValueError(msg)
+        if not o.Save(""):
+            msg = ("Origin could not save: the project has no file location. Call "
+                   "save_project(file_path=...) first, or close with save=False.")
+            raise ValueError(msg)
+        outcome = "changes saved"
+    else:
+        # Mark the project clean so Exit closes without a "Save changes?" modal
+        # (which would block the session until someone clicks it).
+        try:
+            o.Execute("doc -s;")
+        except Exception:
+            pass
+        outcome = "unsaved changes discarded"
+    _close_instance(o)
+    # Exit returns before the process is gone; wait briefly for the proxy to die.
+    closed = False
+    for _ in range(20):
+        if not _connection_alive(o):
+            closed = True
+            break
+        time.sleep(0.25)
+    drop_session_origin()
+    if not closed:
+        return (f"Exit sent to this session's Origin ({outcome}), but it has not "
+                "exited yet — a dialog may be open in that window.")
+    return f"Closed this session's Origin ({outcome})."
 
 @mcp.tool()
 def load_project(file_path: str) -> str:

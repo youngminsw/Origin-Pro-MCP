@@ -20,6 +20,7 @@ from ..origin_connection import (
 from ..labtalk_safe import (
     labtalk_choice,
     labtalk_name,
+    labtalk_sheet_name,
     labtalk_formula,
     positive_column,
     positive_int,
@@ -111,7 +112,7 @@ def set_worksheet_data(
     """
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
-    safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet_name = labtalk_sheet_name(sheet_name, "sheet_name")
     target = require_worksheet(safe_book_name, safe_sheet_name)
 
     try:
@@ -198,24 +199,74 @@ def set_worksheet_data(
     n_rows = max(len(c) for c in cols)
     return f"Set {len(cols)} columns x {n_rows} rows in {target}"
 
+GET_WORKSHEET_DEFAULT_MAX_ROWS = 200
+
+
+def _column_labels(o, target: str, ncols: int) -> tuple:
+    """(long_names, units) for each column via COM, without touching the
+    active window. Best-effort: any COM failure yields empty strings."""
+    long_names = [""] * ncols
+    units = [""] * ncols
+    try:
+        ws = o.FindWorksheet(target)
+        cols = ws.Columns if ws is not None else None
+    except Exception:
+        cols = None
+    if cols is None:
+        return long_names, units
+    for i in range(ncols):
+        try:
+            col = cols.Item(i)
+        except Exception:
+            continue
+        for attr, out in (("LongName", long_names), ("Units", units)):
+            try:
+                val = getattr(col, attr)
+                out[i] = val if isinstance(val, str) else ""
+            except Exception:
+                pass
+    return long_names, units
+
+
 @mcp.tool()
-def get_worksheet_data(book_name: str, sheet_name: str) -> str:
-    """Read data from an Origin worksheet.
+def get_worksheet_data(
+    book_name: str,
+    sheet_name: str,
+    start_row: int = 0,
+    max_rows: int = GET_WORKSHEET_DEFAULT_MAX_ROWS,
+) -> str:
+    """Read data from an Origin worksheet, one page of rows at a time.
+
+    Large sheets would flood the conversation, so by default only the first
+    200 rows are returned. Check ``truncated`` / ``next_start_row`` in the
+    result and call again with ``start_row=next_start_row`` to page through,
+    or use ``export_worksheet`` to write the whole sheet to a CSV file.
 
     Args:
         book_name: Workbook name
-        sheet_name: Sheet name
+        sheet_name: Sheet name (spaces and similar characters are allowed)
+        start_row: 0-based index of the first row to return (default 0)
+        max_rows: Maximum rows to return (default 200). 0 returns ALL rows —
+            only do that for sheets you know are small.
 
     Returns:
-        JSON object with column data; empty cells (including a shorter
-        ragged column padded by Origin) are returned as null.
+        JSON object: {"columns": [[...], ...] (one list per column, the
+        requested row slice; empty cells, including a shorter ragged column
+        padded by Origin, are null), "long_names", "units" (per column, "" if
+        unset), "total_rows", "total_cols", "start_row", "returned_rows",
+        "truncated" (true if more rows follow), "next_start_row" (or null)}.
 
     Raises:
-        ValueError: if the worksheet is not found.
+        ValueError: if the worksheet is not found or the paging arguments are
+            invalid.
     """
+    if isinstance(start_row, bool) or not isinstance(start_row, int) or start_row < 0:
+        raise ValueError("start_row must be a non-negative integer.")
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows < 0:
+        raise ValueError("max_rows must be a non-negative integer (0 = all rows).")
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
-    safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet_name = labtalk_sheet_name(sheet_name, "sheet_name")
     target = f"[{safe_book_name}]{safe_sheet_name}"
     data = o.GetWorksheet(target)
     # On failure GetWorksheet returns None or an HRESULT int, never a sequence
@@ -224,8 +275,14 @@ def get_worksheet_data(book_name: str, sheet_name: str) -> str:
         msg = f"Worksheet {target} not found. Open workbooks: {books}."
         raise ValueError(msg)
 
-    if len(data) == 0:
-        return json.dumps({"columns": []})
+    total_rows = len(data)
+    num_cols = len(data[0]) if total_rows else 0
+    long_names, units = _column_labels(o, target, num_cols)
+    if start_row > total_rows:
+        msg = f"start_row {start_row} is past the end of {target} ({total_rows} rows)."
+        raise ValueError(msg)
+    end = total_rows if max_rows == 0 else min(total_rows, start_row + max_rows)
+    page = data[start_row:end]
 
     def _cell(v):
         # Origin's missing-value sentinel (~1.2e308), same convention as
@@ -234,12 +291,19 @@ def get_worksheet_data(book_name: str, sheet_name: str) -> str:
             return None
         return v
 
-    num_cols = len(data[0])
-    columns = []
-    for c in range(num_cols):
-        columns.append([_cell(row[c]) for row in data])
-
-    return json.dumps({"columns": columns})
+    columns = [[_cell(row[c]) for row in page] for c in range(num_cols)]
+    truncated = end < total_rows
+    return json.dumps({
+        "columns": columns,
+        "long_names": long_names,
+        "units": units,
+        "total_rows": total_rows,
+        "total_cols": num_cols,
+        "start_row": start_row,
+        "returned_rows": len(page),
+        "truncated": truncated,
+        "next_start_row": end if truncated else None,
+    })
 
 def _import_csv_to_worksheet_impl(
     file_path: str,
@@ -456,7 +520,7 @@ def _set_column_formula_impl(book_name: str, sheet_name: str, col: int, formula:
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_col = positive_column(col, "col")
     safe_formula = labtalk_formula(formula, "formula")
     require_worksheet(safe_book, safe_sheet)
@@ -485,7 +549,7 @@ def sort_worksheet(book_name: str, sheet_name: str, col: int, descending: bool =
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_col = positive_column(col, "col")
     require_worksheet(safe_book, safe_sheet)
     activate_window(safe_book, "book_name")
@@ -510,7 +574,7 @@ def _add_columns_impl(book_name: str, sheet_name: str, count: int = 1) -> str:
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_count = positive_int(count, "count")
     require_worksheet(safe_book, safe_sheet)
     activate_window(safe_book, "book_name")
@@ -535,7 +599,7 @@ def _delete_columns_impl(book_name: str, sheet_name: str, col: int, count: int =
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_col = positive_column(col, "col")
     safe_count = positive_int(count, "count")
     require_worksheet(safe_book, safe_sheet)
@@ -576,7 +640,7 @@ def _set_column_properties_impl(
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_col = positive_column(col, "col")
     require_worksheet(safe_book, safe_sheet)
     activate_window(safe_book, "book_name")
@@ -662,7 +726,7 @@ def export_worksheet(
         Path and row/column counts written
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     target = require_worksheet(safe_book, safe_sheet)
     sep = _EXPORT_DELIMITERS.get(delimiter)
     if sep is None:

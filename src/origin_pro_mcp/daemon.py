@@ -31,6 +31,7 @@ from . import autosave as _autosave
 from .autosave import AutosavePolicy
 from .origin_connection import (
     clear_session_origin, get_origin, get_remembered_project_path,
+    mark_session_attached,
     set_session_collision_reader, set_session_context_writer, set_session_origin,
 )
 from .transport import MAX_FRAME, Connection, FrameError, TcpServer
@@ -173,6 +174,10 @@ class Session:
         self._ready = threading.Event()
         self.pid: Optional[int] = None
         self.instance: object = None
+        # True when this session was granted the USER's own Origin (attach
+        # mode); set by Pool.acquire before start(). close_origin refuses to
+        # close an attached window without an explicit confirm.
+        self.attached: bool = False
         self.saved_recovery_path: Optional[str] = None
         self.reaping: bool = False  # set once a reap has COMMITTED (stage 1)
         self._start_error: Optional[BaseException] = None
@@ -236,6 +241,7 @@ class Session:
             # isolated instance, never the shared ApplicationSI (which could
             # hijack the user's open Origin).
             set_session_origin(self.instance, self._factory, self.session_id)
+            mark_session_attached(self.attached)
             try:
                 pid = self._get_pid(self.instance)
                 self.pid = int(pid) if pid is not None else None
@@ -568,6 +574,7 @@ class Pool:
                 autosave_policy=self._autosave_policy,
                 dialog_watchdog_factory=self._dialog_watchdog_factory,
             )
+            session.attached = bool(use_attach)
             if use_attach:
                 self._attach_session_id = session_id
             self._sessions[session_id] = session  # reserve the slot
