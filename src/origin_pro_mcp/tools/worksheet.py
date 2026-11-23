@@ -559,8 +559,11 @@ def list_worksheets(details: bool = False) -> str:
         "sheet_details": [{"book", "sheet", "rows", "cols"}] and
         "graph_details": [{"name", "layers", "plots", "empty"}]. Any value
         Origin could not report is null; "empty" is null when the plot count
-        is unknown. Note: a graph from a just-loaded .opju may report 0 plots
-        over COM until it has been activated once.
+        is unknown. "rows" is Origin's worksheet row count (Worksheet.Rows),
+        which can include empty trailing rows, so it may exceed the
+        "total_rows" that get_worksheet_data reports for the same sheet.
+        Verified on Origin 2018: plot counts are correct right after
+        load_project, without activating each graph first.
     """
     o = get_origin()
     # Save the active window: enumeration activates each workbook to read its
