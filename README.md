@@ -191,7 +191,7 @@ are safe (see each row). Set any to `off` to opt out.
 
 | Variable | Default | Effect |
 | :--- | :--- | :--- |
-| `ORIGIN_PRO_MCP_ALLOWED_ROOTS` | *(unset = unrestricted)* | Folders the server may **write** into, separated by `;` (or newlines), e.g. `C:\Users\YOU\Documents\OriginMCP-output;C:\Users\YOU\Desktop\figures`. When set, `save_project`, `close_origin(save=True)`, `export_graph`, `export_all_graphs`, `export_worksheet`, `save_graph_template`, and autosave refuse any path outside them. Reading and opening files is not restricted, and `run_labtalk` scripts are not path-checked. |
+| `ORIGIN_PRO_MCP_ALLOWED_ROOTS` | *(unset = unrestricted)* | Folders the server may **write** into, separated by `;` (or newlines), e.g. `C:\Users\YOU\Documents\OriginMCP-output;C:\Users\YOU\Desktop\figures`. When set, `save_project`, `close_origin(save=True)`, `export_graph`, `export_all_graphs`, `export_worksheet`, `save_graph_template`, and autosave refuse any path outside them. Reading and opening files is not restricted; opening a file outside them writes no `.bak` next to it. `run_labtalk` scripts are not path-checked. |
 | `ORIGIN_PRO_MCP_LOCKFILE` | `%USERPROFILE%\.origin-pro-mcp\daemon.json` | Where the shim and the daemon find each other (port and token). `sessions.json` and `spawned-pids.log` sit next to it. Set the same value for every client that should share one daemon. |
 | `ORIGIN_PRO_MCP_DAEMON_BREAKAWAY` | *(auto)* | When the shim runs inside a Windows Job Object (Claude Desktop and Claude Code both do this), it starts the daemon through WMI so the daemon outlives the client. Set `0` to start it as a plain child process instead (it is then killed with the client). |
 | `ORIGIN_PRO_MCP_RECOVERY_DIR` | `%LOCALAPPDATA%\origin-pro-mcp\recovery` | Where `ORIGIN_PRO_MCP_REAP_CLOSE=1` writes recovery copies of a session's project before closing its Origin. |
@@ -384,7 +384,7 @@ used to be many single-purpose ones.
 |------|-------------|
 | `new_project` | Create new empty Origin project (unsaved changes are discarded) |
 | `save_project` | Save to a given .opju path, or without a path over the project's own file; the first overwrite in a session keeps the previous file as `<file>.bak`; refuses to save an empty project over a real one |
-| `load_project` | Open existing .opj/.opju file (backs it up to `<file>.bak` first; warns if another Origin holds the same file) |
+| `load_project` | Open existing .opj/.opju file (backs it up to `<file>.bak` first, unless the file is outside `ORIGIN_PRO_MCP_ALLOWED_ROOTS`; warns if another Origin holds the same file) |
 | `close_origin` | Close this session's own Origin window (optional save; refuses a user-owned window without `confirm=True`) |
 | `export_all_graphs` | Export every graph in the project to image files |
 | `save_graph_template` | Save a graph as a reusable .otpu/.otp template |

@@ -254,17 +254,13 @@ class Session:
                 self._start_error = exc
                 self._ready.set()
                 return
-            # Pass the factory so a dead proxy relaunches THIS session's own
+            # Pass a factory so a dead proxy relaunches THIS session's own
             # isolated instance, never the shared ApplicationSI (which could
-            # hijack the user's open Origin).
-            set_session_origin(self.instance, self._factory, self.session_id)
+            # hijack the user's open Origin). _relaunch also keeps self.instance
+            # and self.pid on the Origin the session now owns.
+            set_session_origin(self.instance, self._relaunch, self.session_id)
             mark_session_attached(self.attached)
-            try:
-                pid = self._get_pid(self.instance)
-                self.pid = int(pid) if pid is not None else None
-            except Exception:
-                # Unknown PID -> None ("do not force-kill"), NEVER os.getpid().
-                self.pid = None
+            self.pid = self._resolve_pid(self.instance)
             self._ready.set()
             self._start_dialog_watchdog()
             try:
@@ -293,6 +289,33 @@ class Session:
                 self._com_uninitialize()
 
     # -- S1 modal-dialog watchdog ------------------------------------------- #
+
+    def _resolve_pid(self, instance) -> Optional[int]:
+        """PID of ``instance`` via the injected resolver; unknown -> None
+        ("do not force-kill"), NEVER os.getpid()."""
+        try:
+            pid = self._get_pid(instance)
+            return int(pid) if pid is not None else None
+        except Exception:
+            return None
+
+    def _relaunch(self):
+        """Factory for every launch after the first (runs on this worker thread
+        from ``get_origin`` when the proxy is dead — e.g. after ``close_origin``
+        or an Origin crash).
+
+        Without it the session would keep pointing at the Origin it started
+        with: the detach reap's empty-Origin close, the dispatch watchdog's
+        force-kill, the lockfile's child PIDs and the dialog watchdog would all
+        act on a dead instance and a stale PID, and the relaunched Origin would
+        be left running when the session ends."""
+        inst = self._factory()
+        self.instance = inst
+        self.pid = self._resolve_pid(inst)
+        # The dialog watchdog watches one PID; move it to the new process.
+        self._stop_dialog_watchdog()
+        self._start_dialog_watchdog()
+        return inst
 
     def _start_dialog_watchdog(self) -> None:
         """Start the persistent per-session dialog watchdog once the PID is known.

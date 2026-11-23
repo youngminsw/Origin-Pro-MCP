@@ -235,3 +235,29 @@ def test_autosave_inside_roots_still_saves(roots):
     o = _AutoOrigin()
     assert autosave.save_in_place(o, str(copy)) is True
     assert o.saved == [str(copy)]
+
+
+# --------------------------------------------------------------------------- #
+# load_project writes its pre-load .bak only inside the roots                 #
+# --------------------------------------------------------------------------- #
+
+
+def test_load_outside_roots_writes_no_backup(roots, fake_origin):
+    from origin_pro_mcp.tools.project import load_project
+
+    _, outside = roots
+    original = outside / "original.opju"
+    original.write_bytes(b"REAL" * 1000)
+    load_project(str(original))                     # opening is never restricted
+    assert not (outside / "original.opju.bak").exists()
+    assert original.read_bytes() == b"REAL" * 1000
+
+
+def test_load_inside_roots_still_backs_up(roots, fake_origin):
+    from origin_pro_mcp.tools.project import load_project
+
+    allowed, _ = roots
+    copy = allowed / "copy.opju"
+    copy.write_bytes(b"REAL" * 1000)
+    load_project(str(copy))
+    assert (allowed / "copy.opju.bak").read_bytes() == b"REAL" * 1000

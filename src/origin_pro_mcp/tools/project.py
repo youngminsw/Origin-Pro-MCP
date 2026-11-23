@@ -21,8 +21,8 @@ from ..origin_connection import (
     session_origin_is_shared,
 )
 from ..labtalk_safe import (
-    allowed_write_roots, labtalk_choice, labtalk_name, require_writable_path,
-    windows_path, writable_path,
+    allowed_write_roots, is_writable_path, labtalk_choice, labtalk_name,
+    require_writable_path, windows_path, writable_path,
 )
 from .graph import EXPORT_FORMATS, export_graph_to_file
 
@@ -410,7 +410,10 @@ def load_project(file_path: str) -> str:
 
     Unsaved changes in the current project are discarded. Before opening,
     the file is copied to ``<file>.bak`` (once per session per file), so the
-    on-disk original stays recoverable whatever later saves do. Origin
+    on-disk original stays recoverable whatever later saves do. When
+    ORIGIN_PRO_MCP_ALLOWED_ROOTS is set, a file outside those folders is
+    opened without a backup: nothing is written next to it, and this server
+    cannot overwrite it either. Origin
     sometimes reports success but loads nothing; the tool then raises and
     asks for a retry. If another open Origin already holds the same file, a
     warning is appended, since saving from both would overwrite each other.
@@ -430,8 +433,12 @@ def load_project(file_path: str) -> str:
         raise ValueError(msg)
     # Keep one pre-load backup of the target (N5 safety net). o.Load is
     # read-only, but a backup guarantees the file is recoverable no matter what
-    # a later save/autosave does in a crash-recovery sequence.
-    _backup_existing(path)
+    # a later save/autosave does in a crash-recovery sequence. The backup is a
+    # WRITE next to the file, so it obeys ORIGIN_PRO_MCP_ALLOWED_ROOTS: a file
+    # outside the allowed folders is not backed up — and needs no backup,
+    # because no tool of this server may overwrite it either.
+    if is_writable_path(path):
+        _backup_existing(path)
     if not o.Load(path):
         msg = f"Origin could not open the project file: {path}"
         raise ValueError(msg)
