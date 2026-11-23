@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import inspect
 import os
-import signal
 import threading
 import time
 
@@ -23,7 +22,7 @@ import pytest
 from fakes import FakeOrigin
 
 from origin_pro_mcp import shim
-from origin_pro_mcp.daemon import Daemon, read_lockfile
+from origin_pro_mcp.daemon import Daemon, default_terminate_process, read_lockfile
 
 
 # --------------------------------------------------------------------------- #
@@ -103,7 +102,8 @@ def _kill_lockfile_daemon(lockfile: str) -> None:
         if not pid:
             continue
         try:
-            os.kill(int(pid), signal.SIGKILL)
+            # SIGKILL on POSIX, TerminateProcess on Windows (no SIGKILL there).
+            default_terminate_process(int(pid))
         except (OSError, ProcessLookupError):
             pass
 

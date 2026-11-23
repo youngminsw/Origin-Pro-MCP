@@ -102,6 +102,12 @@ def test_session_has_com_init_helpers():
     # the helpers are guarded no-ops where pythoncom is unavailable (WSL).
     assert hasattr(daemon.Session, "_com_initialize")
     assert hasattr(daemon.Session, "_com_uninitialize")
-    # On WSL (no pythoncom) initialize returns False without raising.
-    assert daemon.Session._com_initialize() is False
+    try:
+        import pythoncom  # noqa: F401
+        has_pythoncom = True
+    except ImportError:
+        has_pythoncom = False
+    # With pythoncom (Windows) a real apartment is initialized -> True; without
+    # it (WSL/Linux) the helper is a guarded no-op returning False. Neither raises.
+    assert daemon.Session._com_initialize() is has_pythoncom
     daemon.Session._com_uninitialize()  # must not raise

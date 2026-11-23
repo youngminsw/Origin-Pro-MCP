@@ -271,10 +271,13 @@ def test_export_graph_reports_uncreated_file_with_wsl_hint(fake_origin, tmp_path
     from origin_pro_mcp.tools.graph import export_graph
 
     # FakeOrigin's Execute "succeeds" but no file is written: the guard must
-    # turn that into a loud failure (not a stale/silent success), and since the
-    # test path is POSIX it must also hint that Origin (Windows) can't reach it.
-    with pytest.raises(ValueError, match="was not created.*WSL/Linux path"):
-        export_graph("Graph1", str(tmp_path / "fig.png"))
+    # turn that into a loud failure (not a stale/silent success). The WSL hint
+    # is added only for a POSIX path ("/..."), which tmp_path is everywhere
+    # except Windows.
+    path = str(tmp_path / "fig.png")
+    expected = "was not created.*WSL/Linux path" if path.startswith("/") else "was not created"
+    with pytest.raises(ValueError, match=expected):
+        export_graph("Graph1", path)
 
 
 def test_save_graph_template_unknown_graph(fake_origin, tmp_path):

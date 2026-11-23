@@ -932,6 +932,29 @@ class SingletonGuard:
             self._fh = None
 
 
+_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.05, 0.1, 0.2)  # ~0.4 s worst case
+
+
+def _replace_with_retry(tmp: str, path: str, *, sleep=time.sleep) -> None:
+    """``os.replace(tmp, path)``, retried briefly on Windows sharing errors.
+
+    Windows refuses to replace a file that another process has open without
+    delete sharing — a shim reading ``daemon.json`` at that moment, or an
+    antivirus scanner looking at the freshly written file — and raises
+    PermissionError. That condition clears within milliseconds, so retry a few
+    times before giving up; the last error propagates unchanged."""
+    if sys.platform != "win32":
+        os.replace(tmp, path)
+        return
+    for delay in _REPLACE_RETRY_DELAYS:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            sleep(delay)
+    os.replace(tmp, path)
+
+
 def write_lockfile(path: str, port: int, token: str, pid: int,
                    child_pids: list[int]) -> None:
     """Atomically write the daemon discovery lockfile (user-only on POSIX).
@@ -950,7 +973,7 @@ def write_lockfile(path: str, port: int, token: str, pid: int,
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
             json.dump(data, fh)
-    os.replace(tmp, path)
+    _replace_with_retry(tmp, path)
     if sys.platform != "win32":
         os.chmod(path, 0o600)
 
@@ -1005,7 +1028,7 @@ def write_sessions(path: str, data: dict) -> None:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
             json.dump(data, fh)
-    os.replace(tmp, path)
+    _replace_with_retry(tmp, path)
     if sys.platform != "win32":
         os.chmod(path, 0o600)
 
