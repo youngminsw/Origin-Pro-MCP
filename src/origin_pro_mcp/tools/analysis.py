@@ -11,7 +11,9 @@ from ..origin_connection import (
     require_worksheet,
     workbook_names,
 )
-from ..labtalk_safe import labtalk_choice, labtalk_name, positive_column, positive_int
+from ..labtalk_safe import (
+    labtalk_choice, labtalk_name, labtalk_sheet_name, positive_column, positive_int,
+)
 
 _MISSING_MAGNITUDE = 1e100
 _SMOOTH_METHODS = {"sg": 1, "savitzky_golay": 1, "adjacent": 2, "average": 2, "binomial": 3}
@@ -48,7 +50,7 @@ def _integrate_impl(data_book: str, data_sheet: str, x_col: int, y_col: int) -> 
         JSON with the integrated area
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     sx = positive_column(x_col, "x_col")
     sy = positive_column(y_col, "y_col")
     _activate_sheet(safe_book, safe_sheet)
@@ -66,7 +68,7 @@ def _differentiate_impl(data_book: str, data_sheet: str, x_col: int, y_col: int)
         Success message naming the new derivative column
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     sx = positive_column(x_col, "x_col")
     sy = positive_column(y_col, "y_col")
     _activate_sheet(safe_book, safe_sheet)
@@ -98,7 +100,7 @@ def _smooth_impl(
         Success message naming the new smoothed column
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     sx = positive_column(x_col, "x_col")
     sy = positive_column(y_col, "y_col")
     safe_method = labtalk_choice(method.lower(), _SMOOTH_METHODS, "method")
@@ -135,7 +137,10 @@ def _interpolate_impl(
         JSON: output sheet plus the resampled X and Y
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    # The source sheet is only activated (quoted page.active$) and addressed as
+    # the active sheet below, never interpolated into a range string, so a
+    # name with spaces is safe here.
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     sx = positive_column(x_col, "x_col")
     sy = positive_column(y_col, "y_col")
     safe_n = positive_int(num_points, "num_points")
@@ -160,9 +165,12 @@ def _interpolate_impl(
     else:
         execute_labtalk(f'win -a {out_name}; page.active$ = "Sheet1"; wks.nrows = 0;')
     execute_labtalk(f'win -a {out_name}; page.active$ = "Sheet1"; col(1) = data({x_min}, {x_max}, {step});')
+    # Address the source as the ACTIVE sheet — iy:=(x,y), as pkfind does — so
+    # its name never goes into a range string; the Interp output stays explicit.
+    _activate_sheet(safe_book, safe_sheet)
     cmd = (
         f"interp1 ix:=[{out_name}]Sheet1!col(1) "
-        f"iy:=[{safe_book}]{safe_sheet}!({sx},{sy}) "
+        f"iy:=({sx},{sy}) "
         f"ox:=[{out_name}]Sheet1!col(2) method:={safe_method};"
     )
     if not execute_labtalk(cmd):
@@ -187,7 +195,7 @@ def _fft_impl(data_book: str, data_sheet: str, x_col: int, y_col: int) -> str:
         JSON: spectrum sheet and the dominant (peak-amplitude) frequency
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     sx = positive_column(x_col, "x_col")
     sy = positive_column(y_col, "y_col")
     _activate_sheet(safe_book, safe_sheet)
@@ -278,7 +286,7 @@ def _find_peaks_impl(
         JSON list of {x, y} peak positions
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     sx = positive_column(x_col, "x_col")
     sy = positive_column(y_col, "y_col")
     dir_map = {"positive": "p", "negative": "n", "both": "b"}
@@ -341,7 +349,7 @@ def _column_statistics_impl(data_book: str, data_sheet: str, col: int) -> str:
         JSON: mean, sd, se, variance, median, min, max, sum, n
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     safe_col = positive_column(col, "col")
     _activate_sheet(safe_book, safe_sheet)
     if not execute_labtalk(f"stats col({safe_col});"):
@@ -379,7 +387,7 @@ def _compare_means_impl(
         JSON: t, df, p_value, mean1, mean2, equal_variance
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     c1 = positive_column(col1, "col1")
     c2 = positive_column(col2, "col2")
     _activate_sheet(safe_book, safe_sheet)
@@ -419,7 +427,7 @@ def _frequency_count_impl(
         JSON list of {center, end, count, cumulative}
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     safe_col = positive_column(col, "col")
     if bin_size <= 0:
         msg = "bin_size must be positive."

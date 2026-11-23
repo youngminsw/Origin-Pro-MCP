@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import inspect
 import os
-import signal
 import threading
 import time
 
@@ -23,7 +22,7 @@ import pytest
 from fakes import FakeOrigin
 
 from origin_pro_mcp import shim
-from origin_pro_mcp.daemon import Daemon, read_lockfile
+from origin_pro_mcp.daemon import Daemon, default_terminate_process, read_lockfile
 
 
 # --------------------------------------------------------------------------- #
@@ -103,7 +102,8 @@ def _kill_lockfile_daemon(lockfile: str) -> None:
         if not pid:
             continue
         try:
-            os.kill(int(pid), signal.SIGKILL)
+            # SIGKILL on POSIX, TerminateProcess on Windows (no SIGKILL there).
+            default_terminate_process(int(pid))
         except (OSError, ProcessLookupError):
             pass
 
@@ -123,12 +123,12 @@ def test_shim_schema_is_byte_identical_for_all_tools():
     shim_server = shim.build_shim_server(client)
     shim_tools = shim_server._tool_manager._tools
 
-    # Same exact set of tool names, and exactly 45 of them: 43 Origin
-    # forwarders + list_skills + get_skill (skill tools are served locally by
+    # Same exact set of tool names, and exactly 46 of them: 44 Origin
+    # forwarders (incl. close_origin) + list_skills + get_skill (skill tools are served locally by
     # the shim, not forwarded, but must still be schema-identical to the
     # in-process server).
     assert set(shim_tools) == set(real_tools)
-    assert len(shim_tools) == 45
+    assert len(shim_tools) == 46
 
     for name, real in real_tools.items():
         fwd = shim_tools[name].fn

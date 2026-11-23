@@ -497,10 +497,9 @@ def apply_publication_style(
 ) -> str:
     """Apply complete publication styling to a graph in ONE call.
 
-    Sets bold Arial labels, a muted pastel color palette, 2.5 pt lines,
+    Sets bold Arial labels, a muted pastel color palette, 3.0 pt lines,
     readable tick spacing, inward ticks, closed frame, and a borderless
-    bold legend all at once. Designed to minimize token usage — call this
-    once instead of many separate tools.
+    bold legend in one call.
 
     NOTE: per-curve COLOR, WIDTH, and SYMBOL all apply only on UNGROUPED plots
     (probe-confirmed — a grouped plot's shared style increment overrides color

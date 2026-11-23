@@ -20,6 +20,7 @@ from ..origin_connection import (
 from ..labtalk_safe import (
     labtalk_choice,
     labtalk_name,
+    labtalk_sheet_name,
     labtalk_formula,
     positive_column,
     positive_int,
@@ -27,6 +28,7 @@ from ..labtalk_safe import (
     labtalk_string,
     labtalk_text,
     windows_path,
+    writable_path,
 )
 
 
@@ -111,7 +113,9 @@ def set_worksheet_data(
     """
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
-    safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
+    # The bulk write goes through COM only; the name is quoted into LabTalk
+    # only for missing values or column names (checked before any write below).
+    safe_sheet_name = labtalk_sheet_name(sheet_name, "sheet_name", in_labtalk=False)
     target = require_worksheet(safe_book_name, safe_sheet_name)
 
     try:
@@ -134,6 +138,15 @@ def set_worksheet_data(
     ):
         msg = "columns must be a non-empty JSON array of non-empty arrays, e.g. [[1,2,3],[4,5,6]]."
         raise ValueError(msg)
+
+    # Missing values and column names are written through LabTalk with the
+    # sheet activated by name: validate that use BEFORE the first write, so a
+    # rejected name never leaves a half-written sheet behind.
+    if column_names or any(
+        x is None or (isinstance(x, float) and math.isnan(x))
+        for col_data in cols for x in col_data
+    ):
+        labtalk_sheet_name(safe_sheet_name, "sheet_name")
 
     # (column_index, row_index) pairs, 0-based, to be written as Origin
     # missing values via LabTalk after the bulk numeric write below.
@@ -198,34 +211,186 @@ def set_worksheet_data(
     n_rows = max(len(c) for c in cols)
     return f"Set {len(cols)} columns x {n_rows} rows in {target}"
 
+GET_WORKSHEET_DEFAULT_MAX_ROWS = 200
+
+
+def _column_labels(o, target: str, ncols: int) -> tuple:
+    """(long_names, units) for each column via COM, without touching the
+    active window. Best-effort: any COM failure yields empty strings."""
+    long_names = [""] * ncols
+    units = [""] * ncols
+    try:
+        ws = o.FindWorksheet(target)
+        cols = ws.Columns if ws is not None else None
+    except Exception:  # noqa: BLE001 - best-effort COM guard
+        cols = None
+    if cols is None:
+        return long_names, units
+    for i in range(ncols):
+        try:
+            col = cols.Item(i)
+        except Exception:  # noqa: BLE001, S112 - best-effort COM guard
+            continue
+        for attr, out in (("LongName", long_names), ("Units", units)):
+            try:
+                val = getattr(col, attr)
+                out[i] = val if isinstance(val, str) else ""
+            except Exception:  # noqa: BLE001, S110 - best-effort COM guard
+                pass
+    return long_names, units
+
+
+def _worksheet_exists(o, target: str) -> bool:
+    try:
+        return o.FindWorksheet(target) is not None
+    except Exception:  # noqa: BLE001 - best-effort COM guard
+        return False
+
+
+def _read_whole_sheet(o, target: str):
+    """Every row of ``target`` via one full ``GetWorksheet``.
+
+    Origin returns None or an HRESULT int instead of a sequence both for a
+    missing sheet and for an existing sheet with no data (live-checked on
+    Origin 2018), so an existing sheet maps to ``()`` and only a missing one
+    raises."""
+    data = o.GetWorksheet(target)
+    if isinstance(data, (list, tuple)):
+        return data
+    if _worksheet_exists(o, target):
+        return ()
+    books = ", ".join(workbook_names()) or "(none)"
+    msg = f"Worksheet {target} not found. Open workbooks: {books}."
+    raise ValueError(msg)
+
+
+def _row_slice(o, target: str, r1: int, r2: int):
+    """``GetWorksheet(target, r1, 0, r2, -1)``: rows r1..r2 INCLUSIVE, all
+    columns. Live-checked on Origin 2018: r2 past the end is clipped to the
+    last row, r1 == row count gives an empty sequence, r1 past that gives
+    None. Returns a list, or None when the read is unusable."""
+    try:
+        d = o.GetWorksheet(target, r1, 0, r2, -1)
+    except Exception:  # noqa: BLE001 - older build without range arguments
+        return None
+    return list(d) if isinstance(d, (list, tuple)) else None
+
+
+_MAX_ROW_PROBES = 64
+
+
+def _count_rows(o, target: str, known: int) -> int:
+    """Number of rows a full ``GetWorksheet`` would return, found with
+    single-row reads (exponential then binary search) so a page never has to
+    transfer the whole sheet. ``known`` rows are already known to exist."""
+    def has_row(k: int) -> bool:
+        return bool(_row_slice(o, target, k, k))
+
+    lo = known                # invariant: rows >= lo
+    step = max(1, known)
+    hi = lo + step
+    probes = 0
+    while has_row(hi) and probes < _MAX_ROW_PROBES:
+        lo, step = hi + 1, step * 2
+        hi = lo + step
+        probes += 1
+    while lo < hi and probes < 2 * _MAX_ROW_PROBES:   # first k with no row
+        mid = (lo + hi) // 2
+        if has_row(mid):
+            lo = mid + 1
+        else:
+            hi = mid
+        probes += 1
+    return lo
+
+
+def _read_page(o, target: str, start_row: int, max_rows: int):
+    """``(page, total_rows, num_cols)`` read with row ranges, or None to fall
+    back to a whole-sheet read (range read unusable, sheet missing or empty).
+
+    Reads ``max_rows + 1`` rows: the extra row only tells whether more follow,
+    so the exact total is counted only when it does."""
+    # Row indices go over COM as 32-bit ints; r2 past the end is clipped anyway.
+    rows = _row_slice(o, target, start_row, min(start_row + max_rows, 2**31 - 1))
+    if rows is None:
+        if start_row > 0 and _worksheet_exists(o, target):
+            last = _row_slice(o, target, 0, 0)
+            total = _count_rows(o, target, 1) if last else 0
+            if total and start_row > total:
+                msg = (f"start_row {start_row} is past the end of {target} "
+                       f"({total} rows).")
+                raise ValueError(msg)
+        return None
+    if not rows:                                   # start_row == row count
+        if start_row == 0:
+            return None
+        last = _row_slice(o, target, start_row - 1, start_row - 1)
+        if not last:
+            return None
+        return [], start_row, len(last[0])
+    page = rows[:max_rows]
+    if len(rows) > max_rows:
+        total = _count_rows(o, target, start_row + len(rows))
+    else:
+        total = start_row + len(page)
+    return page, total, len(page[0])
+
+
 @mcp.tool()
-def get_worksheet_data(book_name: str, sheet_name: str) -> str:
-    """Read data from an Origin worksheet.
+def get_worksheet_data(
+    book_name: str,
+    sheet_name: str,
+    start_row: int = 0,
+    max_rows: int = GET_WORKSHEET_DEFAULT_MAX_ROWS,
+) -> str:
+    """Read data from an Origin worksheet, one page of rows at a time.
+
+    Large sheets would flood the conversation, so by default only the first
+    200 rows are returned. Check ``truncated`` / ``next_start_row`` in the
+    result and call again with ``start_row=next_start_row`` to page through,
+    or use ``export_worksheet`` to write the whole sheet to a CSV file.
 
     Args:
         book_name: Workbook name
-        sheet_name: Sheet name
+        sheet_name: Sheet name (spaces and similar characters are allowed)
+        start_row: 0-based index of the first row to return (default 0)
+        max_rows: Maximum rows to return (default 200). 0 returns ALL rows —
+            only do that for sheets you know are small.
 
     Returns:
-        JSON object with column data; empty cells (including a shorter
-        ragged column padded by Origin) are returned as null.
+        JSON object: {"columns": [[...], ...] (one list per column, the
+        requested row slice; empty cells, including a shorter ragged column
+        padded by Origin, are null), "long_names", "units" (per column, "" if
+        unset), "total_rows", "total_cols", "start_row", "returned_rows",
+        "truncated" (true if more rows follow), "next_start_row" (or null)}.
 
     Raises:
-        ValueError: if the worksheet is not found.
+        ValueError: if the worksheet is not found or the paging arguments are
+            invalid.
     """
+    if isinstance(start_row, bool) or not isinstance(start_row, int) or start_row < 0:
+        raise ValueError("start_row must be a non-negative integer.")
+    if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows < 0:
+        raise ValueError("max_rows must be a non-negative integer (0 = all rows).")
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
-    safe_sheet_name = labtalk_name(sheet_name, "sheet_name")
+    # COM only (GetWorksheet + column objects): no LabTalk string involved.
+    safe_sheet_name = labtalk_sheet_name(sheet_name, "sheet_name", in_labtalk=False)
     target = f"[{safe_book_name}]{safe_sheet_name}"
-    data = o.GetWorksheet(target)
-    # On failure GetWorksheet returns None or an HRESULT int, never a sequence
-    if not isinstance(data, (list, tuple)):
-        books = ", ".join(workbook_names()) or "(none)"
-        msg = f"Worksheet {target} not found. Open workbooks: {books}."
-        raise ValueError(msg)
-
-    if len(data) == 0:
-        return json.dumps({"columns": []})
+    paged = _read_page(o, target, start_row, max_rows) if max_rows else None
+    if paged is not None:
+        page, total_rows, num_cols = paged
+        end = start_row + len(page)
+    else:
+        data = _read_whole_sheet(o, target)
+        total_rows = len(data)
+        num_cols = len(data[0]) if total_rows else 0
+        if start_row > total_rows:
+            msg = f"start_row {start_row} is past the end of {target} ({total_rows} rows)."
+            raise ValueError(msg)
+        end = total_rows if max_rows == 0 else min(total_rows, start_row + max_rows)
+        page = data[start_row:end]
+    long_names, units = _column_labels(o, target, num_cols)
 
     def _cell(v):
         # Origin's missing-value sentinel (~1.2e308), same convention as
@@ -234,12 +399,19 @@ def get_worksheet_data(book_name: str, sheet_name: str) -> str:
             return None
         return v
 
-    num_cols = len(data[0])
-    columns = []
-    for c in range(num_cols):
-        columns.append([_cell(row[c]) for row in data])
-
-    return json.dumps({"columns": columns})
+    columns = [[_cell(row[c]) for row in page] for c in range(num_cols)]
+    truncated = end < total_rows
+    return json.dumps({
+        "columns": columns,
+        "long_names": long_names,
+        "units": units,
+        "total_rows": total_rows,
+        "total_cols": num_cols,
+        "start_row": start_row,
+        "returned_rows": len(page),
+        "truncated": truncated,
+        "next_start_row": end if truncated else None,
+    })
 
 def _import_csv_to_worksheet_impl(
     file_path: str,
@@ -389,13 +561,117 @@ def _sheet_names(o, book_name: str, page=None) -> list:
     return out
 
 
+def _com_int(obj, attr: str):
+    """``int(obj.<attr>)``, or None when the attribute is missing, raises, or
+    is not a number. Used for COM properties not yet verified on every Origin
+    version (e.g. ``Worksheet.Rows`` on Origin 2018): unknown -> None."""
+    if obj is None:
+        return None
+    try:
+        value = getattr(obj, attr)
+    except Exception:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _sheet_details(o, workbooks: list) -> list:
+    """Per-sheet {"book", "sheet", "rows", "cols"} from the COM worksheet
+    object's ``Rows``/``Cols`` properties. Never reads cell data (that would
+    be slow on big projects) and never activates a window. Any value that
+    cannot be read is None."""
+    out: list = []
+    for wb in workbooks:
+        book = wb["name"]
+        for sheet in wb["sheets"]:
+            try:
+                ws = o.FindWorksheet(f"[{book}]{sheet}")
+            except Exception:
+                ws = None
+            out.append({
+                "book": book,
+                "sheet": sheet,
+                "rows": _com_int(ws, "Rows"),
+                "cols": _com_int(ws, "Cols"),
+            })
+    return out
+
+
+def _graph_plot_count(page):
+    """(layers, plots) of a graph page via COM, each None when unreadable.
+    ``plots`` is None unless EVERY layer's DataPlots.Count could be read, so a
+    partial sum is never reported as a total."""
+    layers = _com_int(_getattr_safe(page, "Layers"), "Count")
+    if layers is None:
+        return None, None
+    plots = 0
+    try:
+        layer_coll = page.Layers
+        for j in range(layers):
+            n = _com_int(_getattr_safe(layer_coll.Item(j), "DataPlots"), "Count")
+            if n is None:
+                return layers, None
+            plots += n
+    except Exception:
+        return layers, None
+    return layers, plots
+
+
+def _getattr_safe(obj, attr: str):
+    """``getattr(obj, attr)``, or None if the COM call raises."""
+    try:
+        return getattr(obj, attr)
+    except Exception:
+        return None
+
+
+def _graph_details(o) -> list:
+    """Per-graph {"name", "layers", "plots", "empty"}. ``empty`` is None when
+    the plot count is unknown (never guessed). A graph page whose name cannot
+    be read is skipped, like the plain ``graphs`` list."""
+    out: list = []
+    pages = _getattr_safe(o, "GraphPages")
+    count = _com_int(pages, "Count")
+    for i in range(count or 0):
+        try:
+            page = pages.Item(i)
+            name = page.Name
+        except Exception:
+            continue
+        layers, plots = _graph_plot_count(page)
+        out.append({
+            "name": name,
+            "layers": layers,
+            "plots": plots,
+            "empty": (plots == 0) if plots is not None else None,
+        })
+    return out
+
+
 @mcp.tool()
-def list_worksheets() -> str:
+def list_worksheets(details: bool = False) -> str:
     """List all open workbooks (with their sheets), graphs, and matrices.
+
+    Args:
+        details: False (default) returns the plain listing. True also returns
+            per-sheet sizes and per-graph plot counts (read from COM object
+            properties, without reading cell data or switching windows).
 
     Returns:
         JSON object: {"workbooks": [{"name", "sheets"}], "graphs": [names],
-        "matrices": [names]}
+        "matrices": [names]}. With details=True, additionally
+        "sheet_details": [{"book", "sheet", "rows", "cols"}] and
+        "graph_details": [{"name", "layers", "plots", "empty"}]. Any value
+        Origin could not report is null; "empty" is null when the plot count
+        is unknown. "rows" is Origin's worksheet row count (Worksheet.Rows),
+        which can include empty trailing rows, so it may exceed the
+        "total_rows" that get_worksheet_data reports for the same sheet.
+        Verified on Origin 2018: plot counts are correct right after
+        load_project, without activating each graph first.
     """
     o = get_origin()
     # Save the active window: enumeration activates each workbook to read its
@@ -420,11 +696,15 @@ def list_worksheets() -> str:
             except Exception:
                 continue  # skip a workbook whose name can't be read
             workbooks.append({"name": name, "sheets": _sheet_names(o, name, page)})
-        return json.dumps({
+        result = {
             "workbooks": workbooks,
             "graphs": safe_page_names(o.GraphPages),
             "matrices": safe_page_names(o.MatrixPages),
-        })
+        }
+        if details:
+            result["sheet_details"] = _sheet_details(o, workbooks)
+            result["graph_details"] = _graph_details(o)
+        return json.dumps(result)
     finally:
         if saved_active:
             try:
@@ -456,7 +736,7 @@ def _set_column_formula_impl(book_name: str, sheet_name: str, col: int, formula:
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_col = positive_column(col, "col")
     safe_formula = labtalk_formula(formula, "formula")
     require_worksheet(safe_book, safe_sheet)
@@ -485,7 +765,7 @@ def sort_worksheet(book_name: str, sheet_name: str, col: int, descending: bool =
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_col = positive_column(col, "col")
     require_worksheet(safe_book, safe_sheet)
     activate_window(safe_book, "book_name")
@@ -510,7 +790,7 @@ def _add_columns_impl(book_name: str, sheet_name: str, count: int = 1) -> str:
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_count = positive_int(count, "count")
     require_worksheet(safe_book, safe_sheet)
     activate_window(safe_book, "book_name")
@@ -535,7 +815,7 @@ def _delete_columns_impl(book_name: str, sheet_name: str, col: int, count: int =
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_col = positive_column(col, "col")
     safe_count = positive_int(count, "count")
     require_worksheet(safe_book, safe_sheet)
@@ -576,7 +856,7 @@ def _set_column_properties_impl(
         Success message
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
     safe_col = positive_column(col, "col")
     require_worksheet(safe_book, safe_sheet)
     activate_window(safe_book, "book_name")
@@ -662,26 +942,30 @@ def export_worksheet(
         Path and row/column counts written
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_name(sheet_name, "sheet_name")
+    # COM only (GetWorksheet + column objects): no LabTalk string involved.
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name", in_labtalk=False)
     target = require_worksheet(safe_book, safe_sheet)
     sep = _EXPORT_DELIMITERS.get(delimiter)
     if sep is None:
         msg = "delimiter must be one of: ',', 'tab', ';', '|', ' '."
         raise ValueError(msg)
-    path = windows_path(file_path, "file_path")
+    path = writable_path(file_path, "file_path")
     o = get_origin()
     data = o.GetWorksheet(target)
     if not isinstance(data, (list, tuple)):
         msg = f"Could not read {target}."
         raise ValueError(msg)
-    # Header from column long names (fall back to col index).
-    activate_window(safe_book, "book_name")
-    execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
-    ncols = int(o.LTVar("wks.ncols"))
-    header = []
-    for i in range(1, ncols + 1):
-        lname = get_lt_str(f"wks.col{i}.lname$")
-        header.append(lname or f"Col{i}")
+    # Header from column long names (fall back to col index), read over COM
+    # like get_worksheet_data: no window activation, so the user's active
+    # window is left alone and the sheet name never enters a LabTalk string.
+    ncols = len(data[0]) if data else 0
+    if not ncols:
+        try:
+            ncols = _com_int(o.FindWorksheet(target), "Cols") or 0
+        except Exception:  # noqa: BLE001 - best-effort COM guard
+            ncols = 0
+    long_names, _units = _column_labels(o, target, ncols)
+    header = [lname or f"Col{i}" for i, lname in enumerate(long_names, start=1)]
     out_dir = os.path.dirname(path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)

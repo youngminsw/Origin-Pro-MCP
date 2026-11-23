@@ -414,6 +414,9 @@ def test_idle_self_exit_shuts_down_and_removes_lockfile(lifecycle, tmp_path):
 
 def test_startup_sweep_kills_surviving_child_pids(lifecycle, tmp_path, monkeypatch):
     monkeypatch.setenv("ORIGIN_PRO_MCP_SWEEP_ORPHANS", "1")
+    # No live Origin on this machine -> the sweep falls back to is_alive (a real
+    # Origin the developer has open would otherwise make the fake PIDs non-Origin).
+    monkeypatch.setattr("origin_pro_mcp.daemon._origin_process_pids", lambda: set())
     start, _client = lifecycle
     lockfile = str(tmp_path / "daemon.json")
     # A stale lockfile left by a crashed daemon, recording a still-alive child.

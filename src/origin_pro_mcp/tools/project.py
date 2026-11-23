@@ -1,17 +1,29 @@
 import os
 import shutil
+import sys
+import threading
+import time
 
 from ..app import mcp
 from ..origin_connection import (
+    _close_instance,
+    _connection_alive,
     activate_window,
     check_project_collision,
+    drop_session_origin,
     execute_labtalk,
     get_origin,
+    get_remembered_project_path,
     graph_names,
+    peek_session_origin,
     remember_project_path,
     require_graph,
+    session_origin_is_shared,
 )
-from ..labtalk_safe import labtalk_choice, labtalk_name, windows_path
+from ..labtalk_safe import (
+    allowed_write_roots, is_writable_path, labtalk_choice, labtalk_name,
+    require_writable_path, windows_path, writable_path,
+)
 from .graph import EXPORT_FORMATS, export_graph_to_file
 
 PROJECT_EXTENSIONS = {".opj", ".opju"}
@@ -30,17 +42,136 @@ def _project_page_count(o) -> int:
         return -1
 
 
+def _current_project_location(o):
+    """Where an in-place ``Save("")`` would write: the remembered load/save
+    path, else Origin's ``%X`` (project folder). None if unknown."""
+    path = get_remembered_project_path()
+    if path:
+        return path
+    try:
+        folder = o.LTStr("%X")
+    except Exception:
+        folder = ""
+    return folder or None
+
+
+def _require_current_location_writable(o, action: str) -> None:
+    """With ORIGIN_PRO_MCP_ALLOWED_ROOTS set, refuse an in-place save of a
+    project whose file is outside the allowed folders (e.g. an original on
+    OneDrive) — or whose location cannot be determined."""
+    loc = _current_project_location(o)
+    if loc is None:
+        if not allowed_write_roots():  # unrestricted -> nothing to check
+            return
+        msg = (f"Refusing to {action}: the project's file location is unknown and "
+               "writes are restricted to ORIGIN_PRO_MCP_ALLOWED_ROOTS. Use "
+               "save_project(file_path=...) inside an allowed folder instead.")
+        raise ValueError(msg)
+    require_writable_path(loc, "the project's current file")
+
+
+_backup_state = threading.local()
+
+
+def _backed_up_this_session() -> set:
+    done = getattr(_backup_state, "paths", None)
+    if done is None:
+        done = _backup_state.paths = set()
+    return done
+
+
 def _backup_existing(path: str):
     """Copy an existing non-empty project file to ``<path>.bak`` before it may be
-    overwritten (N5 safety net). Returns the backup path, or None."""
+    overwritten (N5 safety net). Returns the backup path, or None.
+
+    A file is backed up at most ONCE per session (daemon worker thread): the
+    first load/save keeps the file as it was before this session touched it.
+    Later saves in the same session keep that backup instead of overwriting it
+    with an already-edited copy (which used to destroy the only original when a
+    load was followed by two saves)."""
+    bak = path + ".bak"
+    key = os.path.normcase(os.path.abspath(path))
+    done = _backed_up_this_session()
+    if key in done:
+        return bak if os.path.isfile(bak) else None
     try:
         if os.path.isfile(path) and os.path.getsize(path) > 0:
-            bak = path + ".bak"
             shutil.copy2(path, bak)
+            done.add(key)
             return bak
     except OSError:
         pass
     return None
+
+
+def _forget_backups() -> None:
+    """A new project starts a new backup cycle (used by new_project/tests)."""
+    _backed_up_this_session().clear()
+
+
+def _in_place_target(o):
+    """Full path of the project's own on-disk file, or None if it has none.
+
+    ``Save("")`` is unreliable for this: on Origin 2020 it does not save, and on
+    Origin 2018 it saves but returns False ("no file location"). Saving to the
+    explicit full path is still in place (no rename), so use that — the same
+    approach autosave.save_in_place takes."""
+    path = get_remembered_project_path()
+    if path and os.path.isfile(path):
+        return path
+    try:
+        folder = o.LTStr("%X")
+        name = o.LTStr("%G")
+    except Exception:
+        return None
+    if not (folder and name):
+        return None
+    for ext in (".opju", ".opj"):
+        candidate = os.path.join(folder, name + ext)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _file_stamp(path: str):
+    """(mtime, size) of a file, or None if it does not exist.
+
+    The size is part of the stamp because Windows advances a file's mtime in
+    system-timer steps (often ~15 ms): two writes within one step can leave
+    the mtime unchanged, and the mtime alone would then report a real save
+    as "nothing written"."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _save_in_place(o, action: str):
+    """Save the open project over its own file. Returns ``(path, backup)``.
+
+    Raises ValueError when the project has no file yet or Origin reports a
+    failure that the file's modification time confirms."""
+    path = _in_place_target(o)
+    if path is None:
+        msg = (f"Origin could not {action}: the project has no file location yet. "
+               "Pass file_path to save_project to save it somewhere.")
+        raise ValueError(msg)
+    require_writable_path(path, "the project's current file")
+    bak = _backup_existing(path)
+    before = _file_stamp(path)
+    ok = bool(o.Save(path))
+    if not ok:
+        after = _file_stamp(path)
+        # Origin 2018 can return False even though it wrote the file.
+        ok = after is not None and after != before
+    if not ok:
+        msg = f"Origin could not save the project to {path}."
+        if bak:
+            msg += f" A backup is kept at {bak}."
+        raise ValueError(msg)
+    remember_project_path(path)
+    return path, bak
 
 @mcp.tool()
 def new_project() -> str:
@@ -48,23 +179,33 @@ def new_project() -> str:
     o = get_origin()
     o.NewProject()
     remember_project_path(None)  # a fresh project has no on-disk path to recover
+    _forget_backups()
     return "New project created"
 
 @mcp.tool()
 def save_project(file_path: str = "") -> str:
     """Save the current Origin project.
 
+    With ``file_path``, saves to that path. Without it, saves over the
+    project's own file (the path it was loaded from or last saved to), and
+    fails if the project has never been saved. The first time a session
+    overwrites an existing file, the file as it was is copied to
+    ``<file>.bak``; later saves in the same session keep that backup.
+    Refuses to save an empty project (no workbooks, graphs, or matrices) over
+    a real one, and refuses paths outside ORIGIN_PRO_MCP_ALLOWED_ROOTS when
+    that variable is set.
+
     Args:
-        file_path: Output path for the .opju file (Windows or WSL style).
+        file_path: Output path for the .opj/.opju file (Windows or WSL style).
                    ".opju" is appended when no extension is given.
-                   If empty, saves to the project's current location.
+                   If empty, saves over the project's current file.
 
     Returns:
-        Save confirmation with path
+        "Project saved to: <path>", plus the backup path when one exists.
     """
     o = get_origin()
     if file_path:
-        path = windows_path(file_path, "file_path")
+        path = writable_path(file_path, "file_path")
         ext = os.path.splitext(path)[1].lower()
         if not ext:
             path = f"{path}.opju"
@@ -86,7 +227,11 @@ def save_project(file_path: str = "") -> str:
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         bak = _backup_existing(path)  # safety net before overwriting
-        if not o.Save(path):
+        before = _file_stamp(path)
+        ok = bool(o.Save(path))
+        if not ok and os.path.isfile(path):
+            ok = _file_stamp(path) != before  # Origin 2018 may return False after writing
+        if not ok:
             msg = f"Origin could not save the project to {path}."
             if bak:
                 msg += f" A pre-save backup was kept at {bak}."
@@ -101,23 +246,173 @@ def save_project(file_path: str = "") -> str:
             "file_path if you really mean to save an empty project elsewhere."
         )
         raise ValueError(msg)
-    if not o.Save(""):
+    _require_current_location_writable(o, "save in place")
+    path, bak = _save_in_place(o, "save")
+    return f"Project saved to: {path}" + (f" (backup: {bak})" if bak else "")
+
+@mcp.tool()
+def close_origin(save: bool = False, confirm: bool = False) -> str:
+    """Close THIS session's Origin window.
+
+    Only the Origin instance this MCP session launched is closed — never
+    another session's, and never a window the user opened themselves (attach
+    mode / in-process mode) unless ``confirm=True``. Use this instead of
+    ``run_labtalk("exit")``, which can reach the wrong instance after a daemon
+    restart. The next tool call starts a fresh, empty Origin.
+
+    Args:
+        save: True saves the project to its current file first (fails if it
+              has none — call save_project(file_path=...) first). False
+              (default) DISCARDS unsaved changes without a prompt.
+        confirm: Required to close an Origin the user opened themselves.
+
+    Returns:
+        What was closed and whether changes were saved or discarded.
+    """
+    o = peek_session_origin()
+    if o is None:
+        drop_session_origin()
+        return "No Origin window is open for this session; nothing to close."
+    if session_origin_is_shared() and not confirm:
         msg = (
-            "Origin could not save: the project has no file location yet. "
-            "Pass file_path to save it somewhere."
+            "Refusing to close: this session is using an Origin window the user "
+            "opened (attach mode or in-process mode), so closing it would close "
+            "THEIR Origin. Re-call with confirm=True only if the user explicitly "
+            "asked to close it."
         )
         raise ValueError(msg)
-    return "Project saved"
+    if save:
+        if _project_page_count(o) == 0:
+            msg = ("Refusing to save: the project is empty. Close with save=False, "
+                   "or load/create content first.")
+            raise ValueError(msg)
+        _require_current_location_writable(o, "save before closing")
+        try:
+            _save_in_place(o, "save before closing")
+        except ValueError as exc:
+            msg = (f"{exc} Call save_project(file_path=...) first, or close with "
+                   "save=False.")
+            raise ValueError(msg) from exc
+        outcome = "changes saved"
+    else:
+        # Mark the project clean so Exit closes without a "Save changes?" modal
+        # (which would block the session until someone clicks it).
+        try:
+            o.Execute("doc -s;")
+        except Exception:  # noqa: BLE001, S110 - best-effort COM guard
+            pass
+        outcome = "unsaved changes discarded"
+    # The PID is only trusted for an isolated instance this session launched;
+    # an attached/shared Origin is never force-killed.
+    pid = None if session_origin_is_shared() else _session_origin_pid()
+    _close_instance(o)
+    # Exit returns before the process is gone, and on Origin 2018 an Exit sent
+    # to a -Embedding instance does not always take — so confirm by PID (or, if
+    # the PID is unknown, by the COM proxy dying).
+    closed = _wait_closed(o, pid, timeout=10.0)
+    forced = False
+    if not closed and pid is not None:
+        try:
+            _terminate_pid(pid)
+        except Exception:  # noqa: BLE001, S110 - best-effort COM guard
+            pass
+        closed = _wait_closed(o, pid, timeout=3.0)
+        forced = closed
+    _forget_session_origin_pid()
+    drop_session_origin()
+    if not closed:
+        return (f"Exit sent to this session's Origin ({outcome}), but it has not "
+                "exited yet — a dialog may be open in that window.")
+    if forced:
+        return (f"Closed this session's Origin ({outcome}); it ignored Exit, so its "
+                f"process (PID {pid}) was terminated.")
+    return f"Closed this session's Origin ({outcome})."
+
+
+def _daemon_pid_stores() -> list:
+    """The daemon's thread-local PID store(s).
+
+    The daemon runs as ``python -m origin_pro_mcp.daemon``, so inside that
+    process its module is ``__main__``; ``import origin_pro_mcp.daemon`` would
+    load a SECOND, empty copy. Check both, never importing a new copy.
+    """
+    stores = []
+    for name in ("__main__", "origin_pro_mcp.daemon"):
+        mod = sys.modules.get(name)
+        tls = getattr(mod, "_real_pid_tls", None) if mod is not None else None
+        if tls is not None and all(tls is not s for s in stores):
+            stores.append(tls)
+    return stores
+
+
+def _session_origin_pid():
+    """PID of the Origin this daemon worker launched (captured by the daemon's
+    factory on this thread), or None (in-process mode / capture failed)."""
+    for tls in _daemon_pid_stores():
+        pid = getattr(tls, "pid", None)
+        if isinstance(pid, int) and pid > 0:
+            return pid
+    return None
+
+
+def _forget_session_origin_pid() -> None:
+    """Clear the captured PID so a later force-kill can never hit a reused PID."""
+    for tls in _daemon_pid_stores():
+        try:
+            tls.pid = None
+        except Exception:  # noqa: BLE001, S110 - best-effort COM guard
+            pass
+
+
+def _terminate_pid(pid: int) -> None:
+    for name in ("__main__", "origin_pro_mcp.daemon"):
+        fn = getattr(sys.modules.get(name), "default_terminate_process", None)
+        if callable(fn):
+            fn(pid)
+            return
+
+
+def _pid_alive(pid: int) -> bool:
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    from ..winproc import process_running
+
+    return process_running(pid)
+
+
+def _wait_closed(o, pid, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        alive = _pid_alive(pid) if pid is not None else _connection_alive(o)
+        if not alive:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
 
 @mcp.tool()
 def load_project(file_path: str) -> str:
-    """Open an Origin project file. Replaces the current project.
+    """Open an Origin project file, replacing the current project.
+
+    Unsaved changes in the current project are discarded. Before opening,
+    the file is copied to ``<file>.bak`` (once per session per file), so the
+    on-disk original stays recoverable whatever later saves do. When
+    ORIGIN_PRO_MCP_ALLOWED_ROOTS is set, a file outside those folders is
+    opened without a backup: nothing is written next to it, and this server
+    cannot overwrite it either. Origin
+    sometimes reports success but loads nothing; the tool then raises and
+    asks for a retry. If another open Origin already holds the same file, a
+    warning is appended, since saving from both would overwrite each other.
 
     Args:
         file_path: Path to a .opj or .opju file (Windows or WSL style)
 
     Returns:
-        Success message
+        "Loaded project: <path>", plus any collision warning.
     """
     o = get_origin()
     path = windows_path(file_path, "file_path")
@@ -128,8 +423,12 @@ def load_project(file_path: str) -> str:
         raise ValueError(msg)
     # Keep one pre-load backup of the target (N5 safety net). o.Load is
     # read-only, but a backup guarantees the file is recoverable no matter what
-    # a later save/autosave does in a crash-recovery sequence.
-    _backup_existing(path)
+    # a later save/autosave does in a crash-recovery sequence. The backup is a
+    # WRITE next to the file, so it obeys ORIGIN_PRO_MCP_ALLOWED_ROOTS: a file
+    # outside the allowed folders is not backed up — and needs no backup,
+    # because no tool of this server may overwrite it either.
+    if is_writable_path(path):
+        _backup_existing(path)
     if not o.Load(path):
         msg = f"Origin could not open the project file: {path}"
         raise ValueError(msg)
@@ -183,7 +482,7 @@ def export_all_graphs(
     from .graph import _export_via_expgraph
 
     safe_format = labtalk_choice(format.lower(), EXPORT_FORMATS, "format")
-    out_dir = windows_path(output_dir, "output_dir")
+    out_dir = writable_path(output_dir, "output_dir")
     os.makedirs(out_dir, exist_ok=True)
 
     names = graph_names()
@@ -233,7 +532,7 @@ def save_graph_template(
     safe_graph = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
-    path = windows_path(file_path, "file_path")
+    path = writable_path(file_path, "file_path")
     ext = ".otp" if old_format else ".otpu"
     root = os.path.splitext(path)[0]
     path = root + ext

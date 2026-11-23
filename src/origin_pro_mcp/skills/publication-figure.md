@@ -11,7 +11,7 @@ Use this when the user asks for a manuscript figure, publication-quality graph, 
 - Windows with a licensed Origin/OriginPro installation
 - `origin-pro` MCP launched by the MCP client through Windows Python
 - Prefer typed MCP tools over raw LabTalk
-- Use `run_labtalk` for advanced graph and analysis commands; destructive and file-writing commands are blocked. If a multi-statement script fails as a whole, the server automatically retries it statement-by-statement and reports each one's OK/FAILED status — proactively splitting a script into small chunks is still fine, but no longer required to see which statement caused a failure
+- Use `run_labtalk` for advanced graph and analysis commands. A few command tokens that can touch files, the project, or the system (`doc -s`, `del`, `win -c`, `system.`, ...) run only when called with `confirm=True`. If a multi-statement script fails as a whole, the server retries it statement by statement and reports each statement's OK/FAILED status
 - Verified on Origin Pro 2020 only; other versions may work but are not verified by this skill
 
 ## First Pass
@@ -341,7 +341,7 @@ After export, inspect whether labels are readable, legends avoid data, axis rang
 
 ## Extended Toolkit (beyond 2D line plots)
 
-The server exposes 45 tools, several of them dispatchers (one tool name,
+The server exposes 46 tools, several of them dispatchers (one tool name,
 an `op`/`kind`/`method` argument selecting the action). Reach for these
 when a figure needs more than a styled XY plot.
 
@@ -406,9 +406,10 @@ annotate the peaks.
   when an axis title is clipped or panels must line up.
 - `set_graph_font(graph, target="axes", bold=True)` bolds axis titles via
   `\b(...)` markup (there is no `xb.bold` on Origin 2020).
-- `add_second_y_axis` / `add_layer` for dual-axis or stacked panels. Coloring
-  the right axis to match its data needs a LabTalk recipe beyond what the tool
-  sets — see `add_second_y_axis`'s docstring and the Origin COM Notes table.
+- `add_second_y_axis` / `add_layer` for dual-axis or stacked panels.
+  `add_second_y_axis(..., color="r,g,b")` colors the right axis line and its
+  tick labels; the right-axis title (`YR`) needs the LabTalk recipe in
+  `get_skill('labtalk-gotchas')`.
 - `annotate(graph, kind="reference_line", orientation=, value=)` (threshold/
   baseline), `kind="line"` / `kind="arrow"` (callouts), `kind="text"`
   (labels at data coordinates).
@@ -475,7 +476,7 @@ These COM behaviors were observed while testing on Origin Pro 2020. Other Origin
 | Error-bar `set -erw`/`-erwc` use POINTS, unlike the data line's `-w` (~200 units/pt) | Set `-erw` (error-bar line width) and `-erwc` (cap/whisker width) in points. Passing a `-w`-scale value (e.g. 550) into `-erw` makes bars explode — that was a units mistake, not an Origin bug. MCP tools set `-erw` in points and scale `-erwc` to the symbol size |
 | `set <plot>` silently fails when the graph window is not active | Run `win -a <graph>` first |
 | `[Book]Sheet!col(n).type = ...` is silently ignored | Activate the sheet and use `wks.col(n).type` instead |
-| A graph loaded from a `.opju` project file can report zero data plots over COM, so per-curve styling/ungrouping used to silently no-op | The core per-curve/axis/frame tools (`set_plot_style`, `ungroup_plots`, `remove_plot`, `axis` range/scale/tick) now activate the page and re-acquire a fresh layer handle before each call; axis-range calls also read the value back and raise if it didn't change. If plots are still zero, the tool raises an actionable error — recreate the graph in-session (`create_graph`/`plotxy`) rather than editing the loaded one. Text/font/legend tools (`set_graph_font`, `set_legend`) still go through plain LabTalk and can silently no-op on a loaded graph — verify those in the exported image |
+| A graph loaded from a `.opju` project file can report zero data plots over COM, and per-curve styling or ungrouping then silently no-ops | The per-curve, axis and frame tools (`set_plot_style`, `ungroup_plots`, `remove_plot`, `axis` range/scale/tick) activate the page and re-acquire a fresh layer handle before each call; axis-range calls also read the value back and raise if it didn't change. `set_graph_font` reads the font size back and raises when a write does not take, and `set_legend` returns a WARNING when the legend is missing afterwards. If plots are still zero, the tool raises an actionable error — recreate the graph in-session (`create_graph`/`plotxy`) rather than editing the loaded one |
 | A freshly created graph page can silently ignore or partially apply the FIRST styling/read/export command issued right after `create_graph`/`plotxy`/`add_plot_to_graph` (no exception, just no effect) | `create_graph`, `add_plot_to_graph`, and `ungroup_plots` now poll until the new plots enumerate and add a short settle before returning, so callers don't need to add their own delay |
 | Combining multiple `-flag`s in ONE `set <ds> ...` command (e.g. `-c` + `-cf`, or `-k` + `-kf` + `-z`) silently corrupts the plot — colors reset to black, or the symbol blanks out | Send exactly ONE flag per `set` call. `set_plot_style` and `apply_publication_style` both do this now; never batch flags yourself via `run_labtalk` |
 | `layer.x2.majorTicks` / `layer.y2.majorTicks` set to 0 wipes the NUMBER LABELS on ALL FOUR axes, not just the opposite side | Use `axis(op="tick", axis="top"/"right", tick_direction="none")`, which sets `layer.<ax>.ticks = 0` instead — never write `majorTicks` directly |

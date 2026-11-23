@@ -17,6 +17,7 @@ This phase (3b) is entirely COM-free. The daemon owns:
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import queue
 import secrets
@@ -31,6 +32,7 @@ from . import autosave as _autosave
 from .autosave import AutosavePolicy
 from .origin_connection import (
     clear_session_origin, get_origin, get_remembered_project_path,
+    mark_session_attached,
     set_session_collision_reader, set_session_context_writer, set_session_origin,
 )
 from .transport import MAX_FRAME, Connection, FrameError, TcpServer
@@ -53,6 +55,12 @@ DISPATCH_KILL_GRACE_DEFAULT: float = 90.0  # seconds; env: ORIGIN_PRO_MCP_DISPAT
 # Proactive periodic autosave interval (seconds) for healthy, agent-isolated
 # sessions. 0 disables. env: ORIGIN_PRO_MCP_AUTOSAVE_INTERVAL
 AUTOSAVE_INTERVAL_DEFAULT: float = 300.0
+
+# Detach reap of an EMPTY Origin: how long to wait for Exit to take before the
+# PID force-kill fallback. This wait plus the 1 s post-kill check is kept below
+# the default reap grace (5 s), so the watchdog's stage-2 deadline is not what
+# ends the session.
+EMPTY_CLOSE_WAIT_DEFAULT: float = 3.5
 
 def _env_flag_on(name: str) -> bool:
     """True when env var ``name`` is explicitly set to a truthy on-value."""
@@ -162,9 +170,19 @@ class Session:
     def __init__(self, session_id: str, origin_factory: OriginFactory,
                  registry: dict, get_pid: Optional[GetPid] = None,
                  autosave_policy: Optional[AutosavePolicy] = None,
-                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None):
+                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None,
+                 terminate_process: Optional[TerminateProcess] = None,
+                 process_running: Optional[Callable[[int], bool]] = None,
+                 empty_close_wait: float = EMPTY_CLOSE_WAIT_DEFAULT):
         self.session_id = session_id
         self._factory = origin_factory
+        # Used only by _close_if_empty (detach reap of an EMPTY Origin): the
+        # force-kill fallback and the "has it exited yet?" probe. Injectable so
+        # tests never signal a real PID.
+        self._terminate_process = terminate_process or default_terminate_process
+        self._process_running = process_running or default_process_running
+        self._empty_close_wait = empty_close_wait
+        self.empty_close_result: Optional[str] = None
         self._registry = registry
         self._get_pid = get_pid or _default_get_pid
         self._autosave_policy = autosave_policy
@@ -173,6 +191,10 @@ class Session:
         self._ready = threading.Event()
         self.pid: Optional[int] = None
         self.instance: object = None
+        # True when this session was granted the USER's own Origin (attach
+        # mode); set by Pool.acquire before start(). close_origin refuses to
+        # close an attached window without an explicit confirm.
+        self.attached: bool = False
         self.saved_recovery_path: Optional[str] = None
         self.reaping: bool = False  # set once a reap has COMMITTED (stage 1)
         self._start_error: Optional[BaseException] = None
@@ -232,16 +254,13 @@ class Session:
                 self._start_error = exc
                 self._ready.set()
                 return
-            # Pass the factory so a dead proxy relaunches THIS session's own
+            # Pass a factory so a dead proxy relaunches THIS session's own
             # isolated instance, never the shared ApplicationSI (which could
-            # hijack the user's open Origin).
-            set_session_origin(self.instance, self._factory, self.session_id)
-            try:
-                pid = self._get_pid(self.instance)
-                self.pid = int(pid) if pid is not None else None
-            except Exception:
-                # Unknown PID -> None ("do not force-kill"), NEVER os.getpid().
-                self.pid = None
+            # hijack the user's open Origin). _relaunch also keeps self.instance
+            # and self.pid on the Origin the session now owns.
+            set_session_origin(self.instance, self._relaunch, self.session_id)
+            mark_session_attached(self.attached)
+            self.pid = self._resolve_pid(self.instance)
             self._ready.set()
             self._start_dialog_watchdog()
             try:
@@ -270,6 +289,33 @@ class Session:
                 self._com_uninitialize()
 
     # -- S1 modal-dialog watchdog ------------------------------------------- #
+
+    def _resolve_pid(self, instance) -> Optional[int]:
+        """PID of ``instance`` via the injected resolver; unknown -> None
+        ("do not force-kill"), NEVER os.getpid()."""
+        try:
+            pid = self._get_pid(instance)
+            return int(pid) if pid is not None else None
+        except Exception:
+            return None
+
+    def _relaunch(self):
+        """Factory for every launch after the first (runs on this worker thread
+        from ``get_origin`` when the proxy is dead — e.g. after ``close_origin``
+        or an Origin crash).
+
+        Without it the session would keep pointing at the Origin it started
+        with: the detach reap's empty-Origin close, the dispatch watchdog's
+        force-kill, the lockfile's child PIDs and the dialog watchdog would all
+        act on a dead instance and a stale PID, and the relaunched Origin would
+        be left running when the session ends."""
+        inst = self._factory()
+        self.instance = inst
+        self.pid = self._resolve_pid(inst)
+        # The dialog watchdog watches one PID; move it to the new process.
+        self._stop_dialog_watchdog()
+        self._start_dialog_watchdog()
+        return inst
 
     def _start_dialog_watchdog(self) -> None:
         """Start the persistent per-session dialog watchdog once the PID is known.
@@ -338,7 +384,15 @@ class Session:
         WEDGED worker is freed instead by the watchdog force-killing its PID.
         """
         if not _reap_close_enabled():
-            return  # detach: leave the window untouched; the worker exits below
+            # detach: leave the window untouched; the worker exits below —
+            # EXCEPT an Origin with nothing in it, which would otherwise be left
+            # behind un-closable (Origin 2018 says it is "controlled by another
+            # program"). Anything uncertain keeps it.
+            try:
+                self._close_if_empty()
+            except Exception:
+                pass
+            return
         project_path = None
         if getter is not None:
             try:
@@ -363,6 +417,94 @@ class Session:
                 except Exception:
                     pass
                 break
+
+    def _project_is_empty(self) -> bool:
+        """True ONLY when the Origin provably holds no windows: the
+        WorksheetPages, GraphPages and MatrixPages counts all read as ints and
+        sum to 0. Any read failure means "unknown" -> False (keep the Origin).
+        A readable ``Pages`` (all pages, if this Origin exposes it) above 0
+        also keeps it, so a project holding only e.g. a Notes window survives."""
+        inst = self.instance
+        total = 0
+        for coll in ("WorksheetPages", "GraphPages", "MatrixPages"):
+            try:
+                n = getattr(inst, coll).Count
+            except Exception:
+                return False
+            if isinstance(n, bool) or not isinstance(n, int):
+                try:
+                    n = int(n)
+                except Exception:
+                    return False
+            total += n
+        if total != 0:
+            return False
+        try:
+            every = int(inst.Pages.Count)
+        except Exception:
+            every = None  # not exposed / unreadable: rely on the three above
+        if every is not None and every > 0:
+            return False
+        return True
+
+    def _close_if_empty(self) -> Optional[str]:
+        """Detach-reap helper: close this session's Origin iff it is EMPTY.
+
+        Conditions (all required): not attach mode (never the user's own
+        Origin), and :meth:`_project_is_empty`. Then mark the project clean
+        (``doc -s;``, so no "Save changes?" modal), ``Exit()``, and confirm by
+        PID. Origin 2018 ignores Exit on a ``-Embedding`` instance, so a process
+        still running after the wait is force-killed — but only with a known
+        PID; ``pid is None`` never force-kills.
+
+        Returns (and records in ``empty_close_result``) one of: "kept",
+        "closed", "forced", "exit-sent" (no PID to confirm/kill),
+        "still-running" (kill attempted, process survived)."""
+        result = "kept"
+        try:
+            if self.attached or self.instance is None or not self._project_is_empty():
+                return result
+            inst = self.instance
+            try:
+                inst.Execute("doc -s;")
+            except Exception:
+                pass
+            for closer in ("Exit", "Close"):
+                fn = getattr(inst, closer, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+                    break
+            pid = self.pid
+            if pid is None:
+                result = "exit-sent"
+                return result
+            if self._wait_process_gone(pid, self._empty_close_wait):
+                result = "closed"
+                return result
+            try:
+                self._terminate_process(pid)
+            except Exception:
+                pass
+            result = "forced" if self._wait_process_gone(pid, 1.0) else "still-running"
+            return result
+        finally:
+            self.empty_close_result = result
+
+    def _wait_process_gone(self, pid: int, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            try:
+                running = self._process_running(pid)
+            except Exception:
+                running = True  # unknown: keep waiting, then fall back
+            if not running:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
 
     def submit_reap(self, recovery_dir: str, getter,
                     on_done: Optional[Callable[[], None]] = None) -> None:
@@ -515,9 +657,13 @@ class Pool:
                  autosave_policy: Optional[AutosavePolicy] = None,
                  attach_factory: Optional[OriginFactory] = None,
                  attach_get_pid: Optional[GetPid] = None,
-                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None):
+                 dialog_watchdog_factory: Optional[Callable[[int, Callable[[dict], None]], object]] = None,
+                 terminate_process: Optional[TerminateProcess] = None,
+                 process_running: Optional[Callable[[int], bool]] = None):
         self._factory = origin_factory
         self._registry = registry
+        self._terminate_process = terminate_process
+        self._process_running = process_running
         self._max_size = max_size
         self._get_pid = get_pid
         self._start_timeout = start_timeout
@@ -567,7 +713,10 @@ class Pool:
                 session_id, factory, self._registry, get_pid,
                 autosave_policy=self._autosave_policy,
                 dialog_watchdog_factory=self._dialog_watchdog_factory,
+                terminate_process=self._terminate_process,
+                process_running=self._process_running,
             )
+            session.attached = bool(use_attach)
             if use_attach:
                 self._attach_session_id = session_id
             self._sessions[session_id] = session  # reserve the slot
@@ -806,6 +955,29 @@ class SingletonGuard:
             self._fh = None
 
 
+_REPLACE_RETRY_DELAYS = (0.01, 0.02, 0.05, 0.1, 0.2)  # ~0.4 s worst case
+
+
+def _replace_with_retry(tmp: str, path: str, *, sleep=time.sleep) -> None:
+    """``os.replace(tmp, path)``, retried briefly on Windows sharing errors.
+
+    Windows refuses to replace a file that another process has open without
+    delete sharing — a shim reading ``daemon.json`` at that moment, or an
+    antivirus scanner looking at the freshly written file — and raises
+    PermissionError. That condition clears within milliseconds, so retry a few
+    times before giving up; the last error propagates unchanged."""
+    if sys.platform != "win32":
+        os.replace(tmp, path)
+        return
+    for delay in _REPLACE_RETRY_DELAYS:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            sleep(delay)
+    os.replace(tmp, path)
+
+
 def write_lockfile(path: str, port: int, token: str, pid: int,
                    child_pids: list[int]) -> None:
     """Atomically write the daemon discovery lockfile (user-only on POSIX).
@@ -824,7 +996,7 @@ def write_lockfile(path: str, port: int, token: str, pid: int,
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
             json.dump(data, fh)
-    os.replace(tmp, path)
+    _replace_with_retry(tmp, path)
     if sys.platform != "win32":
         os.chmod(path, 0o600)
 
@@ -879,7 +1051,7 @@ def write_sessions(path: str, data: dict) -> None:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
             json.dump(data, fh)
-    os.replace(tmp, path)
+    _replace_with_retry(tmp, path)
     if sys.platform != "win32":
         os.chmod(path, 0o600)
 
@@ -950,8 +1122,16 @@ def _ensure_private_dir(directory: str) -> None:
 
 def default_lockfile_path() -> str:
     if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
-        directory = os.path.join(base, "origin-pro-mcp")
+        # NOT %LOCALAPPDATA%: an MSIX-packaged client (e.g. the Store build of
+        # Claude Desktop) has its AppData writes redirected into the package's
+        # private LocalCache, even for child processes without package identity.
+        # The shim then sees a different daemon.json than the daemon it spawned
+        # through WMI (which runs outside the package) — a stale lockfile, a
+        # 20 s spawn timeout, every time. The user profile root is not
+        # virtualized, so every client and the daemon agree on this path.
+        base = (os.environ.get("USERPROFILE") or os.environ.get("LOCALAPPDATA")
+                or tempfile.gettempdir())
+        directory = os.path.join(base, ".origin-pro-mcp")
         os.makedirs(directory, exist_ok=True)
         return os.path.join(directory, "daemon.json")
     # POSIX: keep the token-bearing lockfile in a user-private 0700 dir.
@@ -1025,6 +1205,23 @@ def default_is_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def default_process_running(pid: int) -> bool:
+    """True while process ``pid`` is still running — out-of-band, no COM.
+
+    Unlike :func:`default_is_alive` (which only checks that a handle can be
+    opened, and so stays True for an exited process whose handle someone still
+    holds), Windows checks the process is not yet signalled. Used to confirm an
+    ``Exit`` actually took before falling back to a force-kill.
+    """
+    if not pid:
+        return False
+    if sys.platform == "win32":
+        from .winproc import process_running
+
+        return process_running(pid)
+    return default_is_alive(pid)
 
 
 def iter_registered_tools(mcp) -> dict:
@@ -1249,7 +1446,11 @@ class Daemon:
                           autosave_policy=autosave_policy,
                           attach_factory=attach_factory,
                           attach_get_pid=attach_get_pid,
-                          dialog_watchdog_factory=dialog_watchdog_factory)
+                          dialog_watchdog_factory=dialog_watchdog_factory,
+                          # Same injected kill/liveness hooks as the watchdog
+                          # and startup sweep, for the empty-Origin close.
+                          terminate_process=self._terminate,
+                          process_running=is_alive)
         self._watchdog = Watchdog(terminate_process=self._terminate,
                                   on_reap=self._on_watchdog_reap,
                                   tick=monitor_tick, clock=self._clock)
@@ -2095,11 +2296,66 @@ _LAUNCH_LOCK = threading.Lock()
 _real_pid_tls = threading.local()
 
 
+def _registered_origin_images() -> tuple:
+    """Executable basename(s) COM actually launches for Origin, read from the
+    ``LocalServer32`` registration of ``Origin.Application`` /
+    ``Origin.ApplicationSI``.
+
+    This is what ``tasklist`` reports, and it is often NOT one of the default
+    names: Origin 2018 (9.5) ships ``Origin95_64.exe`` and registers the server
+    with an 8.3 short path, so the process shows up as ``ORIGIN~1.EXE``. Without
+    it, PID capture silently fails and the dialog watchdog, force-kill backstop
+    and orphan reclaim are all disabled. Windows-only, best-effort (``()``
+    elsewhere or on any registry error).
+    """
+    try:
+        import winreg
+    except ImportError:
+        return ()
+    names: list = []
+    views = (0, getattr(winreg, "KEY_WOW64_32KEY", 0), getattr(winreg, "KEY_WOW64_64KEY", 0))
+    for progid in ("Origin.Application", "Origin.ApplicationSI"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, progid + "\\CLSID") as key:
+                clsid = winreg.QueryValue(key, None)
+        except OSError:
+            continue
+        for view in views:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT,
+                                    f"CLSID\\{clsid}\\LocalServer32", 0,
+                                    winreg.KEY_READ | view) as key:
+                    cmd = (winreg.QueryValue(key, None) or "").strip()
+            except OSError:
+                continue
+            if cmd.startswith('"'):
+                exe = cmd[1:].split('"', 1)[0]
+            else:
+                exe = cmd.split(" -", 1)[0].split(" /", 1)[0].strip()
+            # ntpath, not os.path: the registry always holds a Windows path,
+            # and posixpath.basename would not split on backslashes.
+            base = ntpath.basename(exe)
+            if base and base.lower() not in {n.lower() for n in names}:
+                names.append(base)
+            break
+    return tuple(names)
+
+
 def _origin_image_names() -> tuple:
+    """Image names that identify an Origin process in ``tasklist``.
+
+    ``ORIGIN_PRO_MCP_ORIGIN_IMAGE`` (comma-separated) replaces the built-in
+    defaults; the names read from the COM registration are ALWAYS added, so a
+    wrong or stale override can no longer disable PID capture.
+    """
     override = os.environ.get("ORIGIN_PRO_MCP_ORIGIN_IMAGE")
     if override:
-        return tuple(n.strip() for n in override.split(",") if n.strip())
-    return _DEFAULT_ORIGIN_IMAGES
+        base = tuple(n.strip() for n in override.split(",") if n.strip())
+    else:
+        base = _DEFAULT_ORIGIN_IMAGES
+    seen = {n.lower() for n in base}
+    extra = tuple(n for n in _registered_origin_images() if n.lower() not in seen)
+    return base + extra
 
 
 def _origin_process_pids() -> set:

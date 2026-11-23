@@ -25,18 +25,18 @@ from typing import List, Optional
 # locally instead of building daemon-forwarders for them.
 SKILL_TOOL_NAMES = ("list_skills", "get_skill")
 
-# Server-level instructions sent to the client at initialize, so connecting
-# agents are told to consult the bundled skills BEFORE producing figures —
-# making the skills mandatory reference rather than an optional tool.
+# Server-level instructions sent to the client at initialize: which bundled
+# skill to read for which task.
 SERVER_INSTRUCTIONS = (
-    "This server controls OriginLab Origin Pro and ships expert skills that "
-    "encode how to produce high-quality results. BEFORE you create or style any "
-    "figure or plot, or run any analysis, you MUST first call `list_skills`, "
-    "then `get_skill(<name>)` to load the relevant skill, and follow its steps "
-    "— do not work from memory alone. For any manuscript / journal / "
-    "publication-quality figure, reading the `publication-figure` skill is "
-    "required. Prefer the typed tools; use `run_labtalk` only for operations no "
-    "tool covers."
+    "This server controls OriginLab Origin Pro through COM automation and "
+    "bundles skills that record how Origin behaves when scripted: verified "
+    "recipes, silent no-ops, and unit traps. Before building or styling a "
+    "figure for a paper, thesis, or talk, read the `publication-figure` skill "
+    "with `get_skill`. Before writing a non-trivial `run_labtalk` script, or "
+    "when a styling call reports success but the exported image shows no "
+    "change, read `labtalk-gotchas`. `list_skills` shows every bundled skill "
+    "and when to use it. Prefer the typed tools; use `run_labtalk` for "
+    "operations no typed tool covers."
 )
 
 _SKILLS_CACHE: Optional[List[dict]] = None
@@ -113,12 +113,12 @@ def register_skills(mcp) -> None:
     """
 
     def list_skills() -> str:
-        """List the bundled origin-pro skills — call this FIRST, before any figure work.
+        """List the bundled origin-pro skills with when to use each.
 
-        You MUST call this (then ``get_skill(name)``) before creating or styling
-        a figure, plot, or graph, or running analysis — do not work from memory.
-        Each entry shows the skill name, title, and when to use it; load the
-        relevant one with ``get_skill(name)`` and follow its steps.
+        Skills record how Origin behaves when scripted (verified recipes,
+        silent no-ops, unit traps) and the figure conventions this server is
+        tuned for. Load one with ``get_skill(name)``. Reads bundled files
+        only; does not touch Origin.
         """
         skills = discover_skills()
         if not skills:

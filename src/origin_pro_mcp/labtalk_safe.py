@@ -40,7 +40,62 @@ def labtalk_name(value: str, field: str) -> str:
             f"{field} must start with a letter or underscore and contain only "
             "letters, numbers, and underscores."
         )
+        if "sheet" in field and isinstance(value, str) and value.strip():
+            msg += (
+                " (This tool interpolates the sheet name into a LabTalk range, "
+                "so it needs a plain name. Sheet names with spaces or other "
+                "characters ARE accepted by get_worksheet_data, "
+                "export_worksheet, set_worksheet_data, stats and the other "
+                "read/analysis tools; rename the sheet first to use it here.)"
+            )
         raise ValueError(msg)
+    return value
+
+
+# Characters that would break a ``[Book]Sheet`` reference or a quoted
+# ``page.active$ = "..."`` assignment. Everything else Origin allows in a
+# sheet name (spaces, dashes, dots, parentheses, CJK, ...) is accepted.
+_SHEET_FORBIDDEN: Final = frozenset('"[]!;\r\n\t')
+
+# Only where the name goes INTO a LabTalk string: LabTalk expands ``%A``..
+# ``%Z``, ``%(...)`` and ``%[...]`` and evaluates ``$(...)`` inside quoted
+# strings, so the name would be rewritten before Origin sees it. A name passed
+# to COM alone (GetWorksheet/FindWorksheet/PutWorksheet) is not affected.
+_LABTALK_SUBSTITUTION: Final = ("%", "$(")
+
+
+def labtalk_sheet_name(value: str, field: str, *, in_labtalk: bool = True) -> str:
+    """Validate an EXISTING worksheet name that may contain spaces etc.
+
+    Origin itself allows sheet names such as ``wpd_datasets _1_``. This
+    validator accepts them, but its result may only be used where the name is
+    passed to COM (``GetWorksheet``/``FindWorksheet``/``PutWorksheet`` with a
+    ``[Book]Sheet`` reference) or quoted via :func:`labtalk_string`
+    (``page.active$ = "..."``). NEVER interpolate it raw into a LabTalk range
+    such as ``[Book]Sheet!col(1)`` — those call sites must keep using
+    :func:`labtalk_name`.
+
+    ``in_labtalk=False`` is for callers that hand the name to COM only: it
+    also accepts ``%`` and ``$(``. Such a caller must validate again with the
+    default before it ever quotes the name into LabTalk.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} cannot be empty.")
+    if value != value.strip():
+        raise ValueError(f"{field} cannot start or end with whitespace.")
+    bad = sorted({ch for ch in value if ch in _SHEET_FORBIDDEN})
+    if bad:
+        shown = ", ".join(repr(ch) for ch in bad)
+        raise ValueError(f"{field} cannot contain {shown}.")
+    if in_labtalk:
+        found = [s for s in _LABTALK_SUBSTITUTION if s in value]
+        if found:
+            shown = " or ".join(repr(s) for s in found)
+            raise ValueError(
+                f"{field} cannot contain {shown} here: this tool quotes the "
+                "sheet name into LabTalk, which would substitute it. Rename "
+                "the sheet to use it with this tool (get_worksheet_data and "
+                "export_worksheet accept it).")
     return value
 
 
@@ -146,6 +201,68 @@ def windows_path(value: str, field: str) -> str:
             )
             raise ValueError(msg)
     return path
+
+
+# --------------------------------------------------------------------------- #
+# Write sandbox (ORIGIN_PRO_MCP_ALLOWED_ROOTS)                                #
+# --------------------------------------------------------------------------- #
+ALLOWED_ROOTS_ENV: Final = "ORIGIN_PRO_MCP_ALLOWED_ROOTS"
+
+
+def _norm_path(p: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(p)))
+
+
+def allowed_write_roots() -> list:
+    """Folders this server may WRITE into, from ``ORIGIN_PRO_MCP_ALLOWED_ROOTS``
+    (separated by ``;`` or newlines — not ``:``, which is part of a drive
+    letter). Empty list = unrestricted (the default, backward compatible)."""
+    raw = os.environ.get(ALLOWED_ROOTS_ENV, "")
+    roots = []
+    for part in re.split(r"[;\r\n]", raw):
+        p = part.strip().strip('"').strip()
+        if p:
+            roots.append(p)
+    return roots
+
+
+def is_writable_path(path: str) -> bool:
+    """True if ``path`` may be written: no roots configured, or ``path`` is a
+    root or lies inside one (symlinks/junctions resolved, case-insensitive on
+    Windows). A path on a different drive than a root is simply outside it."""
+    roots = allowed_write_roots()
+    if not roots:
+        return True
+    target = _norm_path(path)
+    for root in roots:
+        r = _norm_path(root)
+        try:
+            if os.path.commonpath([target, r]) == r:
+                return True
+        except ValueError:  # different drives / mixed absolute-relative
+            continue
+    return False
+
+
+def require_writable_path(path: str, field: str) -> str:
+    """Raise unless ``path`` is inside an allowed write root (see
+    :func:`allowed_write_roots`). Returns ``path`` unchanged."""
+    if is_writable_path(path):
+        return path
+    roots = "; ".join(allowed_write_roots())
+    msg = (
+        f"{field} '{path}' is outside the folders this server may write to "
+        f"({ALLOWED_ROOTS_ENV}: {roots}). Write the output into one of those "
+        "folders instead, or ask the user to add this folder to "
+        f"{ALLOWED_ROOTS_ENV}. Reading/opening files elsewhere is still allowed."
+    )
+    raise ValueError(msg)
+
+
+def writable_path(value: str, field: str) -> str:
+    """:func:`windows_path` + :func:`require_writable_path`: use for every
+    user-supplied OUTPUT path (exports, saves, templates)."""
+    return require_writable_path(windows_path(value, field), field)
 
 
 def labtalk_path(value: str, field: str) -> str:

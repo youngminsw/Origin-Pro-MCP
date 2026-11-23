@@ -64,9 +64,41 @@ def set_session_origin(origin, factory=None, session_id=None) -> None:
 
 def clear_session_origin() -> None:
     """Drop the current thread's proxy and factory (full session teardown)."""
-    for attr in ("origin", "factory", "project_path", "session_id"):
+    for attr in ("origin", "factory", "project_path", "session_id", "attached"):
         if hasattr(_state, attr):
             delattr(_state, attr)
+
+
+def mark_session_attached(attached: bool) -> None:
+    """Record whether this thread's Origin is the USER's own window (attach
+    mode) rather than an isolated instance this session launched."""
+    _state.attached = bool(attached)
+
+
+def session_origin_is_shared() -> bool:
+    """True when closing this thread's Origin could close a window the user
+    opened: attach mode, or in-process mode (no factory -> the shared
+    ``Origin.ApplicationSI``)."""
+    return bool(getattr(_state, "attached", False)) or getattr(_state, "factory", None) is None
+
+
+def peek_session_origin():
+    """This thread's current proxy WITHOUT relaunching a dead one (unlike
+    :func:`get_origin`). ``None`` if nothing is bound or it is dead."""
+    origin = getattr(_state, "origin", None)
+    if origin is None or not _connection_alive(origin):
+        return None
+    return origin
+
+
+def drop_session_origin() -> None:
+    """Forget this thread's proxy and remembered project after an INTENTIONAL
+    close. The factory is kept, so the next tool call launches a fresh, EMPTY
+    instance — the closed project is deliberately not auto-reopened."""
+    for attr in ("origin", "project_path"):
+        if hasattr(_state, attr):
+            delattr(_state, attr)
+    _notify_session_context(None)
 
 
 # --------------------------------------------------------------------------- #
@@ -280,7 +312,22 @@ def require_worksheet(book: str, sheet: str) -> str:
 
 def require_graph(graph_name: str):
     """Return the graph's Layer1, or raise with the list of open graphs."""
-    layer = get_origin().FindGraphLayer(f"[{graph_name}]Layer1")
+    o = get_origin()
+    layer = o.FindGraphLayer(f"[{graph_name}]Layer1")
+    if layer is None:
+        # Origin 2018 (9.5): FindGraphLayer rejects "[Page]Layer1" and only
+        # accepts the bare page name; walk GraphPages as a version-safe fallback.
+        # Origin window names are case-insensitive, so match the same way.
+        wanted = graph_name.casefold()
+        try:
+            pages = o.GraphPages
+            for i in range(pages.Count):
+                page = pages.Item(i)
+                if str(page.Name).casefold() == wanted and page.Layers.Count:
+                    layer = page.Layers.Item(0)
+                    break
+        except Exception:  # noqa: BLE001 - best-effort COM guard
+            layer = None
     if layer is None:
         graphs = ", ".join(graph_names()) or "(none)"
         msg = f"Graph '{graph_name}' not found. Open graphs: {graphs}."
