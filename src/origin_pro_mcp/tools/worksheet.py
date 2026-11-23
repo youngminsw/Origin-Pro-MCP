@@ -240,6 +240,102 @@ def _column_labels(o, target: str, ncols: int) -> tuple:
     return long_names, units
 
 
+def _worksheet_exists(o, target: str) -> bool:
+    try:
+        return o.FindWorksheet(target) is not None
+    except Exception:  # noqa: BLE001 - best-effort COM guard
+        return False
+
+
+def _read_whole_sheet(o, target: str):
+    """Every row of ``target`` via one full ``GetWorksheet``.
+
+    Origin returns None or an HRESULT int instead of a sequence both for a
+    missing sheet and for an existing sheet with no data (live-checked on
+    Origin 2018), so an existing sheet maps to ``()`` and only a missing one
+    raises."""
+    data = o.GetWorksheet(target)
+    if isinstance(data, (list, tuple)):
+        return data
+    if _worksheet_exists(o, target):
+        return ()
+    books = ", ".join(workbook_names()) or "(none)"
+    msg = f"Worksheet {target} not found. Open workbooks: {books}."
+    raise ValueError(msg)
+
+
+def _row_slice(o, target: str, r1: int, r2: int):
+    """``GetWorksheet(target, r1, 0, r2, -1)``: rows r1..r2 INCLUSIVE, all
+    columns. Live-checked on Origin 2018: r2 past the end is clipped to the
+    last row, r1 == row count gives an empty sequence, r1 past that gives
+    None. Returns a list, or None when the read is unusable."""
+    try:
+        d = o.GetWorksheet(target, r1, 0, r2, -1)
+    except Exception:  # noqa: BLE001 - older build without range arguments
+        return None
+    return list(d) if isinstance(d, (list, tuple)) else None
+
+
+_MAX_ROW_PROBES = 64
+
+
+def _count_rows(o, target: str, known: int) -> int:
+    """Number of rows a full ``GetWorksheet`` would return, found with
+    single-row reads (exponential then binary search) so a page never has to
+    transfer the whole sheet. ``known`` rows are already known to exist."""
+    def has_row(k: int) -> bool:
+        return bool(_row_slice(o, target, k, k))
+
+    lo = known                # invariant: rows >= lo
+    step = max(1, known)
+    hi = lo + step
+    probes = 0
+    while has_row(hi) and probes < _MAX_ROW_PROBES:
+        lo, step = hi + 1, step * 2
+        hi = lo + step
+        probes += 1
+    while lo < hi and probes < 2 * _MAX_ROW_PROBES:   # first k with no row
+        mid = (lo + hi) // 2
+        if has_row(mid):
+            lo = mid + 1
+        else:
+            hi = mid
+        probes += 1
+    return lo
+
+
+def _read_page(o, target: str, start_row: int, max_rows: int):
+    """``(page, total_rows, num_cols)`` read with row ranges, or None to fall
+    back to a whole-sheet read (range read unusable, sheet missing or empty).
+
+    Reads ``max_rows + 1`` rows: the extra row only tells whether more follow,
+    so the exact total is counted only when it does."""
+    # Row indices go over COM as 32-bit ints; r2 past the end is clipped anyway.
+    rows = _row_slice(o, target, start_row, min(start_row + max_rows, 2**31 - 1))
+    if rows is None:
+        if start_row > 0 and _worksheet_exists(o, target):
+            last = _row_slice(o, target, 0, 0)
+            total = _count_rows(o, target, 1) if last else 0
+            if total and start_row > total:
+                msg = (f"start_row {start_row} is past the end of {target} "
+                       f"({total} rows).")
+                raise ValueError(msg)
+        return None
+    if not rows:                                   # start_row == row count
+        if start_row == 0:
+            return None
+        last = _row_slice(o, target, start_row - 1, start_row - 1)
+        if not last:
+            return None
+        return [], start_row, len(last[0])
+    page = rows[:max_rows]
+    if len(rows) > max_rows:
+        total = _count_rows(o, target, start_row + len(rows))
+    else:
+        total = start_row + len(page)
+    return page, total, len(page[0])
+
+
 @mcp.tool()
 def get_worksheet_data(
     book_name: str,
@@ -281,21 +377,20 @@ def get_worksheet_data(
     # COM only (GetWorksheet + column objects): no LabTalk string involved.
     safe_sheet_name = labtalk_sheet_name(sheet_name, "sheet_name", in_labtalk=False)
     target = f"[{safe_book_name}]{safe_sheet_name}"
-    data = o.GetWorksheet(target)
-    # On failure GetWorksheet returns None or an HRESULT int, never a sequence
-    if not isinstance(data, (list, tuple)):
-        books = ", ".join(workbook_names()) or "(none)"
-        msg = f"Worksheet {target} not found. Open workbooks: {books}."
-        raise ValueError(msg)
-
-    total_rows = len(data)
-    num_cols = len(data[0]) if total_rows else 0
+    paged = _read_page(o, target, start_row, max_rows) if max_rows else None
+    if paged is not None:
+        page, total_rows, num_cols = paged
+        end = start_row + len(page)
+    else:
+        data = _read_whole_sheet(o, target)
+        total_rows = len(data)
+        num_cols = len(data[0]) if total_rows else 0
+        if start_row > total_rows:
+            msg = f"start_row {start_row} is past the end of {target} ({total_rows} rows)."
+            raise ValueError(msg)
+        end = total_rows if max_rows == 0 else min(total_rows, start_row + max_rows)
+        page = data[start_row:end]
     long_names, units = _column_labels(o, target, num_cols)
-    if start_row > total_rows:
-        msg = f"start_row {start_row} is past the end of {target} ({total_rows} rows)."
-        raise ValueError(msg)
-    end = total_rows if max_rows == 0 else min(total_rows, start_row + max_rows)
-    page = data[start_row:end]
 
     def _cell(v):
         # Origin's missing-value sentinel (~1.2e308), same convention as

@@ -172,6 +172,7 @@ class FakeOrigin:
         self.saved_paths = []
         self.put_result = True
         self.worksheet_data = ((1.0, 4.0), (2.0, 5.0))
+        self.get_worksheet_calls = []  # (target, r1, c1, r2, c2); r1 None = full read
         self.matrices = []
         self.matrix_data = {}
         self.lt_vars = {}
@@ -246,10 +247,22 @@ class FakeOrigin:
         grid = self.matrix_data.get(target, ((1.0, 2.0), (3.0, 4.0)))
         return tuple(tuple(r) for r in grid)
 
-    def GetWorksheet(self, target):
+    def GetWorksheet(self, target, r1=None, c1=0, r2=-1, c2=-1, fmt=None):
         if self.FindWorksheet(target) is None:
             return -2147352568  # HRESULT int, as observed on Origin 2020
-        return self.worksheet_data
+        self.get_worksheet_calls.append((target, r1, c1, r2, c2))
+        if r1 is None:
+            return self.worksheet_data
+        # Row-range read, with the semantics live-checked on Origin 2018:
+        # r1..r2 inclusive, r2 past the end clipped, r1 == row count -> empty,
+        # r1 past the row count -> None; c2 == -1 means every column.
+        rows = list(self.worksheet_data)
+        n = len(rows)
+        if r1 > n:
+            return None
+        last = n - 1 if r2 < 0 else min(r2, n - 1)
+        stop = None if c2 < 0 else c2 + 1
+        return tuple(tuple(row)[c1:stop] for row in rows[r1:last + 1])
 
     def PutWorksheet(self, target, data, row, col):
         return self.put_result

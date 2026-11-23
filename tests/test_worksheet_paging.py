@@ -117,7 +117,7 @@ def test_invalid_max_rows_raises(fake_origin, bad):
 def test_paging_args_validated_before_touching_origin(fake_origin):
     # A bad argument must not even issue a GetWorksheet round trip.
     calls = []
-    fake_origin.GetWorksheet = lambda target: calls.append(target)
+    fake_origin.GetWorksheet = lambda target, *rng: calls.append(target)
     with pytest.raises(ValueError):
         _read(start_row=-5)
     assert calls == []
@@ -223,7 +223,7 @@ class _ExplodingSheet:
 
 def test_label_com_errors_do_not_fail_the_read(fake_origin):
     fake_origin.FindWorksheet = lambda target: _ExplodingSheet()
-    fake_origin.GetWorksheet = lambda target: ((1.0, 2.0),)
+    fake_origin.GetWorksheet = lambda target, *rng: ((1.0, 2.0),)
     out = _read()
     assert out["columns"] == [[1.0], [2.0]]
     assert out["long_names"] == ["", ""]
@@ -235,7 +235,7 @@ def test_find_worksheet_raising_does_not_fail_the_read(fake_origin):
         raise OSError("RPC server unavailable")
 
     fake_origin.FindWorksheet = boom
-    fake_origin.GetWorksheet = lambda target: ((1.0, 2.0),)
+    fake_origin.GetWorksheet = lambda target, *rng: ((1.0, 2.0),)
     out = _read()
     assert out["columns"] == [[1.0], [2.0]]
     assert out["long_names"] == ["", ""]
