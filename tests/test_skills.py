@@ -100,3 +100,13 @@ def test_shim_exposes_skill_tools():
     names = set(shim_server._tool_manager._tools)
     assert "list_skills" in names
     assert "get_skill" in names
+
+
+def test_server_instructions_name_only_bundled_skills():
+    import re
+
+    from origin_pro_mcp.skills import SERVER_INSTRUCTIONS, discover_skills
+
+    names = {s["name"] for s in discover_skills()}
+    mentioned = set(re.findall(r"`([a-z0-9-]+)`", SERVER_INSTRUCTIONS))
+    assert mentioned and mentioned <= names

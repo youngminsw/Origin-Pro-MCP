@@ -133,11 +133,18 @@ def _in_place_target(o):
     return None
 
 
-def _mtime(path: str):
+def _file_stamp(path: str):
+    """(mtime, size) of a file, or None if it does not exist.
+
+    The size is part of the stamp because Windows advances a file's mtime in
+    system-timer steps (often ~15 ms): two writes within one step can leave
+    the mtime unchanged, and the mtime alone would then report a real save
+    as "nothing written"."""
     try:
-        return os.stat(path).st_mtime_ns
+        st = os.stat(path)
     except OSError:
         return None
+    return (st.st_mtime_ns, st.st_size)
 
 
 def _save_in_place(o, action: str):
@@ -152,10 +159,10 @@ def _save_in_place(o, action: str):
         raise ValueError(msg)
     require_writable_path(path, "the project's current file")
     bak = _backup_existing(path)
-    before = _mtime(path)
+    before = _file_stamp(path)
     ok = bool(o.Save(path))
     if not ok:
-        after = _mtime(path)
+        after = _file_stamp(path)
         # Origin 2018 can return False even though it wrote the file.
         ok = after is not None and after != before
     if not ok:
@@ -179,13 +186,22 @@ def new_project() -> str:
 def save_project(file_path: str = "") -> str:
     """Save the current Origin project.
 
+    With ``file_path``, saves to that path. Without it, saves over the
+    project's own file (the path it was loaded from or last saved to), and
+    fails if the project has never been saved. The first time a session
+    overwrites an existing file, the file as it was is copied to
+    ``<file>.bak``; later saves in the same session keep that backup.
+    Refuses to save an empty project (no workbooks, graphs, or matrices) over
+    a real one, and refuses paths outside ORIGIN_PRO_MCP_ALLOWED_ROOTS when
+    that variable is set.
+
     Args:
-        file_path: Output path for the .opju file (Windows or WSL style).
+        file_path: Output path for the .opj/.opju file (Windows or WSL style).
                    ".opju" is appended when no extension is given.
-                   If empty, saves to the project's current location.
+                   If empty, saves over the project's current file.
 
     Returns:
-        Save confirmation with path
+        "Project saved to: <path>", plus the backup path when one exists.
     """
     o = get_origin()
     if file_path:
@@ -211,10 +227,10 @@ def save_project(file_path: str = "") -> str:
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         bak = _backup_existing(path)  # safety net before overwriting
-        before = _mtime(path)
+        before = _file_stamp(path)
         ok = bool(o.Save(path))
         if not ok and os.path.isfile(path):
-            ok = _mtime(path) != before  # Origin 2018 may return False after writing
+            ok = _file_stamp(path) != before  # Origin 2018 may return False after writing
         if not ok:
             msg = f"Origin could not save the project to {path}."
             if bak:
@@ -390,13 +406,20 @@ def _wait_closed(o, pid, timeout: float) -> bool:
 
 @mcp.tool()
 def load_project(file_path: str) -> str:
-    """Open an Origin project file. Replaces the current project.
+    """Open an Origin project file, replacing the current project.
+
+    Unsaved changes in the current project are discarded. Before opening,
+    the file is copied to ``<file>.bak`` (once per session per file), so the
+    on-disk original stays recoverable whatever later saves do. Origin
+    sometimes reports success but loads nothing; the tool then raises and
+    asks for a retry. If another open Origin already holds the same file, a
+    warning is appended, since saving from both would overwrite each other.
 
     Args:
         file_path: Path to a .opj or .opju file (Windows or WSL style)
 
     Returns:
-        Success message
+        "Loaded project: <path>", plus any collision warning.
     """
     o = get_origin()
     path = windows_path(file_path, "file_path")
