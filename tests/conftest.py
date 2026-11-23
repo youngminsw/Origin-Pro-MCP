@@ -11,6 +11,19 @@ WINDOWS_ORIGIN_AVAILABLE = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_daemon_breakaway(monkeypatch):
+    """Keep test-spawned daemons inside the test runner's process tree.
+
+    When pytest itself runs inside a Job Object (e.g. launched from a shell or
+    an agent harness that uses one), the shim would start real daemons through
+    WMI, outside the job — and the tests' own cleanup could not reach them, so
+    they would linger. Tests that exercise the WMI path delete this variable
+    or patch ``shim._in_job_object`` themselves.
+    """
+    monkeypatch.setenv("ORIGIN_PRO_MCP_DAEMON_BREAKAWAY", "0")
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
