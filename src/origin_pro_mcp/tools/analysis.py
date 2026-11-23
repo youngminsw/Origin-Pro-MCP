@@ -137,7 +137,10 @@ def _interpolate_impl(
         JSON: output sheet plus the resampled X and Y
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    # The source sheet is only activated (quoted page.active$) and addressed as
+    # the active sheet below, never interpolated into a range string, so a
+    # name with spaces is safe here.
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     sx = positive_column(x_col, "x_col")
     sy = positive_column(y_col, "y_col")
     safe_n = positive_int(num_points, "num_points")
@@ -162,9 +165,12 @@ def _interpolate_impl(
     else:
         execute_labtalk(f'win -a {out_name}; page.active$ = "Sheet1"; wks.nrows = 0;')
     execute_labtalk(f'win -a {out_name}; page.active$ = "Sheet1"; col(1) = data({x_min}, {x_max}, {step});')
+    # Address the source as the ACTIVE sheet — iy:=(x,y), as pkfind does — so
+    # its name never goes into a range string; the Interp output stays explicit.
+    _activate_sheet(safe_book, safe_sheet)
     cmd = (
         f"interp1 ix:=[{out_name}]Sheet1!col(1) "
-        f"iy:=[{safe_book}]{safe_sheet}!({sx},{sy}) "
+        f"iy:=({sx},{sy}) "
         f"ox:=[{out_name}]Sheet1!col(2) method:={safe_method};"
     )
     if not execute_labtalk(cmd):
@@ -280,7 +286,7 @@ def _find_peaks_impl(
         JSON list of {x, y} peak positions
     """
     safe_book = labtalk_name(data_book, "data_book")
-    safe_sheet = labtalk_name(data_sheet, "data_sheet")
+    safe_sheet = labtalk_sheet_name(data_sheet, "data_sheet")
     sx = positive_column(x_col, "x_col")
     sy = positive_column(y_col, "y_col")
     dir_map = {"positive": "p", "negative": "n", "both": "b"}

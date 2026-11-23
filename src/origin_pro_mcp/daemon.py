@@ -1218,20 +1218,9 @@ def default_process_running(pid: int) -> bool:
     if not pid:
         return False
     if sys.platform == "win32":
-        import ctypes  # local import: Windows-only path
+        from .winproc import process_running
 
-        SYNCHRONIZE = 0x00100000
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        WAIT_TIMEOUT = 0x102
-        k32 = ctypes.windll.kernel32
-        handle = k32.OpenProcess(
-            SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return False
-        try:
-            return k32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
-        finally:
-            k32.CloseHandle(handle)
+        return process_running(pid)
     return default_is_alive(pid)
 
 

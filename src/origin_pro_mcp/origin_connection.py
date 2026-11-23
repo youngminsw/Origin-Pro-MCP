@@ -317,11 +317,13 @@ def require_graph(graph_name: str):
     if layer is None:
         # Origin 2018 (9.5): FindGraphLayer rejects "[Page]Layer1" and only
         # accepts the bare page name; walk GraphPages as a version-safe fallback.
+        # Origin window names are case-insensitive, so match the same way.
+        wanted = graph_name.casefold()
         try:
             pages = o.GraphPages
             for i in range(pages.Count):
                 page = pages.Item(i)
-                if page.Name == graph_name and page.Layers.Count:
+                if str(page.Name).casefold() == wanted and page.Layers.Count:
                     layer = page.Layers.Item(0)
                     break
         except Exception:  # noqa: BLE001 - best-effort COM guard

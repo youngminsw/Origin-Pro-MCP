@@ -114,10 +114,11 @@ def test_relaxed_tool_still_rejects_bracket_in_sheet(fake_origin):
 
 
 def test_range_tool_keeps_strict_check_with_rename_hint(fake_origin):
-    # Interpolation (_interpolate_impl) builds [Book]Sheet!(x,y) ranges, so it
-    # must stay strict even for a sheet that really exists.
-    from origin_pro_mcp.tools.analysis import _interpolate_impl
+    # add_plot_to_graph builds a [Book]Sheet!(x,y) range for plotxy, so it must
+    # stay strict even for a sheet that really exists. (interpolate used to be
+    # the example; it now addresses its source as the active sheet instead.)
+    from origin_pro_mcp.tools.graph import add_plot_to_graph
 
     fake_origin.books = [FakeBook("Book1", sheets=(FakeSheet("my data"),))]
     with pytest.raises(ValueError, match="rename the sheet"):
-        _interpolate_impl("Book1", "my data", 1, 2, 10)
+        add_plot_to_graph("Graph1", "Book1", "my data", 1, 2)

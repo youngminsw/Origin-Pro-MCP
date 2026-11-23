@@ -113,7 +113,9 @@ def set_worksheet_data(
     """
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
-    safe_sheet_name = labtalk_sheet_name(sheet_name, "sheet_name")
+    # The bulk write goes through COM only; the name is quoted into LabTalk
+    # only for missing values or column names (checked before any write below).
+    safe_sheet_name = labtalk_sheet_name(sheet_name, "sheet_name", in_labtalk=False)
     target = require_worksheet(safe_book_name, safe_sheet_name)
 
     try:
@@ -136,6 +138,15 @@ def set_worksheet_data(
     ):
         msg = "columns must be a non-empty JSON array of non-empty arrays, e.g. [[1,2,3],[4,5,6]]."
         raise ValueError(msg)
+
+    # Missing values and column names are written through LabTalk with the
+    # sheet activated by name: validate that use BEFORE the first write, so a
+    # rejected name never leaves a half-written sheet behind.
+    if column_names or any(
+        x is None or (isinstance(x, float) and math.isnan(x))
+        for col_data in cols for x in col_data
+    ):
+        labtalk_sheet_name(safe_sheet_name, "sheet_name")
 
     # (column_index, row_index) pairs, 0-based, to be written as Origin
     # missing values via LabTalk after the bulk numeric write below.
@@ -267,7 +278,8 @@ def get_worksheet_data(
         raise ValueError("max_rows must be a non-negative integer (0 = all rows).")
     o = get_origin()
     safe_book_name = labtalk_name(book_name, "book_name")
-    safe_sheet_name = labtalk_sheet_name(sheet_name, "sheet_name")
+    # COM only (GetWorksheet + column objects): no LabTalk string involved.
+    safe_sheet_name = labtalk_sheet_name(sheet_name, "sheet_name", in_labtalk=False)
     target = f"[{safe_book_name}]{safe_sheet_name}"
     data = o.GetWorksheet(target)
     # On failure GetWorksheet returns None or an HRESULT int, never a sequence
@@ -835,7 +847,8 @@ def export_worksheet(
         Path and row/column counts written
     """
     safe_book = labtalk_name(book_name, "book_name")
-    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name")
+    # COM only (GetWorksheet + column objects): no LabTalk string involved.
+    safe_sheet = labtalk_sheet_name(sheet_name, "sheet_name", in_labtalk=False)
     target = require_worksheet(safe_book, safe_sheet)
     sep = _EXPORT_DELIMITERS.get(delimiter)
     if sep is None:
@@ -847,14 +860,17 @@ def export_worksheet(
     if not isinstance(data, (list, tuple)):
         msg = f"Could not read {target}."
         raise ValueError(msg)
-    # Header from column long names (fall back to col index).
-    activate_window(safe_book, "book_name")
-    execute_labtalk(f'page.active$ = {labtalk_string(safe_sheet, "sheet_name")};')
-    ncols = int(o.LTVar("wks.ncols"))
-    header = []
-    for i in range(1, ncols + 1):
-        lname = get_lt_str(f"wks.col{i}.lname$")
-        header.append(lname or f"Col{i}")
+    # Header from column long names (fall back to col index), read over COM
+    # like get_worksheet_data: no window activation, so the user's active
+    # window is left alone and the sheet name never enters a LabTalk string.
+    ncols = len(data[0]) if data else 0
+    if not ncols:
+        try:
+            ncols = _com_int(o.FindWorksheet(target), "Cols") or 0
+        except Exception:  # noqa: BLE001 - best-effort COM guard
+            ncols = 0
+    long_names, _units = _column_labels(o, target, ncols)
+    header = [lname or f"Col{i}" for i, lname in enumerate(long_names, start=1)]
     out_dir = os.path.dirname(path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)

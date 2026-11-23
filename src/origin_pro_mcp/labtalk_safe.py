@@ -57,8 +57,14 @@ def labtalk_name(value: str, field: str) -> str:
 # sheet name (spaces, dashes, dots, parentheses, CJK, ...) is accepted.
 _SHEET_FORBIDDEN: Final = frozenset('"[]!;\r\n\t')
 
+# Only where the name goes INTO a LabTalk string: LabTalk expands ``%A``..
+# ``%Z``, ``%(...)`` and ``%[...]`` and evaluates ``$(...)`` inside quoted
+# strings, so the name would be rewritten before Origin sees it. A name passed
+# to COM alone (GetWorksheet/FindWorksheet/PutWorksheet) is not affected.
+_LABTALK_SUBSTITUTION: Final = ("%", "$(")
 
-def labtalk_sheet_name(value: str, field: str) -> str:
+
+def labtalk_sheet_name(value: str, field: str, *, in_labtalk: bool = True) -> str:
     """Validate an EXISTING worksheet name that may contain spaces etc.
 
     Origin itself allows sheet names such as ``wpd_datasets _1_``. This
@@ -68,6 +74,10 @@ def labtalk_sheet_name(value: str, field: str) -> str:
     (``page.active$ = "..."``). NEVER interpolate it raw into a LabTalk range
     such as ``[Book]Sheet!col(1)`` — those call sites must keep using
     :func:`labtalk_name`.
+
+    ``in_labtalk=False`` is for callers that hand the name to COM only: it
+    also accepts ``%`` and ``$(``. Such a caller must validate again with the
+    default before it ever quotes the name into LabTalk.
     """
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} cannot be empty.")
@@ -77,6 +87,15 @@ def labtalk_sheet_name(value: str, field: str) -> str:
     if bad:
         shown = ", ".join(repr(ch) for ch in bad)
         raise ValueError(f"{field} cannot contain {shown}.")
+    if in_labtalk:
+        found = [s for s in _LABTALK_SUBSTITUTION if s in value]
+        if found:
+            shown = " or ".join(repr(s) for s in found)
+            raise ValueError(
+                f"{field} cannot contain {shown} here: this tool quotes the "
+                "sheet name into LabTalk, which would substitute it. Rename "
+                "the sheet to use it with this tool (get_worksheet_data and "
+                "export_worksheet accept it).")
     return value
 
 
