@@ -27,8 +27,17 @@ def test_spawn_log_roundtrip(tmp_path):
 
 # --- startup sweep reclaims spawn-logged orphans ------------------------------
 
+def _no_live_origin(monkeypatch):
+    """Simulate "no live Origin on this machine" so the sweep falls back to
+    ``is_alive``. Without this, a real Origin the developer has open (detected
+    since the image list includes the COM-registered name, e.g. ORIGIN~1.EXE)
+    makes the fake PIDs look non-Origin, and the sweep rightly skips them."""
+    monkeypatch.setattr("origin_pro_mcp.daemon._origin_process_pids", lambda: set())
+
+
 def test_startup_sweep_kills_spawnlog_orphans(tmp_path, monkeypatch):
     monkeypatch.setenv("ORIGIN_PRO_MCP_SWEEP_ORPHANS", "1")
+    _no_live_origin(monkeypatch)
     log = str(tmp_path / "spawned-pids.log")
     record_spawned_pid(4242, log)
     record_spawned_pid(4243, log)
@@ -48,6 +57,7 @@ def test_startup_sweep_kills_spawnlog_orphans(tmp_path, monkeypatch):
 
 def test_startup_sweep_skips_dead_pids(tmp_path, monkeypatch):
     monkeypatch.setenv("ORIGIN_PRO_MCP_SWEEP_ORPHANS", "1")
+    _no_live_origin(monkeypatch)
     log = str(tmp_path / "spawned-pids.log")
     record_spawned_pid(500, log)
     record_spawned_pid(501, log)

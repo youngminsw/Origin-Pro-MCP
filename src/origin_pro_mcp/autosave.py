@@ -29,7 +29,11 @@ import os
 
 from typing import Optional
 
-from .labtalk_safe import _LABTALK_CONFIRM_PATTERNS, _strip_strings_and_comments
+from .labtalk_safe import (
+    _LABTALK_CONFIRM_PATTERNS,
+    _strip_strings_and_comments,
+    is_writable_path,
+)
 
 # Tools that never mutate recoverable project state — they must NOT set has-work
 # and never trigger a snapshot.
@@ -224,6 +228,11 @@ def save_in_place(origin, remembered_path: Optional[str] = None) -> Optional[boo
             path = None
     if not path or not os.path.isfile(path):
         return None  # never-saved project -> no in-place target; nothing to protect
+    if not is_writable_path(path):
+        # Outside ORIGIN_PRO_MCP_ALLOWED_ROOTS (e.g. an original on OneDrive):
+        # never overwrite it. The pending edit only changes the in-memory
+        # project, so the on-disk file needs no protecting save.
+        return None
     try:
         return bool(origin.Save(path))
     except Exception:

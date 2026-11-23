@@ -184,6 +184,68 @@ def windows_path(value: str, field: str) -> str:
     return path
 
 
+# --------------------------------------------------------------------------- #
+# Write sandbox (ORIGIN_PRO_MCP_ALLOWED_ROOTS)                                #
+# --------------------------------------------------------------------------- #
+ALLOWED_ROOTS_ENV: Final = "ORIGIN_PRO_MCP_ALLOWED_ROOTS"
+
+
+def _norm_path(p: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(p)))
+
+
+def allowed_write_roots() -> list:
+    """Folders this server may WRITE into, from ``ORIGIN_PRO_MCP_ALLOWED_ROOTS``
+    (separated by ``;`` or newlines — not ``:``, which is part of a drive
+    letter). Empty list = unrestricted (the default, backward compatible)."""
+    raw = os.environ.get(ALLOWED_ROOTS_ENV, "")
+    roots = []
+    for part in re.split(r"[;\r\n]", raw):
+        p = part.strip().strip('"').strip()
+        if p:
+            roots.append(p)
+    return roots
+
+
+def is_writable_path(path: str) -> bool:
+    """True if ``path`` may be written: no roots configured, or ``path`` is a
+    root or lies inside one (symlinks/junctions resolved, case-insensitive on
+    Windows). A path on a different drive than a root is simply outside it."""
+    roots = allowed_write_roots()
+    if not roots:
+        return True
+    target = _norm_path(path)
+    for root in roots:
+        r = _norm_path(root)
+        try:
+            if os.path.commonpath([target, r]) == r:
+                return True
+        except ValueError:  # different drives / mixed absolute-relative
+            continue
+    return False
+
+
+def require_writable_path(path: str, field: str) -> str:
+    """Raise unless ``path`` is inside an allowed write root (see
+    :func:`allowed_write_roots`). Returns ``path`` unchanged."""
+    if is_writable_path(path):
+        return path
+    roots = "; ".join(allowed_write_roots())
+    msg = (
+        f"{field} '{path}' is outside the folders this server may write to "
+        f"({ALLOWED_ROOTS_ENV}: {roots}). Write the output into one of those "
+        "folders instead, or ask the user to add this folder to "
+        f"{ALLOWED_ROOTS_ENV}. Reading/opening files elsewhere is still allowed."
+    )
+    raise ValueError(msg)
+
+
+def writable_path(value: str, field: str) -> str:
+    """:func:`windows_path` + :func:`require_writable_path`: use for every
+    user-supplied OUTPUT path (exports, saves, templates)."""
+    return require_writable_path(windows_path(value, field), field)
+
+
 def labtalk_path(value: str, field: str) -> str:
     if any(char in value for char in _STRING_BLOCKLIST):
         msg = f'{field} cannot contain double quotes or line breaks.'

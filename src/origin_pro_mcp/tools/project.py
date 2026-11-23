@@ -12,13 +12,17 @@ from ..origin_connection import (
     drop_session_origin,
     execute_labtalk,
     get_origin,
+    get_remembered_project_path,
     graph_names,
     peek_session_origin,
     remember_project_path,
     require_graph,
     session_origin_is_shared,
 )
-from ..labtalk_safe import labtalk_choice, labtalk_name, windows_path
+from ..labtalk_safe import (
+    allowed_write_roots, labtalk_choice, labtalk_name, require_writable_path,
+    windows_path, writable_path,
+)
 from .graph import EXPORT_FORMATS, export_graph_to_file
 
 PROJECT_EXTENSIONS = {".opj", ".opju"}
@@ -35,6 +39,34 @@ def _project_page_count(o) -> int:
         return (o.WorksheetPages.Count + o.GraphPages.Count + o.MatrixPages.Count)
     except Exception:
         return -1
+
+
+def _current_project_location(o):
+    """Where an in-place ``Save("")`` would write: the remembered load/save
+    path, else Origin's ``%X`` (project folder). None if unknown."""
+    path = get_remembered_project_path()
+    if path:
+        return path
+    try:
+        folder = o.LTStr("%X")
+    except Exception:
+        folder = ""
+    return folder or None
+
+
+def _require_current_location_writable(o, action: str) -> None:
+    """With ORIGIN_PRO_MCP_ALLOWED_ROOTS set, refuse an in-place save of a
+    project whose file is outside the allowed folders (e.g. an original on
+    OneDrive) — or whose location cannot be determined."""
+    loc = _current_project_location(o)
+    if loc is None:
+        if not allowed_write_roots():  # unrestricted -> nothing to check
+            return
+        msg = (f"Refusing to {action}: the project's file location is unknown and "
+               "writes are restricted to ORIGIN_PRO_MCP_ALLOWED_ROOTS. Use "
+               "save_project(file_path=...) inside an allowed folder instead.")
+        raise ValueError(msg)
+    require_writable_path(loc, "the project's current file")
 
 
 def _backup_existing(path: str):
@@ -71,7 +103,7 @@ def save_project(file_path: str = "") -> str:
     """
     o = get_origin()
     if file_path:
-        path = windows_path(file_path, "file_path")
+        path = writable_path(file_path, "file_path")
         ext = os.path.splitext(path)[1].lower()
         if not ext:
             path = f"{path}.opju"
@@ -108,6 +140,7 @@ def save_project(file_path: str = "") -> str:
             "file_path if you really mean to save an empty project elsewhere."
         )
         raise ValueError(msg)
+    _require_current_location_writable(o, "save in place")
     if not o.Save(""):
         msg = (
             "Origin could not save: the project has no file location yet. "
@@ -152,6 +185,7 @@ def close_origin(save: bool = False, confirm: bool = False) -> str:
             msg = ("Refusing to save: the project is empty. Close with save=False, "
                    "or load/create content first.")
             raise ValueError(msg)
+        _require_current_location_writable(o, "save before closing")
         if not o.Save(""):
             msg = ("Origin could not save: the project has no file location. Call "
                    "save_project(file_path=...) first, or close with save=False.")
@@ -341,7 +375,7 @@ def export_all_graphs(
     from .graph import _export_via_expgraph
 
     safe_format = labtalk_choice(format.lower(), EXPORT_FORMATS, "format")
-    out_dir = windows_path(output_dir, "output_dir")
+    out_dir = writable_path(output_dir, "output_dir")
     os.makedirs(out_dir, exist_ok=True)
 
     names = graph_names()
@@ -391,7 +425,7 @@ def save_graph_template(
     safe_graph = labtalk_name(graph_name, "graph_name")
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
-    path = windows_path(file_path, "file_path")
+    path = writable_path(file_path, "file_path")
     ext = ".otp" if old_format else ".otpu"
     root = os.path.splitext(path)[0]
     path = root + ext

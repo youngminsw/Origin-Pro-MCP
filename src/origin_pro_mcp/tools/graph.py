@@ -22,6 +22,7 @@ from ..labtalk_safe import (
     positive_column,
     positive_int,
     windows_path,
+    writable_path,
 )
 from .style_helpers import (
     acquire_graph_layer,
@@ -718,7 +719,7 @@ def _export_graph_impl(
         Path to exported file
     """
     safe_format = labtalk_choice(format.lower(), EXPORT_FORMATS, "format")
-    path = windows_path(file_path, "file_path")
+    path = writable_path(file_path, "file_path")
     if not os.path.splitext(path)[1]:
         path = f"{path}.{safe_format}"
 
@@ -1028,7 +1029,7 @@ def _export_via_expgraph(
     safe_format = labtalk_choice(format.lower(), EXPORT_FORMATS, "format")
     require_graph(safe_graph)
     activate_window(safe_graph, "graph_name")
-    path = windows_path(file_path, "file_path")
+    path = writable_path(file_path, "file_path")
     if not os.path.splitext(path)[1]:
         path = f"{path}.{safe_format}"
     out_dir = os.path.dirname(path)

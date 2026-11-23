@@ -28,6 +28,7 @@ from ..labtalk_safe import (
     labtalk_string,
     labtalk_text,
     windows_path,
+    writable_path,
 )
 
 
@@ -840,7 +841,7 @@ def export_worksheet(
     if sep is None:
         msg = "delimiter must be one of: ',', 'tab', ';', '|', ' '."
         raise ValueError(msg)
-    path = windows_path(file_path, "file_path")
+    path = writable_path(file_path, "file_path")
     o = get_origin()
     data = o.GetWorksheet(target)
     if not isinstance(data, (list, tuple)):
