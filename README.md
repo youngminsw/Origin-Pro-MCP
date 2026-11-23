@@ -37,9 +37,13 @@ To run this fork instead of the PyPI release, install from the branch, for examp
 
 or `pip install` a local checkout into a Windows virtual environment and point `command` at that environment's `origin-pro-mcp.exe`.
 
+`uvx` caches the branch as it was on the first run, so later commits are not picked up on their own. To update, add `"--refresh"` before `"--from"` for one start, then restart the MCP client. The package still reports version `0.3.1`, the same as upstream, so `pip show origin-pro-mcp` cannot tell the two apart; check the install source instead.
+
 This MCP server is intentionally **Windows-runtime-only**. The AI agent or MCP client can run from Windows or WSL, but the MCP server process that talks to Origin must be launched with Windows Python and `pywin32`. WSL/Linux can edit the project and run non-COM unit tests, but cannot directly control Origin COM.
 
 ## Quick Start
+
+> **Installing this fork?** The commands below (`uvx origin-pro-mcp`, `pip install origin-pro-mcp`, and the clone in Option C) install the **upstream** release from PyPI or GitHub, which does not include the changes listed in [About this fork](#about-this-fork). Use the `git+https://github.com/shu-xiao/Origin-Pro-MCP@origin2018-merged` form shown there instead; everything else in this section applies unchanged.
 
 ### Agentic Setup (read this if you are an AI agent configuring this server)
 
@@ -241,6 +245,34 @@ when the ledger shows another live Origin still holding the same project file
 warning are advisory strings only; they never block a call, and a
 missing/corrupt ledger is treated as empty.
 
+#### Checking on the daemon, and stopping it
+
+The daemon writes **no log**: the shim starts it with its output discarded, so
+a daemon that fails at start-up leaves nothing behind except the shim's
+timeout error. These files in `%USERPROFILE%\.origin-pro-mcp\` (or next to
+`ORIGIN_PRO_MCP_LOCKFILE`) show what it is doing:
+
+| File | What it holds |
+| :--- | :--- |
+| `daemon.json` | The running daemon's `pid`, `port` and access `token`. The token is a credential: don't paste this file into an issue. |
+| `sessions.json` | Each session's last Origin PID and project path (the ledger above). |
+| `spawned-pids.log` | Every Origin process this server has started. |
+
+- **Is it running?** Look up the `pid` from `daemon.json` in Task Manager (a
+  `python.exe` whose command line ends in `-m origin_pro_mcp.daemon`). A
+  `daemon.json` whose PID no longer exists is stale and is replaced on the
+  next start.
+- **Why won't it start?** Run it by hand in a terminal with the same Python
+  the MCP config uses: `python -m origin_pro_mcp.daemon`. Stop any running
+  daemon first, because a second one exits at once without a message. Then
+  start the MCP client: its shim connects to this daemon, and errors appear in
+  the terminal. Ctrl+C stops it.
+- **Stop it.** Close the MCP clients; the daemon exits on its own 10 minutes
+  after its last session ends. To stop it sooner, end its PID in Task Manager;
+  Origins of sessions that have not ended yet then stay open, even empty
+  ones. To keep it from coming back on the next tool call, set
+  `ORIGIN_PRO_MCP_NO_SPAWN=1`.
+
 ### 4. Use It
 
 Just ask Claude to work with Origin:
@@ -275,7 +307,12 @@ The `run_labtalk` tool is available by default for styling, analysis, graph twea
 
 This is an accident-prevention guard, not a security sandbox for untrusted code.
 
-### LabTalk Gotchas (Origin 2020, styling-report fixes)
+### LabTalk Gotchas
+
+The full, current list is the bundled `labtalk-gotchas` skill
+(`get_skill("labtalk-gotchas")`, or `src/origin_pro_mcp/skills/labtalk-gotchas.md`);
+this section is a summary of the main traps and may lag behind it. Items are
+from Origin 2020 unless marked otherwise.
 
 - **One flag per `set` call.** `set <ds> -c color(255,0,0) -cf color(255,0,0);`
   (combining flags in ONE command) silently wipes the plot to black; the same
@@ -307,6 +344,13 @@ This is an accident-prevention guard, not a security sandbox for untrusted code.
   2=circle, 3=triangle-up, 4=triangle-down, 5=diamond, 6=plus, 7=x/cross,
   8=asterisk. Codes 9-12 render as a dash/vertical-bar/literal glyph, not
   useful marker shapes.
+- **`%($(i))` breaks on a curve whose column has a comment** (Origin 2018).
+  The loop idiom `get %($(i)) -c c1;` substitutes the comment text instead of
+  the dataset name. Bind a range to the plot index instead:
+  `range p=1; get p -c c1;`.
+- **`plotxy` into an existing layer rescales its axes** (Origin 2018),
+  overwriting `layer.x.from/to` and `layer.y.from/to` set by hand. Read the
+  ranges before plotting and write them back after.
 
 ## Architecture
 
