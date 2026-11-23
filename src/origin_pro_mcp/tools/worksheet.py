@@ -453,13 +453,114 @@ def _sheet_names(o, book_name: str, page=None) -> list:
     return out
 
 
+def _com_int(obj, attr: str):
+    """``int(obj.<attr>)``, or None when the attribute is missing, raises, or
+    is not a number. Used for COM properties not yet verified on every Origin
+    version (e.g. ``Worksheet.Rows`` on Origin 2018): unknown -> None."""
+    if obj is None:
+        return None
+    try:
+        value = getattr(obj, attr)
+    except Exception:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _sheet_details(o, workbooks: list) -> list:
+    """Per-sheet {"book", "sheet", "rows", "cols"} from the COM worksheet
+    object's ``Rows``/``Cols`` properties. Never reads cell data (that would
+    be slow on big projects) and never activates a window. Any value that
+    cannot be read is None."""
+    out: list = []
+    for wb in workbooks:
+        book = wb["name"]
+        for sheet in wb["sheets"]:
+            try:
+                ws = o.FindWorksheet(f"[{book}]{sheet}")
+            except Exception:
+                ws = None
+            out.append({
+                "book": book,
+                "sheet": sheet,
+                "rows": _com_int(ws, "Rows"),
+                "cols": _com_int(ws, "Cols"),
+            })
+    return out
+
+
+def _graph_plot_count(page):
+    """(layers, plots) of a graph page via COM, each None when unreadable.
+    ``plots`` is None unless EVERY layer's DataPlots.Count could be read, so a
+    partial sum is never reported as a total."""
+    layers = _com_int(_getattr_safe(page, "Layers"), "Count")
+    if layers is None:
+        return None, None
+    plots = 0
+    try:
+        layer_coll = page.Layers
+        for j in range(layers):
+            n = _com_int(_getattr_safe(layer_coll.Item(j), "DataPlots"), "Count")
+            if n is None:
+                return layers, None
+            plots += n
+    except Exception:
+        return layers, None
+    return layers, plots
+
+
+def _getattr_safe(obj, attr: str):
+    """``getattr(obj, attr)``, or None if the COM call raises."""
+    try:
+        return getattr(obj, attr)
+    except Exception:
+        return None
+
+
+def _graph_details(o) -> list:
+    """Per-graph {"name", "layers", "plots", "empty"}. ``empty`` is None when
+    the plot count is unknown (never guessed). A graph page whose name cannot
+    be read is skipped, like the plain ``graphs`` list."""
+    out: list = []
+    pages = _getattr_safe(o, "GraphPages")
+    count = _com_int(pages, "Count")
+    for i in range(count or 0):
+        try:
+            page = pages.Item(i)
+            name = page.Name
+        except Exception:
+            continue
+        layers, plots = _graph_plot_count(page)
+        out.append({
+            "name": name,
+            "layers": layers,
+            "plots": plots,
+            "empty": (plots == 0) if plots is not None else None,
+        })
+    return out
+
+
 @mcp.tool()
-def list_worksheets() -> str:
+def list_worksheets(details: bool = False) -> str:
     """List all open workbooks (with their sheets), graphs, and matrices.
+
+    Args:
+        details: False (default) returns the plain listing. True also returns
+            per-sheet sizes and per-graph plot counts (read from COM object
+            properties, without reading cell data or switching windows).
 
     Returns:
         JSON object: {"workbooks": [{"name", "sheets"}], "graphs": [names],
-        "matrices": [names]}
+        "matrices": [names]}. With details=True, additionally
+        "sheet_details": [{"book", "sheet", "rows", "cols"}] and
+        "graph_details": [{"name", "layers", "plots", "empty"}]. Any value
+        Origin could not report is null; "empty" is null when the plot count
+        is unknown. Note: a graph from a just-loaded .opju may report 0 plots
+        over COM until it has been activated once.
     """
     o = get_origin()
     # Save the active window: enumeration activates each workbook to read its
@@ -484,11 +585,15 @@ def list_worksheets() -> str:
             except Exception:
                 continue  # skip a workbook whose name can't be read
             workbooks.append({"name": name, "sheets": _sheet_names(o, name, page)})
-        return json.dumps({
+        result = {
             "workbooks": workbooks,
             "graphs": safe_page_names(o.GraphPages),
             "matrices": safe_page_names(o.MatrixPages),
-        })
+        }
+        if details:
+            result["sheet_details"] = _sheet_details(o, workbooks)
+            result["graph_details"] = _graph_details(o)
+        return json.dumps(result)
     finally:
         if saved_active:
             try:

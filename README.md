@@ -327,6 +327,7 @@ used to be many single-purpose ones.
 | `close_origin` | Close this session's own Origin window (optional save; refuses a user-owned window without `confirm=True`) |
 | `export_all_graphs` | Export every graph in the project to image files |
 | `save_graph_template` | Save a graph as a reusable .otpu/.otp template |
+| `close_origin` | Close this session's Origin window (never the user's own unless `confirm=True`) |
 
 > **Note**: `create_worksheet`, `create_matrix`, `create_graph`,
 > `create_matrix_plot`, `import_data`, and `worksheet_to_matrix` return a
