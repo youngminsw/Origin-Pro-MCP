@@ -12,7 +12,30 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude to
 - **Analysis** — Curve fitting, FFT, smoothing, integration, differentiation, interpolation, peak finding
 - **Statistics** — Descriptive stats, two-sample t-test, frequency counts (via the `stats` and `transform` tools)
 - **Project Management** — New/save/load projects, export all graphs (with pixel-size control)
-- **LabTalk Scripting** — Direct LabTalk execution with destructive/file-overwrite commands blocked
+- **LabTalk Scripting** — Direct LabTalk execution; the few commands that can touch files, the project, or the system run only with `confirm=True`
+
+## About this fork
+
+This is [`shu-xiao/Origin-Pro-MCP`](https://github.com/shu-xiao/Origin-Pro-MCP), branch `origin2018-merged`, a fork of [`youngminsw/Origin-Pro-MCP`](https://github.com/youngminsw/Origin-Pro-MCP) 0.3.1. It is verified on **Origin 2018 (9.5) on Windows 10**; upstream is verified on Origin Pro 2020. What the fork adds or changes:
+
+- **Origin 2018 compatibility.** Graph lookups fall back to `GraphPages` when Origin 2018 rejects `[Graph]Layer1`, and the Origin executable name is read from the COM registration (Origin 2018 registers itself as `ORIGIN~1.EXE`), so this server can find and clean up the Origin processes it started.
+- **Daemon start-up under Claude Desktop.** MCP clients run their servers inside a Windows Job Object that is killed when the client closes. The shim therefore starts the daemon outside it through WMI, so closing the client no longer kills the daemon mid-session and leaves window-less "controlled by another program" Origins behind. The lockfile lives in `%USERPROFILE%\.origin-pro-mcp\`, because the Store (MSIX) build of Claude Desktop redirects `%LOCALAPPDATA%` writes into its own package folder, where a daemon started outside the package cannot see them.
+- **Session end.** An Origin this server started that is still empty when its session ends is closed; one with content is kept open (see `ORIGIN_PRO_MCP_REAP_CLOSE`).
+- **Tools.** New `close_origin`; `get_worksheet_data` reads in pages; `list_worksheets` takes `details=True`; reading, exporting and analysis tools accept sheet names with spaces.
+- **Saving.** `save_project` without a path saves over the project's own file; the first save of a session that overwrites a file keeps the previous version as `<file>.bak`, and later saves in the same session keep that backup.
+- **Optional write sandbox** with `ORIGIN_PRO_MCP_ALLOWED_ROOTS` (see the table below). Without it, writes are unrestricted, as upstream.
+- **Tests run on Windows too.** The unit suite passes on Windows as well as Linux.
+
+To run this fork instead of the PyPI release, install from the branch, for example:
+
+```json
+{ "mcpServers": { "origin-pro": {
+  "command": "uvx",
+  "args": ["--quiet", "--from", "git+https://github.com/shu-xiao/Origin-Pro-MCP@origin2018-merged", "origin-pro-mcp"]
+} } }
+```
+
+or `pip install` a local checkout into a Windows virtual environment and point `command` at that environment's `origin-pro-mcp.exe`.
 
 This MCP server is intentionally **Windows-runtime-only**. The AI agent or MCP client can run from Windows or WSL, but the MCP server process that talks to Origin must be launched with Windows Python and `pywin32`. WSL/Linux can edit the project and run non-COM unit tests, but cannot directly control Origin COM.
 
@@ -29,14 +52,14 @@ Copy-paste rules to self-configure the `origin-pro` MCP with zero human steps:
    ```
    From WSL, call `uvx.exe` instead of `uvx` (see Option A below).
 3. **Critical UNC rule.** If you point at a **local checkout** from WSL, the repo MUST live under a **Windows drive** (e.g. `C:\Users\YOU\Origin-Pro-MCP`). **Never** reference it through a `\\wsl.localhost\...` UNC path: the background daemon (`python -m origin_pro_mcp.daemon`) cannot resolve a `-m` module or a working directory over UNC, so it fails silently (Origin never opens). `uvx`/`pip install` avoid this entirely.
-4. **Discover skills first.** After connecting, call the **`list_skills`** tool to see bundled skills (e.g. `publication-figure`) and when to use each, then **`get_skill(name)`** to load the full step-by-step instructions before producing figures/plots/analysis. No file copying is needed — skills ship inside the package and are exposed by the server.
+4. **Skills.** The server bundles two skills, served by **`list_skills`** and **`get_skill(name)`**: `publication-figure` (read it before building or styling a figure for a paper, thesis, or talk) and `labtalk-gotchas` (read it before writing a non-trivial `run_labtalk` script, or when a styling call reports success but the export shows no change). No file copying is needed — skills ship inside the package.
 
 ### 1. Prerequisites
 
 - **Windows** with a licensed Origin/OriginPro installation that exposes the Automation Server
 - **Python 3.10+** (Windows Python, not WSL)
 
-Tested environment: **Origin Pro 2020**. Other Origin/OriginPro versions may work if they expose compatible COM Automation Server and LabTalk behavior, but they are not verified by this project yet.
+Tested environments: **Origin Pro 2020** (upstream) and **Origin 2018 (9.5) on Windows 10** (this fork). Other Origin/OriginPro versions may work if they expose compatible COM Automation Server and LabTalk behavior, but they are not verified.
 
 ### 2. Install & Configure
 
@@ -164,6 +187,20 @@ are safe (see each row). Set any to `off` to opt out.
 | `ORIGIN_PRO_MCP_NO_SPAWN` | `off` | Set `1` to stop the shim from auto-respawning the daemon. Use it to shut the daemon down from the process manager and keep it stopped — tool calls then return a clear "daemon not running" error instead of relaunching it. |
 | `ORIGIN_PRO_MCP_ATTACH` | `off` | Set `1` so this session **attaches to the Origin you already have open** (the shared `ApplicationSI` instance) instead of spawning a fresh isolated one — the agent then works on your currently-open project. Only **one** session can attach (a second falls back to an isolated instance); other agents keep their own isolated Origins. The attached instance is never force-killed by the daemon (it's yours). |
 
+#### Write sandbox, paths, and start-up (env vars)
+
+| Variable | Default | Effect |
+| :--- | :--- | :--- |
+| `ORIGIN_PRO_MCP_ALLOWED_ROOTS` | *(unset = unrestricted)* | Folders the server may **write** into, separated by `;` (or newlines), e.g. `C:\Users\YOU\Documents\OriginMCP-output;C:\Users\YOU\Desktop\figures`. When set, `save_project`, `close_origin(save=True)`, `export_graph`, `export_all_graphs`, `export_worksheet`, `save_graph_template`, and autosave refuse any path outside them. Reading and opening files is not restricted, and `run_labtalk` scripts are not path-checked. |
+| `ORIGIN_PRO_MCP_LOCKFILE` | `%USERPROFILE%\.origin-pro-mcp\daemon.json` | Where the shim and the daemon find each other (port and token). `sessions.json` and `spawned-pids.log` sit next to it. Set the same value for every client that should share one daemon. |
+| `ORIGIN_PRO_MCP_DAEMON_BREAKAWAY` | *(auto)* | When the shim runs inside a Windows Job Object (Claude Desktop and Claude Code both do this), it starts the daemon through WMI so the daemon outlives the client. Set `0` to start it as a plain child process instead (it is then killed with the client). |
+| `ORIGIN_PRO_MCP_RECOVERY_DIR` | `%LOCALAPPDATA%\origin-pro-mcp\recovery` | Where `ORIGIN_PRO_MCP_REAP_CLOSE=1` writes recovery copies of a session's project before closing its Origin. |
+| `ORIGIN_PRO_MCP_RECONNECT_GRACE` | `3` | Seconds the daemon waits for a client to reconnect before it ends that client's session. |
+| `ORIGIN_PRO_MCP_START_TIMEOUT` | `45` | Seconds a new session may take to launch its Origin. |
+| `ORIGIN_PRO_MCP_ORIGIN_IMAGE` | *(from the COM registration)* | Comma-separated Origin executable names used to find this server's Origin processes. The names in the COM registration are always added, so this is only needed for an unusual install. |
+| `ORIGIN_PRO_MCP_WSL_DISTRO` | *(from `WSL_DISTRO_NAME`)* | WSL distribution name used to turn a WSL-only path such as `/home/...` into `\\wsl.localhost\<distro>\...`. Without it, such paths are rejected. |
+| `ORIGIN_PRO_MCP_USE_DAEMON` | `1` | Set `0` to run the legacy in-process server (no shim/daemon split). |
+
 Per-call override: `run_labtalk(script, confirm=True, timeout=120)` bounds that
 one call even when a longer/shorter budget than `ORIGIN_PRO_MCP_DISPATCH_TIMEOUT`
 is needed (and works even when the timeout is `off`).
@@ -175,7 +212,8 @@ prior behavior — no code change or redeploy required.
 
 Each MCP client process gets its own daemon session (its own isolated Origin).
 Because sessions and the daemon can restart independently, the daemon keeps a
-small ledger sidecar (`sessions.json`, next to the private lockfile) recording
+small ledger sidecar (`sessions.json`, next to the private lockfile in
+`%USERPROFILE%\.origin-pro-mcp\`) recording
 each session's last Origin PID and project path. When a **new** session starts,
 the daemon reads that ledger once and, on the first successful tool response,
 piggybacks a short one-time **`[origin-mcp]` notice** telling the agent what
@@ -227,11 +265,13 @@ The unsupported setup is WSL/Linux `origin-pro-mcp` server -> Origin Pro, becaus
 
 ## Version Support
 
-This project is currently verified only with **Origin Pro 2020**. The implementation uses Origin's COM Automation Server and LabTalk, which exist across multiple Origin releases, so other versions may work. Treat them as unverified until someone runs the test suite and a real graph/export smoke test on that version.
+Verified with **Origin Pro 2020** (upstream) and **Origin 2018 (9.5)** on Windows 10 (this fork). The implementation uses Origin's COM Automation Server and LabTalk, which exist across multiple Origin releases, so other versions may work. Treat them as unverified until someone runs the test suite and a real graph/export smoke test on that version. Recipes in the bundled skills are marked with the version they were checked on.
+
+Origin itself is Windows-only (OriginLab ships no macOS or Linux build), so the server only runs on Windows; on a Mac, run Windows and Origin in a virtual machine.
 
 ## Direct LabTalk Safety
 
-The `run_labtalk` tool is available by default for styling, analysis, graph tweaks, and other advanced Origin operations. It blocks common destructive or file-writing LabTalk commands such as project reset, delete, save/open, file dialogs, external script execution, and graph export. Use the typed tools for saving, loading, importing, and exporting.
+The `run_labtalk` tool is available by default for styling, analysis, graph tweaks, and other advanced Origin operations. Most commands, including save, open, and `expGraph`, run freely. A narrow confirm gate covers a few command tokens that can touch files, the project, or the system (for example `doc -s`/`doc -n`, `del`/`delete`, `win -c`/`-cd`/`-ct`, `system.`, `run.section`/`run -*`, `dll`, `dde`, `getfilename`, `getsavename`, `label -r`): a script that uses one is not run, and the result names the token; call again with `confirm=True` to run it. Tokens inside string literals or comments do not trigger the gate. Prefer the typed tools for saving, loading, importing, and exporting — they apply the backups and the write sandbox, which `run_labtalk` does not.
 
 This is an accident-prevention guard, not a security sandbox for untrusted code.
 
@@ -271,14 +311,24 @@ This is an accident-prevention guard, not a security sandbox for untrusted code.
 ## Architecture
 
 ```
-Claude Code (WSL or Windows)
+Claude Code / Claude Desktop (Windows or WSL)
     |  stdio (MCP protocol)
     v
-MCP Server (Windows Python + win32com)
-    |  COM automation
+shim: origin-pro-mcp            one per client session; exits with the client
+    |  localhost TCP + token (from the lockfile)
     v
-Origin Pro (GUI visible in real-time)
+daemon: python -m origin_pro_mcp.daemon
+                                one per machine, shared by all sessions;
+                                exits after 10 minutes with no sessions
+    |  COM automation (Windows Python + pywin32)
+    v
+Origin                          one isolated instance per session
+                                (GUI visible in real time)
 ```
+
+The shim only forwards tool calls; everything that touches Origin runs in the
+daemon, so a client that closes or crashes never takes an Origin down with it.
+The skill tools (`list_skills`, `get_skill`) are answered by the shim itself.
 
 ## Direct CLI (no MCP client)
 
@@ -312,6 +362,17 @@ cd src && /mnt/c/.../python.exe -m origin_pro_mcp.cli list_worksheets
 The CLI reflects over the same tool registry as the MCP server, so it
 always exposes exactly the tools listed below.
 
+## Running the tests
+
+```bash
+python -m pytest -m "not requires_origin"
+```
+
+runs the unit suite against a fake Origin, on Windows or Linux/WSL. Tests marked
+`requires_origin` drive a real Origin through COM (Windows, pywin32, a licensed
+Origin) and can touch an Origin window you have open, so run them only on a
+machine where that is fine.
+
 ## Available Tools (46 total)
 
 Several tools are **dispatchers**: one tool name with an `op`/`kind`/`method`
@@ -321,13 +382,12 @@ used to be many single-purpose ones.
 ### Project Management
 | Tool | Description |
 |------|-------------|
-| `new_project` | Create new empty Origin project |
-| `save_project` | Save project to .opju file |
-| `load_project` | Open existing .opj/.opju file |
+| `new_project` | Create new empty Origin project (unsaved changes are discarded) |
+| `save_project` | Save to a given .opju path, or without a path over the project's own file; the first overwrite in a session keeps the previous file as `<file>.bak`; refuses to save an empty project over a real one |
+| `load_project` | Open existing .opj/.opju file (backs it up to `<file>.bak` first; warns if another Origin holds the same file) |
 | `close_origin` | Close this session's own Origin window (optional save; refuses a user-owned window without `confirm=True`) |
 | `export_all_graphs` | Export every graph in the project to image files |
 | `save_graph_template` | Save a graph as a reusable .otpu/.otp template |
-| `close_origin` | Close this session's Origin window (never the user's own unless `confirm=True`) |
 
 > **Note**: `create_worksheet`, `create_matrix`, `create_graph`,
 > `create_matrix_plot`, `import_data`, and `worksheet_to_matrix` return a
@@ -350,7 +410,7 @@ used to be many single-purpose ones.
 | `get_worksheet_data` | Read worksheet data as JSON, paged (`start_row`/`max_rows`, default 200 rows; empty cells → null) |
 | `import_data` | Import a CSV/text or Excel file (`format="auto"/"csv"/"excel"`); CSV/text import suppresses Origin's auto-generated sparkline mini-graph windows by default (`sparklines=False`). `file_path` may also be a directory or glob to batch-import every matching file, each into its own book |
 | `export_worksheet` | Export a worksheet to CSV/text |
-| `list_worksheets` | List open workbooks, graphs, and matrices |
+| `list_worksheets` | List open workbooks, graphs, and matrices; `details=True` adds per-sheet sizes and per-graph plot counts |
 | `manage_columns` | Add, delete, or edit columns — `op="add"/"delete"/"properties"/"formula"` |
 | `sort_worksheet` | Sort rows by a column (asc/desc) |
 | `transpose_worksheet` | Transpose rows and columns |
@@ -400,7 +460,7 @@ used to be many single-purpose ones.
 ### Advanced
 | Tool | Description |
 |------|-------------|
-| `run_labtalk` | Execute LabTalk with destructive/file-writing commands blocked; optional `capture` reads variables back. If a 2+ statement script fails as a whole, it is automatically retried statement-by-statement and each statement's OK/FAILED status is reported (partial application is possible — this is intentional) |
+| `run_labtalk` | Execute LabTalk; a few file/project/system command tokens need `confirm=True` (see Direct LabTalk Safety); optional `capture` reads variables back. If a 2+ statement script fails as a whole, it is automatically retried statement-by-statement and each statement's OK/FAILED status is reported (partial application is possible — this is intentional) |
 | `get_labtalk_variable` | Read a LabTalk variable value |
 
 ### Skills
@@ -566,6 +626,9 @@ by `curve_fit(plot_on_graph=...)` uses a muted brick red (170, 68, 80).
 | "No editable data plots found" on `set_plot_style`/`ungroup_plots`/axis ops, or "did not take effect" on an axis-range call | The graph was loaded from a `.opju` project file in a state Origin freezes over COM (its layer reports zero data plots even after activating the window). This used to silently no-op; it is now a raised error instead of a fake success. Recreate the graph in-session (`create_graph`/`plotxy`) or reopen the project fresh — no manual export-and-compare-pixels needed to detect it anymore |
 | "Export failed: ... was not created" | `export_graph` writes the file directly via `expGraph` (no clipboard); this means Origin (Windows) could not write to that path — use a Windows path (`C:\...`) or `/mnt/<drive>/...` instead of a WSL/Linux path |
 | "... is a Linux/WSL path that Origin ... cannot access" | Any file-path argument (import/export/save/load) given as a bare POSIX path (e.g. `/tmp/x.csv`) is now rejected upfront with this error rather than silently resolving against the wrong drive — use `/mnt/<drive>/...` (auto-translated) or a native Windows path |
+| "Timed out after 20s waiting for the Origin daemon" | The shim started a daemon but could not read its lockfile. Check `%USERPROFILE%\.origin-pro-mcp\daemon.json` (or `ORIGIN_PRO_MCP_LOCKFILE`) and that `python -m origin_pro_mcp.daemon` starts with the same Python the MCP config uses. Older versions kept the lockfile under `%LOCALAPPDATA%`, which the Store build of Claude Desktop redirects, so this error appeared on every start there |
+| "... is outside the folders this server may write to (ORIGIN_PRO_MCP_ALLOWED_ROOTS: ...)" | The write sandbox is on. Write into one of the listed folders, or add the folder to `ORIGIN_PRO_MCP_ALLOWED_ROOTS` in the MCP config |
+| An Origin window says it is "controlled by another program" after the client closed | The session ended while that Origin had content, so it was kept for you (empty ones are closed automatically). Save your work from it if you need to, then close it. Call `close_origin` before ending a session to avoid this, or set `ORIGIN_PRO_MCP_REAP_CLOSE=1` to save a recovery copy and close it automatically |
 | "Window 'X' not found" errors | The error lists every open workbook/graph — use one of those names (Origin may have renamed the window if the name was taken) |
 | Legend missing after styling | Legend uses data coordinates — verify axis range is set before positioning |
 | Symbols appear hollow | Do NOT use `set -d` flag (it's for dash patterns, not fill) |
