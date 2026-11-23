@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+import threading
 import time
 
 from ..app import mcp
@@ -69,17 +70,101 @@ def _require_current_location_writable(o, action: str) -> None:
     require_writable_path(loc, "the project's current file")
 
 
+_backup_state = threading.local()
+
+
+def _backed_up_this_session() -> set:
+    done = getattr(_backup_state, "paths", None)
+    if done is None:
+        done = _backup_state.paths = set()
+    return done
+
+
 def _backup_existing(path: str):
     """Copy an existing non-empty project file to ``<path>.bak`` before it may be
-    overwritten (N5 safety net). Returns the backup path, or None."""
+    overwritten (N5 safety net). Returns the backup path, or None.
+
+    A file is backed up at most ONCE per session (daemon worker thread): the
+    first load/save keeps the file as it was before this session touched it.
+    Later saves in the same session keep that backup instead of overwriting it
+    with an already-edited copy (which used to destroy the only original when a
+    load was followed by two saves)."""
+    bak = path + ".bak"
+    key = os.path.normcase(os.path.abspath(path))
+    done = _backed_up_this_session()
+    if key in done:
+        return bak if os.path.isfile(bak) else None
     try:
         if os.path.isfile(path) and os.path.getsize(path) > 0:
-            bak = path + ".bak"
             shutil.copy2(path, bak)
+            done.add(key)
             return bak
     except OSError:
         pass
     return None
+
+
+def _forget_backups() -> None:
+    """A new project starts a new backup cycle (used by new_project/tests)."""
+    _backed_up_this_session().clear()
+
+
+def _in_place_target(o):
+    """Full path of the project's own on-disk file, or None if it has none.
+
+    ``Save("")`` is unreliable for this: on Origin 2020 it does not save, and on
+    Origin 2018 it saves but returns False ("no file location"). Saving to the
+    explicit full path is still in place (no rename), so use that — the same
+    approach autosave.save_in_place takes."""
+    path = get_remembered_project_path()
+    if path and os.path.isfile(path):
+        return path
+    try:
+        folder = o.LTStr("%X")
+        name = o.LTStr("%G")
+    except Exception:
+        return None
+    if not (folder and name):
+        return None
+    for ext in (".opju", ".opj"):
+        candidate = os.path.join(folder, name + ext)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _mtime(path: str):
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
+def _save_in_place(o, action: str):
+    """Save the open project over its own file. Returns ``(path, backup)``.
+
+    Raises ValueError when the project has no file yet or Origin reports a
+    failure that the file's modification time confirms."""
+    path = _in_place_target(o)
+    if path is None:
+        msg = (f"Origin could not {action}: the project has no file location yet. "
+               "Pass file_path to save_project to save it somewhere.")
+        raise ValueError(msg)
+    require_writable_path(path, "the project's current file")
+    bak = _backup_existing(path)
+    before = _mtime(path)
+    ok = bool(o.Save(path))
+    if not ok:
+        after = _mtime(path)
+        # Origin 2018 can return False even though it wrote the file.
+        ok = after is not None and after != before
+    if not ok:
+        msg = f"Origin could not save the project to {path}."
+        if bak:
+            msg += f" A backup is kept at {bak}."
+        raise ValueError(msg)
+    remember_project_path(path)
+    return path, bak
 
 @mcp.tool()
 def new_project() -> str:
@@ -87,6 +172,7 @@ def new_project() -> str:
     o = get_origin()
     o.NewProject()
     remember_project_path(None)  # a fresh project has no on-disk path to recover
+    _forget_backups()
     return "New project created"
 
 @mcp.tool()
@@ -125,7 +211,11 @@ def save_project(file_path: str = "") -> str:
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         bak = _backup_existing(path)  # safety net before overwriting
-        if not o.Save(path):
+        before = _mtime(path)
+        ok = bool(o.Save(path))
+        if not ok and os.path.isfile(path):
+            ok = _mtime(path) != before  # Origin 2018 may return False after writing
+        if not ok:
             msg = f"Origin could not save the project to {path}."
             if bak:
                 msg += f" A pre-save backup was kept at {bak}."
@@ -141,13 +231,8 @@ def save_project(file_path: str = "") -> str:
         )
         raise ValueError(msg)
     _require_current_location_writable(o, "save in place")
-    if not o.Save(""):
-        msg = (
-            "Origin could not save: the project has no file location yet. "
-            "Pass file_path to save it somewhere."
-        )
-        raise ValueError(msg)
-    return "Project saved"
+    path, bak = _save_in_place(o, "save")
+    return f"Project saved to: {path}" + (f" (backup: {bak})" if bak else "")
 
 @mcp.tool()
 def close_origin(save: bool = False, confirm: bool = False) -> str:
@@ -186,10 +271,12 @@ def close_origin(save: bool = False, confirm: bool = False) -> str:
                    "or load/create content first.")
             raise ValueError(msg)
         _require_current_location_writable(o, "save before closing")
-        if not o.Save(""):
-            msg = ("Origin could not save: the project has no file location. Call "
-                   "save_project(file_path=...) first, or close with save=False.")
-            raise ValueError(msg)
+        try:
+            _save_in_place(o, "save before closing")
+        except ValueError as exc:
+            msg = (f"{exc} Call save_project(file_path=...) first, or close with "
+                   "save=False.")
+            raise ValueError(msg) from exc
         outcome = "changes saved"
     else:
         # Mark the project clean so Exit closes without a "Save changes?" modal

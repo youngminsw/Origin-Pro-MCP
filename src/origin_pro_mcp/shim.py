@@ -189,23 +189,10 @@ def _spawn_outside_job(env: dict, cwd: str) -> bool:
     try:
         pythoncom.CoInitialize()
         inited = True
-        wmi = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
-        startup = wmi.Get("Win32_ProcessStartup").SpawnInstance_()
-        startup.ShowWindow = 0  # SW_HIDE
-        # DETACHED_PROCESS (no console). WMI rejects CREATE_NO_WINDOW with
-        # ReturnValue 21 (invalid parameter): it is not in its allowed set.
-        startup.CreateFlags = 0x00000008
-        startup.EnvironmentVariables = [f"{k}={v}" for k, v in env.items()
-                                        if "=" not in k and k]
-        cmd = f'"{sys.executable}" -m origin_pro_mcp.daemon'
-        proc = wmi.Get("Win32_Process")
-        method = proc.Methods_("Create")
-        params = method.InParameters.SpawnInstance_()
-        params.CommandLine = cmd
-        params.CurrentDirectory = cwd
-        params.ProcessStartupInformation = startup
-        out = proc.ExecMethod_("Create", params)
-        return int(out.ReturnValue) == 0
+        # Run in a helper so every COM proxy is released when it returns —
+        # BEFORE CoUninitialize, which otherwise prints "Win32 exception
+        # occurred releasing IUnknown" to stderr for each live proxy.
+        return _wmi_create(win32com.client, env, cwd)
     except Exception:  # noqa: BLE001
         return False
     finally:
@@ -214,6 +201,27 @@ def _spawn_outside_job(env: dict, cwd: str) -> bool:
                 pythoncom.CoUninitialize()
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _wmi_create(com_client, env: dict, cwd: str) -> bool:
+    """``Win32_Process.Create`` the daemon; COM must already be initialized."""
+    wmi = com_client.GetObject("winmgmts:\\\\.\\root\\cimv2")
+    startup = wmi.Get("Win32_ProcessStartup").SpawnInstance_()
+    startup.ShowWindow = 0  # SW_HIDE
+    # DETACHED_PROCESS (no console). WMI rejects CREATE_NO_WINDOW with
+    # ReturnValue 21 (invalid parameter): it is not in its allowed set.
+    startup.CreateFlags = 0x00000008
+    startup.EnvironmentVariables = [f"{k}={v}" for k, v in env.items()
+                                    if "=" not in k and k]
+    cmd = f'"{sys.executable}" -m origin_pro_mcp.daemon'
+    proc = wmi.Get("Win32_Process")
+    method = proc.Methods_("Create")
+    params = method.InParameters.SpawnInstance_()
+    params.CommandLine = cmd
+    params.CurrentDirectory = cwd
+    params.ProcessStartupInformation = startup
+    out = proc.ExecMethod_("Create", params)
+    return int(out.ReturnValue) == 0
 
 
 def ensure_daemon(lockfile_path: Optional[str] = None, *,

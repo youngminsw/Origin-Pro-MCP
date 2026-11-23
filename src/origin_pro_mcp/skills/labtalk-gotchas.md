@@ -117,6 +117,38 @@ this; raw `run_labtalk` does not. If you must style right after building,
 prefer the typed tool, or issue a throwaway `doc -uw;` and re-issue, or pass
 `window=<graph>` and expect the first call may need a retry.
 
+## Reading a curve's style: `%($(i))` breaks when the curve has a comment
+
+Observed on Origin 2018 (2026-11-23). The usual loop idiom
+`get %($(i)) -c c1;` (look up the i-th dataset name in the active layer, then
+read its color) fails as soon as that curve's column has a COMMENT:
+`%($(i))` substitutes the comment text — often with spaces — instead of the
+dataset name, so `get` reports a syntax/unknown-dataset error. Use a range
+variable bound to the plot index instead, which never goes through the
+comment:
+
+```text
+range p=1;          // 1st plot in the active layer (p=2 for the 2nd, ...)
+get p -c c1;        // color of that plot into c1
+```
+
+## Adding a curve (`plotxy`) resets the axis ranges
+
+Observed on Origin 2018 (2026-11-23). `plotxy` into an existing graph layer
+rescales the layer to fit the new data, overwriting `layer.x.from/to` and
+`layer.y.from/to` that were set by hand. Read the ranges BEFORE plotting and
+write them back after, then `doc -uw;`:
+
+```text
+double x1=layer.x.from, x2=layer.x.to, y1=layer.y.from, y2=layer.y.to;
+plotxy ... ;
+layer.x.from=x1; layer.x.to=x2; layer.y.from=y1; layer.y.to=y2;
+doc -uw;
+```
+
+Check the axes with `axis`/`get_labtalk_variable` (or an exported image)
+after any `plotxy`, since the call itself still reports success.
+
 ## Readable properties vs. the missing-value sentinel
 
 `layer.x/y.*` properties (from/to/inc/thickness/ticks/majorLen) read back

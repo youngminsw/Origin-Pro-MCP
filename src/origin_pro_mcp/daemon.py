@@ -1076,8 +1076,16 @@ def _ensure_private_dir(directory: str) -> None:
 
 def default_lockfile_path() -> str:
     if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
-        directory = os.path.join(base, "origin-pro-mcp")
+        # NOT %LOCALAPPDATA%: an MSIX-packaged client (e.g. the Store build of
+        # Claude Desktop) has its AppData writes redirected into the package's
+        # private LocalCache, even for child processes without package identity.
+        # The shim then sees a different daemon.json than the daemon it spawned
+        # through WMI (which runs outside the package) — a stale lockfile, a
+        # 20 s spawn timeout, every time. The user profile root is not
+        # virtualized, so every client and the daemon agree on this path.
+        base = (os.environ.get("USERPROFILE") or os.environ.get("LOCALAPPDATA")
+                or tempfile.gettempdir())
+        directory = os.path.join(base, ".origin-pro-mcp")
         os.makedirs(directory, exist_ok=True)
         return os.path.join(directory, "daemon.json")
     # POSIX: keep the token-bearing lockfile in a user-private 0700 dir.

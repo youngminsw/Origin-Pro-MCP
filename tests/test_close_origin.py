@@ -196,12 +196,15 @@ def test_save_false_survives_doc_s_raising():
     assert o.exit_calls == 1
 
 
-def test_save_true_saves_in_place_then_exits():
+def test_save_true_saves_in_place_then_exits(tmp_path):
+    proj = tmp_path / "exp.opju"
+    proj.write_bytes(b"x" * 4096)
     log = []
     o = ClosableOrigin(log=log)
     _bind_own(o)
+    oc.remember_project_path(str(proj))
     out = close_origin(save=True)
-    assert log == [("save", ""), ("exit",)]
+    assert log == [("save", str(proj)), ("exit",)]   # full path, never Save("")
     assert "changes saved" in out
 
 
@@ -218,11 +221,11 @@ def test_save_true_refuses_empty_project():
 
 def test_save_true_reports_save_failure_and_keeps_origin_open():
     o = ClosableOrigin()
-    o.save_result = False          # untitled project: Save("") fails
+    o.save_result = False          # untitled project: no file to save over
     _bind_own(o)
     with pytest.raises(ValueError, match="save_project"):
         close_origin(save=True)
-    assert o.saved_paths == [""]
+    assert o.saved_paths == []     # never calls Save("") on an untitled project
     assert o.exit_calls == 0
     assert oc.peek_session_origin() is o
 

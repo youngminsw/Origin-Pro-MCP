@@ -24,6 +24,19 @@ def _no_daemon_breakaway(monkeypatch):
     monkeypatch.setenv("ORIGIN_PRO_MCP_DAEMON_BREAKAWAY", "0")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_backup_cycle():
+    """save/load back each file up once per session; start every test fresh."""
+    try:
+        from origin_pro_mcp.tools.project import _forget_backups
+    except Exception:  # noqa: BLE001 - modules that cannot import tools
+        yield
+        return
+    _forget_backups()
+    yield
+    _forget_backups()
+
+
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",

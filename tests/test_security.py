@@ -101,3 +101,15 @@ def test_singleton_still_works_for_regular_path(tmp_path):
     finally:
         first.release()
         second.release()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows lockfile location")
+def test_windows_lockfile_avoids_virtualized_appdata(monkeypatch, tmp_path):
+    # MSIX clients redirect AppData writes; the lockfile must live where the
+    # shim (inside the package) and the WMI-spawned daemon (outside) agree.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
+    path = default_lockfile_path()
+    assert path == os.path.join(str(tmp_path / "home"), ".origin-pro-mcp",
+                                "daemon.json")
+    assert os.path.isdir(os.path.dirname(path))
